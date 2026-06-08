@@ -1,0 +1,3 @@
+# 将构建产物放到 ASCII 路径，避免 MinGW GCC 16 linker 的 Unicode 路径 bug
+[build]
+target-dir = "D:/hologram-target"

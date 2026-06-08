@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>全息观测站</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #030812; color: #c9d1d9;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      position: absolute; top: 0; left: 0; right: 0; height: 36px;
+      background: rgba(12, 18, 30, 0.85);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(48, 60, 80, 0.5);
+      display: flex; align-items: center; padding: 0 10px; gap: 8px;
+      z-index: 20; font-size: 13px;
+    }
+    #toolbar .brand { font-weight: 600; color: #7eb8ff; letter-spacing: 1.5px; }
+    #toolbar .sep { width: 1px; height: 18px; background: rgba(48, 60, 80, 0.6); }
+    #toolbar button {
+      height: 26px; padding: 0 12px; font-size: 12px;
+      border: 1px solid rgba(48, 60, 80, 0.6); border-radius: 5px;
+      background: rgba(26, 34, 46, 0.7); color: #c9d1d9; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s; white-space: nowrap;
+    }
+    #toolbar button:hover { background: rgba(40, 52, 72, 0.8); border-color: rgba(88, 120, 180, 0.4); }
+    #toolbar button:disabled { opacity: 0.4; cursor: default; }
+    #toolbar .spacer { flex: 1; }
+
+    /* Visual mode switch */
+    #mode-switch { display: flex; gap: 2px; }
+    #mode-switch .mode-btn {
+      width: 24px; height: 24px; padding: 0;
+      font-size: 11px; line-height: 1;
+      border: 1px solid rgba(48, 60, 80, 0.4); border-radius: 4px;
+      background: rgba(26, 34, 46, 0.5); color: #4a5568; cursor: pointer;
+      transition: all 0.15s;
+    }
+    #mode-switch .mode-btn:hover { color: #8b949e; border-color: rgba(88, 120, 180, 0.3); }
+    #mode-switch .mode-btn.active {
+      color: #7eb8ff; border-color: rgba(88, 120, 180, 0.5);
+      background: rgba(30, 40, 60, 0.8);
+      box-shadow: 0 0 6px rgba(68, 120, 200, 0.2);
+    }
+
+    /* Search */
+    #search-wrap {
+      display: flex; align-items: center; gap: 0;
+      border: 1px solid rgba(88, 120, 180, 0.35); border-radius: 5px;
+      background: rgba(20, 30, 50, 0.8); overflow: hidden;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      box-shadow: 0 0 8px rgba(68, 120, 200, 0.08);
+    }
+    #search-wrap:focus-within {
+      border-color: rgba(88, 120, 180, 0.6);
+      box-shadow: 0 0 12px rgba(68, 120, 200, 0.18);
+    }
+    #search-input {
+      width: 180px; height: 26px; padding: 0 8px; font-size: 12px;
+      background: transparent; border: none; color: #c9d1d9; outline: none;
+    }
+    #search-input::placeholder { color: #5a6a80; }
+    #search-btn {
+      height: 26px; padding: 0 8px; font-size: 12px;
+      background: transparent; border: none; border-left: 1px solid rgba(48, 60, 80, 0.4);
+      color: #8b949e; cursor: pointer; transition: color 0.15s;
+    }
+    #search-btn:hover { color: #c9d1d9; }
+
+    #toolbar .path { color: #6b7d90; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ── Welcome ── */
+    #welcome {
+      position: absolute; inset: 36px 0 28px 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 10;
+      background: radial-gradient(ellipse at center, rgba(12,30,60,0.35) 0%, transparent 70%);
+    }
+    #welcome h1 { font-size: 26px; font-weight: 600; margin-bottom: 4px; letter-spacing: 1px; }
+    #welcome p { color: #6b7d90; font-size: 13px; margin-bottom: 20px; }
+    #welcome .big-btn {
+      padding: 12px 40px; font-size: 15px;
+      border: 1px solid rgba(48, 60, 80, 0.6); border-radius: 6px;
+      background: rgba(26, 34, 46, 0.8); color: #c9d1d9; cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    #welcome .big-btn:hover {
+      background: rgba(40, 52, 72, 0.9);
+      border-color: rgba(88, 120, 180, 0.5);
+      box-shadow: 0 0 30px rgba(68, 120, 200, 0.15);
+    }
+
+    /* ── Graph ── */
+    #graph {
+      position: absolute; inset: 36px 0 28px 0; z-index: 1;
+    }
+    #graph::after {
+      content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 5;
+      background: radial-gradient(ellipse at center, transparent 55%, rgba(3,8,18,0.55) 85%, rgba(3,8,18,0.85) 100%);
+    }
+    #graph canvas { outline: none; display: block; }
+
+    /* ── Tooltip ── */
+    #graph-tooltip {
+      position: absolute; pointer-events: none; z-index: 8;
+      background: rgba(8, 14, 26, 0.94);
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      border: 1px solid rgba(88, 120, 180, 0.25);
+      border-radius: 6px; padding: 6px 10px;
+      font-size: 12px; line-height: 1.5;
+      opacity: 0; transform: translateY(4px);
+      transition: opacity 0.12s, transform 0.12s;
+      max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #graph-tooltip.visible { opacity: 1; transform: translateY(0); }
+    #graph-tooltip .tt-name { font-weight: 600; color: #e6edf3; }
+    #graph-tooltip .tt-meta { font-size: 10px; margin-top: 1px; }
+    #graph-tooltip .tt-meta[data-kind="symbol"],
+    #graph-tooltip .tt-meta[data-kind="function"],
+    #graph-tooltip .tt-meta[data-kind="method"],
+    #graph-tooltip .tt-meta[data-kind="class"],
+    #graph-tooltip .tt-meta[data-kind="module"],
+    #graph-tooltip .tt-meta[data-kind="variable"],
+    #graph-tooltip .tt-meta[data-kind="interface"],
+    #graph-tooltip .tt-meta[data-kind="constant"] { color: #7eb8ff; }
+    #graph-tooltip .tt-meta[data-kind="medium"],
+    #graph-tooltip .tt-meta[data-kind="file"],
+    #graph-tooltip .tt-meta[data-kind="database"],
+    #graph-tooltip .tt-meta[data-kind="cache"],
+    #graph-tooltip .tt-meta[data-kind="queue"] { color: #f0c060; }
+    #graph-tooltip .tt-meta[data-kind="temporal"],
+    #graph-tooltip .tt-meta[data-kind="thread"],
+    #graph-tooltip .tt-meta[data-kind="timer"],
+    #graph-tooltip .tt-meta[data-kind="trigger"] { color: #c098ff; }
+    #graph-tooltip .tt-loc { font-size: 10px; color: #4a5568; margin-top: 2px; }
+
+    /* ── Detail Card (click) ── */
+    #detail-card {
+      position: absolute; z-index: 9; pointer-events: auto;
+      background: rgba(6, 12, 24, 0.95);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(88, 120, 180, 0.3);
+      border-radius: 8px; padding: 12px 14px 10px;
+      width: 220px; font-size: 11px; line-height: 1.5;
+      opacity: 0; transform: translateY(6px) scale(0.96);
+      transition: opacity 0.18s, transform 0.18s;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(88,120,180,0.08) inset;
+    }
+    #detail-card.visible { opacity: 1; transform: translateY(0) scale(1); }
+    #detail-card .dc-close {
+      position: absolute; top: 4px; right: 6px;
+      background: none; border: none; color: #4a5568; cursor: pointer;
+      font-size: 14px; line-height: 1; padding: 2px 4px;
+      transition: color 0.12s;
+    }
+    #detail-card .dc-close:hover { color: #c9d1d9; }
+    #detail-card .dc-name {
+      font-weight: 600; font-size: 13px; color: #e6edf3;
+      padding-right: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #detail-card .dc-meta { font-size: 10px; margin-top: 1px; }
+    #detail-card .dc-meta[data-kind="symbol"],
+    #detail-card .dc-meta[data-kind="function"],
+    #detail-card .dc-meta[data-kind="method"],
+    #detail-card .dc-meta[data-kind="class"],
+    #detail-card .dc-meta[data-kind="module"],
+    #detail-card .dc-meta[data-kind="variable"],
+    #detail-card .dc-meta[data-kind="interface"],
+    #detail-card .dc-meta[data-kind="constant"] { color: #7eb8ff; }
+    #detail-card .dc-meta[data-kind="medium"],
+    #detail-card .dc-meta[data-kind="file"],
+    #detail-card .dc-meta[data-kind="database"],
+    #detail-card .dc-meta[data-kind="cache"],
+    #detail-card .dc-meta[data-kind="queue"] { color: #f0c060; }
+    #detail-card .dc-meta[data-kind="temporal"],
+    #detail-card .dc-meta[data-kind="thread"],
+    #detail-card .dc-meta[data-kind="timer"],
+    #detail-card .dc-meta[data-kind="trigger"] { color: #c098ff; }
+    #detail-card .dc-divider {
+      height: 1px; background: rgba(48, 60, 80, 0.5); margin: 8px 0;
+    }
+    #detail-card .dc-coupling { display: flex; flex-direction: column; gap: 4px; }
+    #detail-card .dc-bar-row {
+      display: flex; align-items: center; gap: 6px; font-size: 10px;
+    }
+    #detail-card .dc-bar-label { width: 64px; color: #8b949e; text-align: right; flex-shrink: 0; }
+    #detail-card .dc-bar-count { width: 28px; color: #6b7d90; text-align: right; flex-shrink: 0; }
+    #detail-card .dc-bar-track {
+      flex: 1; height: 4px; background: rgba(48,60,80,0.4); border-radius: 2px;
+      min-width: 40px; overflow: hidden;
+    }
+    #detail-card .dc-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+    #detail-card .dc-bar-fill.l1 { background: #334466; }
+    #detail-card .dc-bar-fill.l2 { background: #3a5080; }
+    #detail-card .dc-bar-fill.l3 { background: #d29922; }
+    #detail-card .dc-bar-fill.l4 { background: #e05555; }
+    #detail-card .dc-empty { color: #4a5568; font-size: 10px; text-align: center; }
+    #detail-card .dc-location {
+      font-size: 10px; color: #4a5568; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #detail-card .dc-actions { margin-top: 8px; display: flex; gap: 6px; justify-content: flex-end; }
+    #detail-card .dc-focus-btn,
+    #detail-card .dc-blast-btn {
+      font-size: 10px; padding: 3px 10px;
+      border-radius: 4px; cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    #detail-card .dc-focus-btn {
+      border: 1px solid rgba(88, 120, 180, 0.3);
+      background: rgba(26, 34, 46, 0.8); color: #7eb8ff;
+    }
+    #detail-card .dc-focus-btn:hover {
+      background: rgba(40, 52, 72, 0.9); border-color: rgba(88, 120, 180, 0.6);
+    }
+    #detail-card .dc-blast-btn {
+      border: 1px solid rgba(240, 160, 32, 0.35);
+      background: rgba(30, 20, 10, 0.8); color: #f0a020;
+    }
+    #detail-card .dc-blast-btn:hover {
+      background: rgba(50, 30, 10, 0.9); border-color: rgba(240, 160, 32, 0.6);
+    }
+
+    /* ── Labels ── */
+    #graph-labels {
+      position: absolute; inset: 0; pointer-events: none; z-index: 4;
+    }
+    .node-label {
+      position: absolute;
+      font-size: 10px; font-weight: 500; letter-spacing: 0.3px;
+      transform: translate(-50%, -50%);
+      text-shadow: 0 0 6px rgba(0,0,0,0.8), 0 0 12px rgba(0,0,0,0.5);
+      white-space: nowrap; pointer-events: none;
+      transition: opacity 0.4s;
+    }
+    .node-label[data-kind="symbol"],
+    .node-label[data-kind="function"],
+    .node-label[data-kind="method"],
+    .node-label[data-kind="class"],
+    .node-label[data-kind="module"],
+    .node-label[data-kind="variable"],
+    .node-label[data-kind="interface"],
+    .node-label[data-kind="constant"] { color: #a0c8f0; }
+    .node-label[data-kind="medium"],
+    .node-label[data-kind="file"],
+    .node-label[data-kind="database"],
+    .node-label[data-kind="cache"],
+    .node-label[data-kind="queue"] { color: #f0c870; }
+    .node-label[data-kind="temporal"],
+    .node-label[data-kind="thread"],
+    .node-label[data-kind="timer"],
+    .node-label[data-kind="trigger"] { color: #d0b0ff; }
+
+    /* ── Status ── */
+    #status {
+      position: absolute; bottom: 0; left: 0; right: 0; height: 28px;
+      background: rgba(12, 18, 30, 0.85);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      border-top: 1px solid rgba(48, 60, 80, 0.5);
+      display: flex; align-items: center; padding: 0 12px;
+      font-size: 12px; color: #6b7d90; z-index: 10;
+    }
+    #status .left { flex: 1; }
+    #status .right { display: flex; gap: 16px; }
+    #status .warn { color: #e05555; }
+    #status .caution { color: #d29922; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div id="mode-switch">
+      <button class="mode-btn" data-mode="minimal" title="极简骨架">◌</button>
+      <button class="mode-btn active" data-mode="standard" title="标准星图">✦</button>
+      <button class="mode-btn" data-mode="full" title="特效全开">✧</button>
+    </div>
+    <span class="sep"></span>
+    <span class="brand">🔮 全息观测站</span>
+    <span class="sep"></span>
+    <button id="btn-open">📂 打开文件夹</button>
+    <span class="spacer"></span>
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="搜索符号…" autocomplete="off" />
+      <button id="search-btn">🔍</button>
+    </div>
+    <span class="path" id="tb-path"></span>
+  </div>
+
+  <!-- Welcome -->
+  <div id="welcome">
+    <h1>代码依赖拓扑图</h1>
+    <p>打开一个项目目录，自动分析生成全息图</p>
+    <button class="big-btn" id="btn-welcome-open">📂 打开工作区</button>
+  </div>
+
+  <!-- Graph -->
+  <div id="graph"></div>
+
+  <!-- Status bar -->
+  <div id="status">
+    <span class="left" id="status-text">就绪</span>
+    <span class="right">
+      <span id="status-nodes"></span>
+      <span id="status-edges"></span>
+    </span>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

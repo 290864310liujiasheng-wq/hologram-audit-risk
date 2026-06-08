@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hologram"
+version = "0.1.0"
+description = "代码全息观测站 — 系统无关的代码库交互式依赖拓扑图生成器"
+requires-python = ">=3.10"
+authors = [{ name = "Hologram Team" }]
+license = { text = "MIT" }
+readme = "README.md"
+keywords = ["code-analysis", "dependency-graph", "topology", "visualization"]
+
+dependencies = [
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+full = [
+    "networkx>=3.0",
+    "leidenalg>=0.10",
+    "watchdog>=4.0",
+]
+
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+hologram = "src_python.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["src_python*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

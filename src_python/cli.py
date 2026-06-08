@@ -1,0 +1,690 @@
+"""
+CLI 工具：Agent 通过 bash 调用的兜底通道。
+
+用法：
+  $ hologram analyze <project_root>
+  $ hologram neighbors <node_name>
+  $ hologram impact <node_name> --depth 3
+  $ hologram path <from_name> <to_name>
+  $ hologram diff <before> <after>
+  $ hologram fragile [--limit 5]    # V2: 最脆弱模块
+  $ hologram cycle [--mode all]     # V2: 数据流环
+  $ hologram coupling-report <module> # V2: 耦合深度报告
+  $ hologram serve                  # 启动 MCP Server (stdio)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from typing import Dict, List, Optional, Set
+
+
+def _safe_print(text: str, **kwargs) -> None:
+    """Print that handles Windows GBK encoding gracefully."""
+    try:
+        print(text, **kwargs)
+    except UnicodeEncodeError:
+        # Replace characters that can't be encoded in the terminal codepage
+        safe = text.encode(sys.stdout.encoding or 'ascii', errors='replace').decode(
+            sys.stdout.encoding or 'ascii', errors='replace')
+        print(safe, **kwargs)
+
+from .adapters import AdapterRegistry, PythonAdapter
+from .adapters.typescript_adapter import TypeScriptAdapter
+from .core.graph import Graph
+from .core.merger import GraphMerger, CrossFileResolver
+from .core.community import CommunityDetector
+from .core.diff import GraphDiffer, GraphDiff
+from .pipeline import PipelineRunner, IncrementalCache
+
+
+def _load_graph(graph_path: str) -> Optional[Graph]:
+    """加载已保存的图文件。"""
+    if not os.path.exists(graph_path):
+        print(f"Graph file not found: {graph_path}", file=sys.stderr)
+        print("Run 'hologram analyze <project_root>' first.", file=sys.stderr)
+        return None
+    return Graph.from_json(graph_path)
+
+
+def _find_node_id(graph: Graph, name_or_id: str) -> Optional[str]:
+    """按名称或 ID 查找节点。"""
+    if name_or_id in graph.nodes:
+        return name_or_id
+    matches = graph.find_node_by_name(name_or_id)
+    if matches:
+        return matches[0].id
+    # 按短名称匹配
+    for n in graph.nodes.values():
+        if n.name.split(".")[-1] == name_or_id:
+            return n.id
+    return None
+
+
+def cmd_analyze(args) -> int:
+    """分析项目目录，生成图 JSON 文件。"""
+    root = os.path.abspath(args.root)
+    output = args.output or os.path.join(root, "hologram_graph.json")
+
+    print(f"Analyzing: {root}")
+    registry = AdapterRegistry()
+    registry.register(PythonAdapter())
+    registry.register(TypeScriptAdapter())
+
+    runner = PipelineRunner(registry)
+    graph, report = runner.run(root, on_progress=lambda f, i, t: print(f"  [{i}/{t}] {f}", file=sys.stderr))
+
+    # 跨文件关系解析
+    resolver = CrossFileResolver()
+    cross_added = resolver.resolve(graph)
+    if cross_added:
+        print(f"  Cross-file edges resolved: {cross_added}", file=sys.stderr)
+
+    # 社区发现
+    detector = CommunityDetector()
+    communities = detector.detect(graph)
+    if communities:
+        print(f"  Communities detected: {len(communities)}", file=sys.stderr)
+
+    # 输出
+    graph.to_json(output)
+    print(f"Graph saved: {output}")
+    print(f"  Nodes: {graph.node_count}, Edges: {graph.edge_count}")
+    print(f"  Communities: {graph.community_count}")
+    print(f"  Time: {report.elapsed_sec:.2f}s")
+
+    if report.errors:
+        print(f"  Errors: {len(report.errors)}")
+        for e in report.errors[:5]:
+            print(f"    ! {e}")
+    if report.warnings:
+        print(f"  Warnings: {len(report.warnings)}")
+
+    return 0
+
+
+def cmd_neighbors(args) -> int:
+    """查询一阶邻接。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    node_id = _find_node_id(graph, args.node)
+    if node_id is None:
+        print(f"Node not found: {args.node}", file=sys.stderr)
+        return 1
+
+    neighbors = graph.neighbors(node_id)
+    for n in neighbors:
+        print(f"  {n.name} [{n.kind}] — {n.location}")
+    print(f"\n{len(neighbors)} neighbors")
+    return 0
+
+
+def cmd_impact(args) -> int:
+    """波及分析。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    node_id = _find_node_id(graph, args.node)
+    if node_id is None:
+        print(f"Node not found: {args.node}", file=sys.stderr)
+        return 1
+
+    layers = graph.impact_bfs(node_id, args.depth)
+    for layer in layers:
+        depth = layer["depth"]
+        nodes = layer["nodes"]
+        if depth == 0:
+            print(f"Depth {depth} (source): {nodes[0]['name'] if nodes else '?'}")
+        else:
+            delayed = [n for n in nodes if n.get("properties", {}).get("delay_sec")]
+            tag = " [DELAYED]" if delayed else ""
+            print(f"Depth {depth}: {len(nodes)} nodes{tag}")
+            for n in nodes[:5]:
+                print(f"    {n['name']} [{n['kind']}] — {n['location']}")
+            if len(nodes) > 5:
+                print(f"    ... and {len(nodes) - 5} more")
+
+    total = sum(len(l["nodes"]) for l in layers) - 1
+    print(f"\nTotal affected: {total} nodes across {len(layers) - 1} layers")
+    return 0
+
+
+def cmd_path(args) -> int:
+    """路径查询。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    from_id = _find_node_id(graph, args.from_node)
+    to_id = _find_node_id(graph, args.to_node)
+    if from_id is None:
+        print(f"Source not found: {args.from_node}", file=sys.stderr)
+        return 1
+    if to_id is None:
+        print(f"Target not found: {args.to_node}", file=sys.stderr)
+        return 1
+
+    paths = graph.paths(from_id, to_id)
+    if not paths:
+        print("No paths found.")
+        return 0
+
+    for i, path in enumerate(paths[:10]):
+        names = []
+        for nid in path:
+            node = graph.get_node(nid)
+            names.append(node.name if node else nid)
+        print(f"  Path {i + 1} ({len(path) - 1} hops): {' -> '.join(names)}")
+
+    if len(paths) > 10:
+        print(f"  ... and {len(paths) - 10} more paths")
+    print(f"\n{len(paths)} total paths")
+    return 0
+
+
+def cmd_diff(args) -> int:
+    """比较两个图快照。"""
+    before = Graph.from_json(args.before)
+    after = Graph.from_json(args.after)
+    differ = GraphDiffer()
+    diff = differ.diff(before, after)
+    print(GraphDiffer.impact_summary(diff))
+    return 0
+
+
+# ── V2 CLI 命令 ───────────────────────────────────────────
+
+def cmd_fragile(args) -> int:
+    """按 L4 封装穿透密度排序，输出 Top N 最脆弱模块。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    try:
+        from .analysis.coupling import coupling_depth_report
+        result = coupling_depth_report(graph)
+    except ImportError as e:
+        print(f"V2 analysis module not available: {e}", file=sys.stderr)
+        return 1
+
+    reports = sorted(
+        result.get("module_reports", []),
+        key=lambda r: r.get("fragility_score", 0),
+        reverse=True,
+    )[:args.limit]
+
+    if not reports:
+        print("No coupling data available. All modules have zero or unknown coupling depth.")
+        return 0
+
+    print(f"Top {len(reports)} Most Fragile Modules (by L4 encapsulation violation density):\n")
+    print(f"  {'Module':<25} {'L4':>5} {'L3':>5} {'L2':>5} {'L1':>5} {'Score':>8}")
+    print(f"  {'-'*25} {'-'*5} {'-'*5} {'-'*5} {'-'*5} {'-'*8}")
+
+    for r in reports:
+        print(f"  {r['module_name']:<25} {r['l4_count']:>5} {r['l3_count']:>5} "
+              f"{r['l2_count']:>5} {r['l1_count']:>5} {r['fragility_score']:>8.3f}")
+
+    print(f"\nSummary: {result.get('total_l4', 0)} L4 violations, "
+          f"{result.get('total_l3', 0)} L3 shared data, "
+          f"{result.get('total_l2', 0)} L2 internal imports, "
+          f"{result.get('total_l1', 0)} L1 public APIs")
+
+    return 0
+
+
+def cmd_cycle(args) -> int:
+    """检测并列出数据流环。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    try:
+        from .analysis.dataflow import cycle_report
+        result = cycle_report(graph, mode=args.mode)
+    except ImportError as e:
+        print(f"V2 analysis module not available: {e}", file=sys.stderr)
+        return 1
+
+    cycles = result.get("cycles", [])
+    if not cycles:
+        print("No data flow cycles detected.")
+        return 0
+
+    print(f"Data Flow Cycles (mode={args.mode}):\n")
+    print(f"  Pure code cycles:     {result.get('pure_code_cycles', 0)}")
+    print(f"  Data persistent cycles: {result.get('data_persistent_cycles', 0)}")
+    print(f"  LLM-involved cycles:  {result.get('llm_involved_cycles', 0)}")
+    print()
+
+    for c in cycles:
+        cat_label = {"pure_code": "纯代码", "data_persistent": "数据持久", "llm_involved": "LLM参与"}
+        cat_str = cat_label.get(c.get("category"), c.get("category", "?"))
+        risk = c.get("degradation_risk", "")
+        risk_str = f"  ⚠ {risk}" if risk else ""
+        print(f"  [{cat_str}] 环长 {c['length']} 跳: {' → '.join(c.get('node_names', [])[:6])}{risk_str}")
+
+    print(f"\n{result.get('certainty_note', '')}")
+    return 0
+
+
+def cmd_coupling_report(args) -> int:
+    """输出指定模块的耦合深度分布。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    try:
+        from .analysis.coupling import coupling_depth_report
+        result = coupling_depth_report(graph)
+    except ImportError as e:
+        print(f"V2 analysis module not available: {e}", file=sys.stderr)
+        return 1
+
+    # 查找指定模块
+    module_name = args.module
+    reports = result.get("module_reports", [])
+    found = None
+    for r in reports:
+        if (r.get("module_name") == module_name or
+            r.get("file_path", "").endswith(module_name) or
+            module_name in r.get("file_path", "")):
+            found = r
+            break
+
+    if not found:
+        print(f"Module '{module_name}' not found in coupling analysis.", file=sys.stderr)
+        if reports:
+            print("Available modules:", file=sys.stderr)
+            for r in reports[:20]:
+                print(f"  - {r['module_name']} ({r['file_path']})", file=sys.stderr)
+        return 1
+
+    print(f"Coupling Depth Report: {found['module_name']}")
+    print(f"  File: {found['file_path']}")
+    print(f"\n  L1 公开API:       {found['l1_count']:>4} 条  {'█' * min(40, found['l1_count'])}")
+    print(f"  L2 内部导入:       {found['l2_count']:>4} 条  {'█' * min(40, found['l2_count'])}")
+    print(f"  L3 共享数据文件:   {found['l3_count']:>4} 条  {'█' * min(40, found['l3_count'])}")
+    print(f"  L4 封装穿透:       {found['l4_count']:>4} 条  {'█' * min(40, found['l4_count'])}")
+    print(f"\n  Total: {found['total']} edges")
+    print(f"  Fragility Score: {found['fragility_score']:.3f}")
+
+    if found.get("l4_violations"):
+        print(f"\n  L4 Violations:")
+        for v in found["l4_violations"][:10]:
+            print(f"    Line {v.get('line')}: {v.get('access')} — {v.get('context')}")
+        if len(found["l4_violations"]) > 10:
+            print(f"    ... and {len(found['l4_violations']) - 10} more")
+
+    if found.get("l3_shared_resources"):
+        print(f"\n  L3 Shared Resources:")
+        for res in found["l3_shared_resources"][:10]:
+            print(f"    - {res}")
+        if len(found["l3_shared_resources"]) > 10:
+            print(f"    ... and {len(found['l3_shared_resources']) - 10} more")
+
+    return 0
+
+
+def cmd_serve(args) -> int:
+    """以 stdio 模式启动 MCP Server。"""
+    graph = _load_graph(args.graph)
+    if graph is None:
+        return 1
+
+    from .mcp_server import MCPServer
+    server = MCPServer(graph)
+    print(f"MCP Server ready (graph: {graph.node_count} nodes, {graph.edge_count} edges)", file=sys.stderr)
+    server.run_stdio()
+    return 0
+
+
+# ── V3 CLI 命令 ───────────────────────────────────────────
+
+def cmd_check(args) -> int:
+    """
+    运行约束校验，输出变更摘要。
+
+    正常流（99%）：只输出一行 "✅ 通过"
+    例外流（1%）：展开为变更摘要面板
+    """
+    root = os.path.abspath(args.root)
+    graph_path = args.graph or os.path.join(root, "hologram_graph.json")
+
+    # Step 1: 加载旧图（如果存在）
+    before_graph = None
+    if os.path.exists(graph_path):
+        try:
+            before_graph = Graph.from_json(graph_path)
+        except Exception as e:
+            print(f"Warning: could not load previous graph: {e}", file=sys.stderr)
+
+    # Step 2: 重新分析项目生成新图
+    print(f"Re-analyzing: {root}", file=sys.stderr)
+    from .adapters import AdapterRegistry, PythonAdapter
+    from .adapters.typescript_adapter import TypeScriptAdapter
+    from .pipeline import PipelineRunner
+    from .core.merger import CrossFileResolver
+    from .core.community import CommunityDetector
+
+    registry = AdapterRegistry()
+    registry.register(PythonAdapter())
+    registry.register(TypeScriptAdapter())
+
+    runner = PipelineRunner(registry)
+    after_graph, report = runner.run(
+        root,
+        on_progress=lambda f, i, t: print(f"  [{i}/{t}] {f}", file=sys.stderr),
+    )
+
+    # 跨文件解析
+    resolver = CrossFileResolver()
+    cross_added = resolver.resolve(after_graph)
+    if cross_added:
+        print(f"  Cross-file edges resolved: {cross_added}", file=sys.stderr)
+
+    # 社区发现
+    detector = CommunityDetector()
+    communities = detector.detect(after_graph)
+    if communities:
+        print(f"  Communities: {len(communities)}", file=sys.stderr)
+
+    # 保存新图
+    after_graph.to_json(graph_path)
+    print(f"Graph saved: {graph_path} ({after_graph.node_count} nodes, "
+          f"{after_graph.edge_count} edges)", file=sys.stderr)
+
+    # Step 3: 收集变更文件
+    changed_files: List[str] = []
+    if before_graph:
+        differ = GraphDiffer()
+        diff = differ.diff(before_graph, after_graph)
+
+        # 从变更节点中提取文件列表
+        changed_file_set: set = set()
+        for mn in diff.modified_nodes:
+            node = after_graph.get_node(mn.node_id)
+            if node and node.location:
+                f = node.location.rsplit(":", 1)[0] if ":" in node.location else node.location
+                changed_file_set.add(f)
+        for n in diff.added_nodes:
+            if n.location:
+                f = n.location.rsplit(":", 1)[0] if ":" in n.location else n.location
+                changed_file_set.add(f)
+        for n in diff.removed_nodes:
+            if n.location:
+                f = n.location.rsplit(":", 1)[0] if ":" in n.location else n.location
+                changed_file_set.add(f)
+        changed_files = sorted(changed_file_set)
+    else:
+        # 无旧图：将所有已分析文件视为变更
+        all_files: set = set()
+        for node in after_graph.nodes.values():
+            if node.location:
+                f = node.location.rsplit(":", 1)[0] if ":" in node.location else node.location
+                all_files.add(f)
+        changed_files = sorted(all_files)
+
+    if not changed_files:
+        print("No changed files detected.", file=sys.stderr)
+        return 0
+
+    print(f"Changed files: {len(changed_files)}", file=sys.stderr)
+
+    # Step 4: 读取变更文件的源码
+    from .routing.patterns import FileChange
+    file_changes: Dict[str, FileChange] = {}
+    for fp in changed_files:
+        full_path = os.path.join(root, fp) if not os.path.isabs(fp) else fp
+        if os.path.exists(full_path):
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                    source = f.read()
+            except Exception:
+                source = ""
+            file_changes[fp] = FileChange(
+                file_path=fp,
+                old_source=None,   # 无旧源码（可扩展为 git diff）
+                new_source=source,
+            )
+
+    # Step 5: 运行 V2 分析
+    coupling_result = None
+    cycle_result = None
+    thread_result = None
+
+    try:
+        from .analysis.coupling import coupling_depth_report
+        coupling_result = coupling_depth_report(after_graph)
+        print(f"  Coupling analysis: {coupling_result.get('total_l4', 0)} L4 violations", file=sys.stderr)
+    except Exception as e:
+        print(f"  Coupling analysis skipped: {e}", file=sys.stderr)
+
+    try:
+        from .analysis.dataflow import cycle_report as _cycle_report
+        cycle_result = _cycle_report(after_graph, mode="all")
+        print(f"  Cycle detection: {cycle_result.get('total_cycles', 0)} cycles", file=sys.stderr)
+    except Exception as e:
+        print(f"  Cycle detection skipped: {e}", file=sys.stderr)
+
+    try:
+        from .analysis.threading import thread_conflict_report
+        thread_sources = {}
+        for fp, fc in file_changes.items():
+            if fc.new_source:
+                thread_sources[fp] = fc.new_source
+        if thread_sources:
+            thread_result = thread_conflict_report(thread_sources, language="python")
+            print(f"  Thread analysis: {thread_result.get('total_threads_found', 0)} threads", file=sys.stderr)
+    except Exception as e:
+        print(f"  Thread analysis skipped: {e}", file=sys.stderr)
+
+    # Step 6: 生成 L5-L1 信号
+    from .routing.signals import SignalGenerator
+    sig_gen = SignalGenerator()
+    signals = sig_gen.generate(
+        before_graph=before_graph,
+        after_graph=after_graph,
+        file_changes=file_changes,
+        coupling_result=coupling_result,
+        cycle_result=cycle_result,
+        thread_result=thread_result,
+    )
+    print(f"  Signals generated: {len(signals)} (L5={sum(1 for s in signals if s.level==5)} "
+          f"L4={sum(1 for s in signals if s.level==4)} "
+          f"L3={sum(1 for s in signals if s.level==3)} "
+          f"L2={sum(1 for s in signals if s.level==2)} "
+          f"L1={sum(1 for s in signals if s.level==1)})", file=sys.stderr)
+
+    # Step 7: 约束校验
+    from .routing.constraints import ConstraintChecker
+    checker = ConstraintChecker(root)
+    result = checker.check(signals)
+
+    # Step 8: 生成变更摘要
+    from .routing.summary import ChangeSummaryGenerator
+    summary_gen = ChangeSummaryGenerator()
+    summary = summary_gen.generate(
+        before_graph=before_graph,
+        after_graph=after_graph,
+        changed_files=changed_files,
+        constraint_result=result,
+        signals=signals,
+        coupling_result=coupling_result,
+        cycle_result=cycle_result,
+        thread_result=thread_result,
+    )
+
+    # Step 9: 输出
+    if summary.passed:
+        _safe_print(summary.one_line())
+    else:
+        _safe_print(summary_gen.render_panel(summary))
+
+    # Step 10: 写入时间轴
+    try:
+        from .timeline import TimelineStore
+        store = TimelineStore(root)
+        store.record(
+            event_type="commit" if not summary.passed else "commit",
+            file=", ".join(changed_files[:3]),
+            changed_by=f"hologram check {'⚠' if not summary.passed else '✅'}",
+            summary=summary.one_line(),
+            properties={
+                "passed": summary.passed,
+                "violations": summary.to_dict(),
+                "signals_count": len(signals),
+            },
+        )
+        store.close()
+    except Exception:
+        pass
+
+    return 0 if summary.passed else 1
+
+
+def cmd_constraints(args) -> int:
+    """管理约束配置。"""
+    root = os.path.abspath(args.root) if args.root else os.getcwd()
+
+    if args.init:
+        from .routing.constraints import ConstraintChecker
+        path = ConstraintChecker.write_default_config(root)
+        print(f"Default constraints config created: {path}")
+        return 0
+
+    # 列出当前配置
+    from .routing.constraints import ConstraintChecker
+    checker = ConstraintChecker(root)
+    cfg = checker.config
+
+    print(f"Constraints for: {root}")
+    print(f"  Config file: {os.path.join(root, ConstraintChecker.CONFIG_FILE_NAME)}")
+    print(f"  Exists: {os.path.exists(os.path.join(root, ConstraintChecker.CONFIG_FILE_NAME))}")
+    print()
+
+    print("  -- Routing --")
+    for key, val in cfg.routing.items():
+        status = "[ROUTED]" if val else "[suppressed]"
+        print(f"    {key}: {status}")
+
+    print("  -- Thresholds --")
+    for key, val in cfg.thresholds.items():
+        print(f"    {key}: {val}")
+
+    if cfg.allowlist_modules:
+        print("  -- Allowlist Modules --")
+        for m in cfg.allowlist_modules:
+            print(f"    {m}")
+    if cfg.allowlist_files:
+        print("  -- Allowlist Files --")
+        for f in cfg.allowlist_files:
+            print(f"    {f}")
+    if cfg.denylist_keywords:
+        print("  -- Denylist Keywords --")
+        for k in cfg.denylist_keywords:
+            print(f"    {k}")
+
+    print()
+    print("  Use --init to generate default config file if it doesn't exist.")
+    return 0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="hologram",
+        description="代码全息观测站 CLI — 代码库依赖拓扑图查询工具",
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    # ── V1 commands ──
+
+    # hologram analyze
+    p_analyze = sub.add_parser("analyze", help="Analyze a project directory")
+    p_analyze.add_argument("root", help="Project root directory")
+    p_analyze.add_argument("-o", "--output", help="Output JSON file path")
+    p_analyze.set_defaults(func=cmd_analyze)
+
+    # hologram neighbors
+    p_neighbors = sub.add_parser("neighbors", help="Get first-order neighbors")
+    p_neighbors.add_argument("node", help="Node name or ID")
+    p_neighbors.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_neighbors.set_defaults(func=cmd_neighbors)
+
+    # hologram impact
+    p_impact = sub.add_parser("impact", help="BFS impact analysis")
+    p_impact.add_argument("node", help="Node name or ID")
+    p_impact.add_argument("-d", "--depth", type=int, default=3, help="BFS max depth")
+    p_impact.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_impact.set_defaults(func=cmd_impact)
+
+    # hologram path
+    p_path = sub.add_parser("path", help="Find paths between two nodes")
+    p_path.add_argument("from_node", help="Source node name or ID")
+    p_path.add_argument("to_node", help="Target node name or ID")
+    p_path.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_path.set_defaults(func=cmd_path)
+
+    # hologram diff
+    p_diff = sub.add_parser("diff", help="Compare two graph snapshots")
+    p_diff.add_argument("before", help="Before graph JSON file")
+    p_diff.add_argument("after", help="After graph JSON file")
+    p_diff.set_defaults(func=cmd_diff)
+
+    # ── V2 commands ──
+
+    # hologram fragile
+    p_fragile = sub.add_parser("fragile", help="Show top N most fragile modules (V2)")
+    p_fragile.add_argument("-l", "--limit", type=int, default=5, help="Number of top modules to show")
+    p_fragile.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_fragile.set_defaults(func=cmd_fragile)
+
+    # hologram cycle
+    p_cycle = sub.add_parser("cycle", help="Detect data flow cycles (V2)")
+    p_cycle.add_argument("-m", "--mode", default="all", choices=["all", "data", "llm"],
+                         help="Cycle filter: all, data, llm")
+    p_cycle.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_cycle.set_defaults(func=cmd_cycle)
+
+    # hologram coupling-report
+    p_coupling = sub.add_parser("coupling-report", help="Coupling depth report for a module (V2)")
+    p_coupling.add_argument("module", help="Module name or file path")
+    p_coupling.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_coupling.set_defaults(func=cmd_coupling_report)
+
+    # hologram serve
+    p_serve = sub.add_parser("serve", help="Start MCP Server (stdio)")
+    p_serve.add_argument("-g", "--graph", default="hologram_graph.json", help="Graph JSON file")
+    p_serve.set_defaults(func=cmd_serve)
+
+    # ── V3 commands ──
+
+    # hologram check
+    p_check = sub.add_parser("check", help="Run constraint validation and show change summary (V3)")
+    p_check.add_argument("root", help="Project root directory")
+    p_check.add_argument("-g", "--graph", help="Graph JSON file path")
+    p_check.set_defaults(func=cmd_check)
+
+    # hologram constraints
+    p_constraints = sub.add_parser("constraints", help="List or initialize constraint config (V3)")
+    p_constraints.add_argument("root", nargs="?", default=".", help="Project root directory")
+    p_constraints.add_argument("--init", action="store_true",
+                               help="Generate default hologram.constraints.yaml")
+    p_constraints.set_defaults(func=cmd_constraints)
+
+    args = parser.parse_args()
+    if args.command is None:
+        parser.print_help()
+        sys.exit(1)
+
+    sys.exit(args.func(args) or 0)
+
+
+if __name__ == "__main__":
+    main()
