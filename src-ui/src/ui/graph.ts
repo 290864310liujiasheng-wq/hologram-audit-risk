@@ -172,6 +172,7 @@ export class StarGraph {
   private container: HTMLElement;
   private animId = 0;
   private starfield!: THREE.Points;
+  private galaxyGroup = new THREE.Group(); // parent for full-mode rotation
   private nodeGroup = new THREE.Group();
   private edgeGroup = new THREE.Group();
   private highlightEdgeGroup = new THREE.Group();
@@ -264,9 +265,10 @@ export class StarGraph {
     this.sphereGeo = new THREE.SphereGeometry(1, 24, 16);
 
     if (mode !== 'minimal') this.buildStarfield();
-    this.scene.add(this.edgeGroup);
-    this.scene.add(this.highlightEdgeGroup);
-    this.scene.add(this.nodeGroup);
+    this.galaxyGroup.add(this.edgeGroup);
+    this.galaxyGroup.add(this.highlightEdgeGroup);
+    this.galaxyGroup.add(this.nodeGroup);
+    this.scene.add(this.galaxyGroup);
 
     this.raycaster = new THREE.Raycaster();
     this.setupHover();
@@ -453,7 +455,20 @@ export class StarGraph {
     this.raycaster.setFromCamera(this.mouse, this.camera);
     const hits = this.raycaster.intersectObjects(this.nodeCores);
     const newIdx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
-    if (newIdx !== this.hoveredIdx) { this.hoveredIdx = newIdx; this.targetHoverScale = newIdx >= 0 ? 1 : 0; this.rebuildHighlightEdges(newIdx); }
+    if (newIdx !== this.hoveredIdx) {
+      // Restore previous hovered node
+      if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
+        const prevBase = 0.6 + (this.deg[this.hoveredIdx] / this.maxDeg) * 2.8;
+        this.nodeCores[this.hoveredIdx].scale.setScalar(this.mode === 'full' ? prevBase * 0.4 : prevBase);
+        if (this.nodeGlows[this.hoveredIdx]) {
+          this.nodeGlows[this.hoveredIdx].scale.setScalar(prevBase * (this.mode === 'full' ? 9 : 5.5));
+          (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55;
+        }
+      }
+      this.hoveredIdx = newIdx;
+      this.targetHoverScale = newIdx >= 0 ? 1 : 0;
+      this.rebuildHighlightEdges(newIdx);
+    }
   }
 
   private rebuildHighlightEdges(nodeIdx: number): void {
@@ -813,7 +828,7 @@ export class StarGraph {
     geo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
     const mat = new THREE.PointsMaterial({ size: 0.8, map: this.glowTex, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, transparent: true, opacity: 0.7 });
     this.edgeParticles = new THREE.Points(geo, mat);
-    this.scene.add(this.edgeParticles);
+    this.galaxyGroup.add(this.edgeParticles);
   }
 
   private animateEdgeParticles(): void {
@@ -841,8 +856,8 @@ export class StarGraph {
     const isFull = this.mode === 'full';
     const fx = isFull ? 3 : isMinimal ? 0 : 1;
 
-    // Full mode: auto-rotate the entire galaxy slowly
-    if (isFull) { this.nodeGroup.rotation.y += 0.0008; this.nodeGroup.rotation.x += 0.0002; this.edgeGroup.rotation.y += 0.0008; this.edgeGroup.rotation.x += 0.0002; }
+    // Full mode: auto-rotate the entire galaxy (nodes + edges + highlights + particles)
+    if (isFull) { this.galaxyGroup.rotation.y += 0.0008; this.galaxyGroup.rotation.x += 0.0002; }
 
     if (!isMinimal) {
       this.starfield.rotation.y += 0.00006 * fx;
