@@ -59,6 +59,16 @@ export class ChatPanel {
     setTimeout(() => this.inputArea.focus(), 200);
   }
 
+  /** Programmatically ask the agent a question. Opens the panel and sends. */
+  ask(question: string): void {
+    if (!this.openState) this.open();
+    this.inputArea.value = question;
+    this.inputArea.style.height = 'auto';
+    this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+    // Small delay to let panel animate open before sending
+    setTimeout(() => this.sendMessage(), 150);
+  }
+
   close(): void {
     this.openState = false;
     this.panel.classList.remove('chat-open');

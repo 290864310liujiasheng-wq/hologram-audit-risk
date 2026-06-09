@@ -1,6 +1,7 @@
 // HoloGram 主入口
 // 三模式星图：minimal / standard / full — 独立实例，切换即重建
 
+import '@xterm/xterm/css/xterm.css';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { StarGraph, VisualMode } from './ui/graph';
@@ -9,6 +10,7 @@ import { CheckPanel, type CheckResult } from './ui/check';
 import { FileViewer } from './ui/file-viewer';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
+import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
 import { ToolRegistry, createHologramTools, type ToolExecutor } from './agent/tool';
@@ -31,6 +33,7 @@ const btnCheck = document.getElementById('btn-check') as HTMLButtonElement;
 const btnDiff = document.getElementById('btn-diff') as HTMLButtonElement;
 const btnTimeline = document.getElementById('btn-timeline') as HTMLButtonElement;
 const btnConstraints = document.getElementById('btn-constraints') as HTMLButtonElement;
+const btnTerminal = document.getElementById('btn-terminal') as HTMLButtonElement;
 
 // ── State ──
 let currentPath: string | null = null;
@@ -118,6 +121,7 @@ function showGraphView(path: string): void {
   btnOpen.disabled = false; btnOpen.textContent = '📂 打开文件夹';
   tbPath.textContent = path;
   timelinePanel.setProjectPath(path);
+  TerminalPanel.get().setCwd(path);
 }
 
 // ── Search ──
@@ -250,6 +254,11 @@ async function init(): Promise<void> {
     FileViewer.get().open(filePath);
   });
 
+  // "Send to Agent" from detail card (P4: 发送给 Agent)
+  bus.on('agent:query', (question: string) => {
+    chatPanel.ask(question);
+  });
+
   const btnChat = document.getElementById('btn-chat') as HTMLButtonElement;
   btnChat.addEventListener('click', () => chatPanel.toggle());
 
@@ -296,6 +305,11 @@ async function init(): Promise<void> {
     ConstraintsPanel.get().toggle();
   });
 
+  // ── P4: Terminal button ──
+  btnTerminal.addEventListener('click', () => {
+    TerminalPanel.get().toggle();
+  });
+
   // Ctrl+L → open chat
   window.addEventListener('keydown', (e) => {
     if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
@@ -306,6 +320,11 @@ async function init(): Promise<void> {
     if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey) && document.activeElement?.tagName !== 'INPUT') {
       e.preventDefault();
       btnDiff.click();
+    }
+    // Ctrl+` → terminal toggle
+    if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      TerminalPanel.get().toggle();
     }
   });
 

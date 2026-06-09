@@ -500,7 +500,7 @@ export class StarGraph {
       '<div class="dc-name"></div><div class="dc-meta"></div><div class="dc-divider"></div>' +
       '<div class="dc-coupling"></div><div class="dc-divider"></div>' +
       '<div class="dc-location"></div>' +
-      '<div class="dc-actions"><button class="dc-blast-btn">💥 波及</button><button class="dc-focus-btn">🔍 聚焦</button></div>';
+      '<div class="dc-actions"><button class="dc-agent-btn">🤖 问 Agent</button><button class="dc-blast-btn">💥 波及</button><button class="dc-focus-btn">🔍 聚焦</button></div>';
     this.container.appendChild(this.detailCard);
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
@@ -510,6 +510,16 @@ export class StarGraph {
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
       if (this.selectedIdx >= 0) this.startBlastMode(this.selectedIdx);
+    });
+    this.detailCard.querySelector('.dc-agent-btn')!.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      if (this.selectedIdx >= 0) {
+        const node = this.graphNodes[this.selectedIdx];
+        const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
+        const question = `分析节点 "${node.name}" (${TYPE_LABELS[kind] || kind}, 度=${this.deg[this.selectedIdx]}, ${node.location || '未知位置'})。它和其他模块的关系如何？改它会有什么影响？`;
+        // Emit event to ChatPanel via bus
+        import('./events').then(m => m.bus.emit('agent:query', question));
+      }
     });
   }
 

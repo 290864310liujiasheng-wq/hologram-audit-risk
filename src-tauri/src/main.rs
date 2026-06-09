@@ -412,6 +412,37 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 }
 
 // ═══════════════════════════════════════════════════════
+// P4: Terminal — execute shell commands
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn exec_command(command: String, cwd: Option<String>) -> Result<String, String> {
+    let dir = cwd.unwrap_or_else(|| project_root().to_string_lossy().to_string());
+    let output = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/c", &command])
+            .current_dir(&dir)
+            .output()
+            .map_err(|e| format!("无法执行命令: {e}"))?
+    } else {
+        Command::new("sh")
+            .args(["-c", &command])
+            .current_dir(&dir)
+            .output()
+            .map_err(|e| format!("无法执行命令: {e}"))?
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if stdout.is_empty() && stderr.is_empty() {
+        return Ok("(无输出)".into());
+    }
+
+    Ok(format!("{}{}", stdout, stderr))
+}
+
+// ═══════════════════════════════════════════════════════
 // P4: File viewer — read file content for floating editor
 // ═══════════════════════════════════════════════════════
 
@@ -687,6 +718,7 @@ fn main() {
             read_file_content,
             read_constraints,
             write_constraints,
+            exec_command,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");

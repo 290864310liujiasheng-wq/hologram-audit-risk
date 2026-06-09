@@ -206,7 +206,8 @@
     }
     #detail-card .dc-actions { margin-top: 8px; display: flex; gap: 6px; justify-content: flex-end; }
     #detail-card .dc-focus-btn,
-    #detail-card .dc-blast-btn {
+    #detail-card .dc-blast-btn,
+    #detail-card .dc-agent-btn {
       font-size: 10px; padding: 3px 10px;
       border-radius: 4px; cursor: pointer;
       transition: background 0.12s, border-color 0.12s;
@@ -224,6 +225,13 @@
     }
     #detail-card .dc-blast-btn:hover {
       background: rgba(50, 30, 10, 0.9); border-color: rgba(240, 160, 32, 0.6);
+    }
+    #detail-card .dc-agent-btn {
+      border: 1px solid rgba(120, 100, 200, 0.35);
+      background: rgba(20, 16, 36, 0.8); color: #b098ff;
+    }
+    #detail-card .dc-agent-btn:hover {
+      background: rgba(30, 24, 52, 0.9); border-color: rgba(140, 120, 220, 0.6);
     }
 
     /* ── Labels ── */
@@ -858,6 +866,43 @@
       border: 1px solid rgba(48, 60, 80, 0.4);
     }
     .cs-btn-reset:hover { background: rgba(40, 40, 50, 0.7); }
+
+    /* ═══════════════════════════════════════════════════════════
+       P4: Terminal Panel — xterm.js 嵌入式终端
+       ═══════════════════════════════════════════════════════════ */
+
+    #terminal-panel .term-tab {
+      position: absolute;
+      top: -22px;
+      left: 12px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+      cursor: pointer;
+      user-select: none;
+      background: rgba(4, 8, 16, 0.95);
+      border: 1px solid rgba(48, 60, 80, 0.5);
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      transition: background 0.12s;
+    }
+    #terminal-panel .term-tab:hover { background: rgba(14, 22, 38, 0.95); }
+    .term-tab-icon { font-size: 10px; }
+    .term-tab-label { font-size: 11px; font-weight: 600; color: #8b949e; letter-spacing: 0.5px; }
+    .term-tab-arrow { font-size: 9px; color: #4a5568; transition: transform 0.25s; }
+
+    .term-container {
+      background: #040810;
+    }
+    .term-container .xterm-viewport::-webkit-scrollbar { width: 5px; }
+    .term-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+    .term-container .xterm-viewport::-webkit-scrollbar-thumb {
+      background: rgba(48, 60, 80, 0.5); border-radius: 3px;
+    }
+
+    .term-input::placeholder { color: #3a4a60; }
   </style>
 </head>
 <body>
@@ -880,6 +925,7 @@
     <button id="btn-diff" title="变更回看着色 (Ctrl+D)">📊 变更</button>
     <button id="btn-timeline" title="决策时间轴">🕐 时间轴</button>
     <button id="btn-constraints" title="约束配置">⚙️ 约束</button>
+    <button id="btn-terminal" title="终端 (Ctrl+`)">⬛ 终端</button>
     <span class="sep"></span>
     <span class="spacer"></span>
     <div id="search-wrap">
