@@ -8,6 +8,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { iconHtml } from './icons';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -496,11 +497,11 @@ export class StarGraph {
     this.detailCard = document.createElement('div');
     this.detailCard.id = 'detail-card';
     this.detailCard.innerHTML =
-      '<button class="dc-close">✕</button>' +
+      `<button class="dc-close">${iconHtml('close', 12)}</button>` +
       '<div class="dc-name"></div><div class="dc-meta"></div><div class="dc-divider"></div>' +
       '<div class="dc-coupling"></div><div class="dc-divider"></div>' +
       '<div class="dc-location"></div>' +
-      '<div class="dc-actions"><button class="dc-agent-btn">🤖 问 Agent</button><button class="dc-blast-btn">💥 波及</button><button class="dc-focus-btn">🔍 聚焦</button></div>';
+      `<div class="dc-actions"><button class="dc-agent-btn">${iconHtml('agent', 11)} 问 Agent</button><button class="dc-blast-btn">${iconHtml('blast', 11)} 波及</button><button class="dc-focus-btn">${iconHtml('focus', 11)} 聚焦</button></div>`;
     this.container.appendChild(this.detailCard);
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
@@ -566,7 +567,7 @@ export class StarGraph {
     ];
     this.detailCard.querySelector('.dc-coupling')!.innerHTML = bars.filter(b => b.v > 0).map(b => {
       const pct = Math.round((b.v / maxDist) * 100);
-      const warn = b.cls === 'l3' ? ' ⚠' : b.cls === 'l4' ? ' ⛔' : '';
+      const warn = b.cls === 'l3' ? ` ${iconHtml('alert', 10)}` : b.cls === 'l4' ? ` ${iconHtml('block', 10)}` : '';
       return `<div class="dc-bar-row"><span class="dc-bar-label">${b.label}</span><span class="dc-bar-count">${b.v} 条</span><span class="dc-bar-track"><span class="dc-bar-fill ${b.cls}" style="width:${pct}%"></span></span>${warn}</div>`;
     }).join('') || '<div class="dc-empty">无耦合边</div>';
     this.detailCard.querySelector('.dc-location')!.textContent = node.location || '';
@@ -595,10 +596,10 @@ export class StarGraph {
     this.pieMenu = document.createElement('div');
     this.pieMenu.id = 'pie-menu';
     this.pieMenu.innerHTML = `
-      <div class="pie-item" data-action="blast"><span class="pie-icon">💥</span><span>波及</span></div>
-      <div class="pie-item" data-action="focus"><span class="pie-icon">🔍</span><span>聚焦</span></div>
-      <div class="pie-item" data-action="path"><span class="pie-icon">🔗</span><span>路径</span></div>
-      <div class="pie-item" data-action="info"><span class="pie-icon">📋</span><span>信息</span></div>`;
+      <div class="pie-item" data-action="blast"><span class="pie-icon">${iconHtml('blast', 14)}</span><span>波及</span></div>
+      <div class="pie-item" data-action="focus"><span class="pie-icon">${iconHtml('focus', 14)}</span><span>聚焦</span></div>
+      <div class="pie-item" data-action="path"><span class="pie-icon">${iconHtml('link', 14)}</span><span>路径</span></div>
+      <div class="pie-item" data-action="info"><span class="pie-icon">${iconHtml('info', 14)}</span><span>信息</span></div>`;
     this.pieMenu.style.cssText =
       'position:absolute;z-index:20;pointer-events:auto;display:none;' +
       'background:var(--panel-bg,rgba(6,12,24,0.95));border:1px solid var(--panel-edge,rgba(88,120,180,0.3));' +
@@ -685,7 +686,7 @@ export class StarGraph {
     // Highlight the source node in cyan
     this.highlightPathNodes();
     const st = document.getElementById('status-text');
-    if (st) st.textContent = `🔗 路径起点: ${this.graphNodes[idx].name} · 右键目标节点选"路径"完成 · ESC 取消`;
+    if (st) st.innerHTML = `${iconHtml('link', 11)} 路径起点: ${this.graphNodes[idx].name} · 右键目标节点选"路径"完成 · ESC 取消`;
   }
 
   private setPathTarget(idx: number): void {
@@ -694,8 +695,8 @@ export class StarGraph {
     const st = document.getElementById('status-text');
     const len = this._pathNodes.size;
     if (st) st.textContent = len > 0
-      ? `🔗 路径: ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} · ${len} 节点 · ESC 清除`
-      : `🔗 未找到 ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} 的路径`;
+      ? `${iconHtml('link', 11)} 路径: ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} · ${len} 节点 · ESC 清除`
+      : `${iconHtml('link', 11)} 未找到 ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} 的路径`;
   }
 
   private findShortestPath(): void {
@@ -800,7 +801,7 @@ export class StarGraph {
     }
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     const st = document.getElementById('status-text');
-    if (st && st.textContent?.startsWith('🔗')) st.textContent = '就绪';
+    if (st && st.innerHTML?.includes('link')) st.innerHTML = '就绪';
   }
 
   // ── Hover ────────────────────────────────────────────────
@@ -934,7 +935,7 @@ export class StarGraph {
     this.blastMode = true; this.blastSource = idx; this.computeBlastDistances(); this.buildBlastEdges();
     const st = document.getElementById('status-text');
     const inRadius = this.blastDistances.filter(d => d >= 0).length;
-    if (st) st.textContent = `💥 波及: ${this.graphNodes[idx]?.name || '?'}  ·  ${inRadius} 节点  ·  B/ESC 退出`;
+    if (st) st.innerHTML = `${iconHtml('blast', 12)} 波及: ${this.graphNodes[idx]?.name || '?'}  ·  ${inRadius} 节点  ·  B/ESC 退出`;
   }
 
   private computeBlastDistances(): void {
@@ -983,7 +984,7 @@ export class StarGraph {
       );
     }
     const st = document.getElementById('status-text');
-    if (st && st.textContent?.startsWith('💥')) st.textContent = '就绪';
+    if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
   }
 
   // ── Focus ────────────────────────────────────────────────
@@ -1040,7 +1041,7 @@ export class StarGraph {
       // Start cross-edge energy flow
       this.initCrossEdgeFlow();
       const st = document.getElementById('status-text');
-      if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
+      if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
     } else {
       this.clearFoldOverlay();
       // Restore original tone mapping + bloom for this mode
@@ -1253,7 +1254,7 @@ export class StarGraph {
     // Show fixed HUD title
     this.showGalaxyTitle(gm);
     const st = document.getElementById('status-text');
-    if (st) st.textContent = `🔍 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+    if (st) st.innerHTML = `${iconHtml('focus', 12)} 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
   }
 
   /** When flying to constellation, controls look at centroid, not at camera target. */
@@ -1315,7 +1316,7 @@ export class StarGraph {
     }
     this.buildGalaxyClouds();
     const st = document.getElementById('status-text');
-    if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
+    if (st) st.innerHTML = `${iconHtml('galaxy', 12)} ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
   }
 
   // ── Galaxy clouds (universe view) ────────────────────────
@@ -1841,10 +1842,10 @@ export class StarGraph {
     const l3 = coup.total_l3 || 0, l4 = coup.total_l4 || 0;
     if (st) {
       let text = `${nodeCount} 节点 · ${edgeCount} 边 · S${sCount} D${dCount} T${tCount}`;
-      if (l4 > 0) text += ` · ⛔ L4×${l4}`;
-      else if (l3 > 0) text += ` · ⚠ L3×${l3}`;
-      if (this.foldMode && this.galaxyMeta.length > 0) text += ` · 🌀 ${this.galaxyMeta.length} 星座`;
-      st.textContent = text;
+      if (l4 > 0) text += ` · ${iconHtml('block', 10)} L4×${l4}`;
+      else if (l3 > 0) text += ` · ${iconHtml('alert', 10)} L3×${l3}`;
+      if (this.foldMode && this.galaxyMeta.length > 0) text += ` · ${iconHtml('galaxy', 10)} ${this.galaxyMeta.length} 星座`;
+      st.innerHTML = text;
     }
   }
 

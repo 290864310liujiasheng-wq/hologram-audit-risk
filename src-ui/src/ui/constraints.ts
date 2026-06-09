@@ -2,6 +2,7 @@
 // 编辑 hologram.constraints.yaml 的图形界面
 
 import { invoke } from '../bridge';
+import { iconHtml } from './icons';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;
@@ -68,13 +69,13 @@ export class ConstraintsPanel {
     });
 
     const title = document.createElement('span');
-    title.textContent = '⚙️ 约束配置';
+    title.innerHTML = `${iconHtml('constraints', 12)} 约束配置`;
     Object.assign(title.style, {
       fontSize: '13px', fontWeight: '600', color: 'var(--signal, #7eb8ff)', letterSpacing: '0.5px',
     });
 
     const closeBtn = document.createElement('button');
-    closeBtn.textContent = '✕';
+    closeBtn.innerHTML = iconHtml('close', 14);
     Object.assign(closeBtn.style, {
       width: '24px', height: '24px', padding: '0',
       background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
@@ -222,38 +223,38 @@ export class ConstraintsPanel {
     html += '</div>';
 
     // ── Allowlist ──
-    html += '<div class="cs-section"><div class="cs-section-title">✅ 白名单</div>';
+    html += `<div class="cs-section"><div class="cs-section-title">${iconHtml('check-circle', 10)} 白名单</div>`;
     html += '<div class="cs-sub-title">模块（L4 穿透不触发路由）</div>';
     html += '<div class="cs-tag-list" data-list="allow-modules">';
     for (const m of this.data.allowlist.modules) {
-      html += `<span class="cs-tag">${escapeHtml(m)} <button class="cs-tag-rm" data-value="${escapeHtml(m)}">✕</button></span>`;
+      html += `<span class="cs-tag">${escapeHtml(m)} <button class="cs-tag-rm" data-value="${escapeHtml(m)}">${iconHtml('close', 8)}</button></span>`;
     }
     html += '</div>';
-    html += '<div class="cs-add-row"><input class="cs-add-input" data-add="allow-modules" placeholder="添加模块…"><button class="cs-add-btn" data-add="allow-modules">+</button></div>';
+    html += `<div class="cs-add-row"><input class="cs-add-input" data-add="allow-modules" placeholder="添加模块…"><button class="cs-add-btn" data-add="allow-modules">${iconHtml('plus', 10)}</button></div>`;
 
     html += '<div class="cs-sub-title">文件（不触发 L3 延迟路由）</div>';
     html += '<div class="cs-tag-list" data-list="allow-files">';
     for (const f of this.data.allowlist.files) {
-      html += `<span class="cs-tag">${escapeHtml(f)} <button class="cs-tag-rm" data-value="${escapeHtml(f)}">✕</button></span>`;
+      html += `<span class="cs-tag">${escapeHtml(f)} <button class="cs-tag-rm" data-value="${escapeHtml(f)}">${iconHtml('close', 8)}</button></span>`;
     }
     html += '</div>';
-    html += '<div class="cs-add-row"><input class="cs-add-input" data-add="allow-files" placeholder="添加文件模式…"><button class="cs-add-btn" data-add="allow-files">+</button></div>';
+    html += `<div class="cs-add-row"><input class="cs-add-input" data-add="allow-files" placeholder="添加文件模式…"><button class="cs-add-btn" data-add="allow-files">${iconHtml('plus', 10)}</button></div>`;
     html += '</div>';
 
     // ── Denylist ──
-    html += '<div class="cs-section"><div class="cs-section-title">🚫 黑名单关键词</div>';
+    html += `<div class="cs-section"><div class="cs-section-title">${iconHtml('block', 10)} 黑名单关键词</div>`;
     html += '<div class="cs-tag-list" data-list="deny-keywords">';
     for (const kw of this.data.denylist.keywords) {
-      html += `<span class="cs-tag">${escapeHtml(kw)} <button class="cs-tag-rm" data-value="${escapeHtml(kw)}">✕</button></span>`;
+      html += `<span class="cs-tag">${escapeHtml(kw)} <button class="cs-tag-rm" data-value="${escapeHtml(kw)}">${iconHtml('close', 8)}</button></span>`;
     }
     html += '</div>';
-    html += '<div class="cs-add-row"><input class="cs-add-input" data-add="deny-keywords" placeholder="添加关键词…"><button class="cs-add-btn" data-add="deny-keywords">+</button></div>';
+    html += `<div class="cs-add-row"><input class="cs-add-input" data-add="deny-keywords" placeholder="添加关键词…"><button class="cs-add-btn" data-add="deny-keywords">${iconHtml('plus', 10)}</button></div>`;
     html += '</div>';
 
     // ── Actions ──
     html += '<div class="cs-actions">';
-    html += '<button class="cs-btn cs-btn-save">💾 保存</button>';
-    html += '<button class="cs-btn cs-btn-reset">↩ 重置</button>';
+    html += `<button class="cs-btn cs-btn-save">${iconHtml('save', 10)} 保存</button>`;
+    html += `<button class="cs-btn cs-btn-reset">${iconHtml('reset', 10)} 重置</button>`;
     html += '</div>';
 
     this.content.innerHTML = html;
@@ -353,10 +354,10 @@ export class ConstraintsPanel {
       // Flash save button green
       const btn = this.content.querySelector('.cs-btn-save') as HTMLElement;
       if (btn) {
-        btn.textContent = '✅ 已保存';
+        btn.innerHTML = `${iconHtml('check-circle', 11)} 已保存`;
         btn.style.color = 'var(--pass, #55aa55)';
         setTimeout(() => {
-          btn.textContent = '💾 保存';
+          btn.innerHTML = `${iconHtml('save', 11)} 保存`;
           btn.style.color = '';
         }, 1500);
       }

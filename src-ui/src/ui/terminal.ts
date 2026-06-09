@@ -4,6 +4,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { invoke } from '../bridge';
+import { iconHtml } from './icons';
 
 export class TerminalPanel {
   private panel!: HTMLElement;
@@ -59,7 +60,7 @@ export class TerminalPanel {
     const tab = document.createElement('div');
     tab.className = 'term-tab';
     tab.addEventListener('click', () => this.toggle());
-    tab.innerHTML = '<span class="term-tab-icon">⬛</span><span class="term-tab-label">终端</span><span class="term-tab-arrow">▴</span>';
+    tab.innerHTML = `<span class="term-tab-icon">${iconHtml('terminal', 10)}</span><span class="term-tab-label">终端</span><span class="term-tab-arrow">${iconHtml('chevron-up', 8)}</span>`;
     this.panel.appendChild(tab);
 
     // Header bar

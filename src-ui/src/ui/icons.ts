@@ -127,6 +127,72 @@ const icons: Record<string, IconDef> = {
     label: '',
     path: '<circle cx="9" cy="9" r="2" fill="currentColor" fill-opacity="0.35"/><circle cx="9" cy="9" r="6"/><circle cx="9" cy="9" r="1" fill="currentColor"/><line x1="9" y1="3" x2="9" y2="7"/><line x1="9" y1="11" x2="9" y2="15"/><line x1="3" y1="9" x2="7" y2="9"/><line x1="11" y1="9" x2="15" y2="9"/>',
   },
+
+  // ── Status & feedback ──
+  loading: {
+    label: '加载中',
+    path: '<path d="M5 3 L13 3 L9.5 8 L13 13 L5 13 L8.5 8 Z"/>',
+  },
+  clock: {
+    label: '时间',
+    path: '<circle cx="9" cy="9" r="6"/><polyline points="9,5 9,9 12,12"/>',
+  },
+
+  // ── Objects ──
+  file: {
+    label: '文件',
+    path: '<path d="M5 3 L5 15 L13 15 L13 7 L10 3 Z"/><polyline points="10,3 10,7 13,7"/><line x1="7" y1="10" x2="12" y2="10"/><line x1="7" y1="12" x2="10" y2="12"/>',
+  },
+  chart: {
+    label: '统计',
+    path: '<line x1="4" y1="15" x2="4" y2="8"/><line x1="8" y1="15" x2="8" y2="4"/><line x1="12" y1="15" x2="12" y2="6"/><polyline points="2,8 4,8 8,4 12,6 16,2"/>',
+  },
+  edit: {
+    label: '编辑',
+    path: '<path d="M13 2 L16 5 L9 12 L5 12 L5 8 Z"/><line x1="7" y1="10" x2="12" y2="5"/>',
+  },
+  bookmark: {
+    label: '书签',
+    path: '<path d="M5 2 L5 16 L9 12 L13 16 L13 2 Z"/>',
+  },
+
+  // ── Actions ──
+  agent: {
+    label: 'AI Agent',
+    path: '<rect x="2" y="3" width="14" height="9" rx="2"/><circle cx="6.5" cy="7.5" r="1"/><circle cx="11.5" cy="7.5" r="1"/><line x1="9" y1="10" x2="9" y2="13"/><line x1="5" y1="13" x2="13" y2="13"/>',
+  },
+  blast: {
+    label: '波及分析',
+    path: '<circle cx="9" cy="9" r="3"/><line x1="9" y1="2" x2="9" y2="5"/><line x1="9" y1="12" x2="9" y2="15"/><line x1="2" y1="9" x2="5" y2="9"/><line x1="12" y1="9" x2="15" y2="9"/><line x1="4" y1="4" x2="6.2" y2="6.2"/><line x1="11.8" y1="11.8" x2="14" y2="14"/><line x1="14" y1="4" x2="11.8" y2="6.2"/><line x1="6.2" y1="11.8" x2="4" y2="14"/>',
+  },
+  focus: {
+    label: '聚焦',
+    path: '<circle cx="9" cy="9" r="5.5"/><circle cx="9" cy="9" r="2.5"/><line x1="9" y1="1" x2="9" y2="3.5"/><line x1="9" y1="14.5" x2="9" y2="17"/><line x1="1" y1="9" x2="3.5" y2="9"/><line x1="14.5" y1="9" x2="17" y2="9"/>',
+  },
+  info: {
+    label: '信息',
+    path: '<path d="M6 3 L6 4 L4 4 L4 15 L14 15 L14 4 L12 4 L12 3 Z"/><line x1="7" y1="8" x2="12" y2="8"/><line x1="7" y1="11" x2="10" y2="11"/>',
+  },
+
+  // ── People ──
+  user: {
+    label: '用户',
+    path: '<circle cx="9" cy="5.5" r="2.5"/><path d="M3 16 C3 11 15 11 15 16"/>',
+  },
+
+  // ── Symbols ──
+  galaxy: {
+    label: '星系',
+    path: '<path d="M9 9 L9 5 A4 4 0 0 1 13 9 A3 3 0 0 1 10 12 A2 2 0 0 1 8 10"/>',
+  },
+  link: {
+    label: '链接',
+    path: '<circle cx="5" cy="5" r="2.5"/><circle cx="13" cy="13" r="2.5"/><line x1="7.1" y1="6.8" x2="10.9" y2="11.2"/>',
+  },
+  block: {
+    label: '禁止',
+    path: '<circle cx="9" cy="9" r="6"/><line x1="4.5" y1="4.5" x2="13.5" y2="13.5"/>',
+  },
 };
 
 /**

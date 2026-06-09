@@ -3,6 +3,7 @@
 
 import { invoke } from '../bridge';
 import { bus } from './events';
+import { iconHtml } from './icons';
 
 export interface TimelineEvent {
   id: number;
@@ -22,11 +23,11 @@ interface TimelineData {
 }
 
 const TYPE_ICONS: Record<string, string> = {
-  file_changed: '📝',
-  data_file_changed: '💾',
-  commit: '🔖',
-  blindspot_detected: '⚠️',
-  user_action: '👤',
+  file_changed: iconHtml('edit', 10),
+  data_file_changed: iconHtml('save', 10),
+  commit: iconHtml('bookmark', 10),
+  blindspot_detected: iconHtml('alert', 10),
+  user_action: iconHtml('user', 10),
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -69,7 +70,7 @@ export class TimelinePanel {
 
     this.tabStatus = document.createElement('span');
     this.tabStatus.className = 'tl-tab-status';
-    this.tabStatus.textContent = '🕐';
+    this.tabStatus.innerHTML = iconHtml('clock', 11);
 
     const label = document.createElement('span');
     label.className = 'tl-tab-label';
@@ -77,7 +78,7 @@ export class TimelinePanel {
 
     const arrow = document.createElement('span');
     arrow.className = 'tl-tab-arrow';
-    arrow.textContent = '▴';
+    arrow.innerHTML = iconHtml('chevron-up', 9);
 
     tab.appendChild(this.tabStatus);
     tab.appendChild(label);
@@ -108,7 +109,7 @@ export class TimelinePanel {
   async refresh(): Promise<void> {
     if (!this.path || this.loading) return;
     this.loading = true;
-    this.tabStatus.textContent = '⏳';
+    this.tabStatus.innerHTML = iconHtml('loading', 11);
 
     try {
       const json = await invoke<string>('hologram_timeline', {
@@ -118,11 +119,11 @@ export class TimelinePanel {
       });
       const data = JSON.parse(json) as TimelineData;
       this.events = data.events || [];
-      this.tabStatus.textContent = `🕐 ${this.events.length}`;
+      this.tabStatus.innerHTML = `${iconHtml('clock', 11)} ${this.events.length}`;
       if (this.openState) this.render();
     } catch (err) {
       console.error('Timeline refresh failed:', err);
-      this.tabStatus.textContent = '🕐';
+      this.tabStatus.innerHTML = iconHtml('clock', 11);
     } finally {
       this.loading = false;
     }

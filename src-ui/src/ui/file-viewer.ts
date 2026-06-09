@@ -3,6 +3,7 @@
 // 支持拖拽移动、调整大小、关闭
 
 import { invoke } from '../bridge';
+import { iconHtml } from './icons';
 
 interface ViewerState {
   open: boolean;
@@ -125,7 +126,7 @@ export class FileViewer {
 
     const closeBtn = document.createElement('button');
     closeBtn.className = 'fv-close';
-    closeBtn.textContent = '✕';
+    closeBtn.innerHTML = iconHtml('close', 14);
     Object.assign(closeBtn.style, {
       width: '22px', height: '22px', padding: '0',
       background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
@@ -237,7 +238,7 @@ export class FileViewer {
     const pathLabel = this.header.querySelector('.fv-path') as HTMLElement;
     if (pathLabel) pathLabel.textContent = filePath;
 
-    this.pre.textContent = '⏳ 加载中...';
+    this.pre.innerHTML = `${iconHtml('loading', 12)} 加载中...`;
     this.pre.style.color = 'var(--text-muted, #4a5568)';
     this.el.style.display = 'flex';
 

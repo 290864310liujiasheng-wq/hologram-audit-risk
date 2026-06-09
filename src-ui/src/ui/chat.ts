@@ -120,7 +120,7 @@ export class ChatPanel {
     hint.className = 'chat-hint';
     hint.textContent = this.agent
       ? '向我提问代码库的问题，或直接聊天'
-      : '请先配置 API Key（点击工具栏 ⚙ 或在对话中设置）';
+      : '请先配置 API Key（点击工具栏 设置 或在对话中设置）';
     this.msgList.appendChild(hint);
 
     // Input area

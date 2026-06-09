@@ -3,6 +3,7 @@
 // 底部抽屉，保存时自动刷新
 
 import { bus } from './events';
+import { iconHtml } from './icons';
 
 export interface Violation {
   signal?: {
@@ -103,7 +104,7 @@ export class CheckPanel {
 
     this.headerStatus = document.createElement('span');
     this.headerStatus.className = 'check-tab-status';
-    this.headerStatus.textContent = '⏳';
+    this.headerStatus.className = 'check-tab-status check-loading';
     tab.appendChild(this.headerStatus);
 
     const tabLabel = document.createElement('span');
@@ -113,7 +114,7 @@ export class CheckPanel {
 
     const tabArrow = document.createElement('span');
     tabArrow.className = 'check-tab-arrow';
-    tabArrow.textContent = '▲';
+    tabArrow.innerHTML = iconHtml('chevron-up', 10);
     tab.appendChild(tabArrow);
 
     this.panel.appendChild(tab);
@@ -130,7 +131,6 @@ export class CheckPanel {
 
   private renderResult(r: CheckResult): void {
     // Update tab status indicator
-    this.headerStatus.textContent = r.passed ? '✅' : '⚠️';
     this.headerStatus.className = r.passed ? 'check-tab-status check-pass' : 'check-tab-status check-fail';
 
     const totalV = r.l5_violations.length + r.l4_violations.length +
@@ -141,7 +141,7 @@ export class CheckPanel {
     // ── Header ──
     const header = ce('div', 'check-header');
     const statusBadge = ce('span', r.passed ? 'check-badge-pass' : 'check-badge-fail');
-    statusBadge.textContent = r.passed ? '✅ 通过' : '⚠️ 未通过';
+    statusBadge.innerHTML = r.passed ? `${iconHtml('check-circle', 12)} 通过` : `${iconHtml('alert', 12)} 未通过`;
     header.appendChild(statusBadge);
 
     const ts = ce('span', 'check-ts');
@@ -152,7 +152,7 @@ export class CheckPanel {
     // ── Files ──
     const filesSec = ce('div', 'check-section');
     const filesTitle = ce('div', 'check-section-title');
-    filesTitle.textContent = `📄 变更文件 (${r.total_changed_files})`;
+    filesTitle.innerHTML = `${iconHtml('file', 10)} 变更文件 (${r.total_changed_files})`;
     filesSec.appendChild(filesTitle);
     const filesList = ce('div', 'check-file-list');
     for (const f of r.changed_files.slice(0, 10)) {
@@ -177,7 +177,7 @@ export class CheckPanel {
     if (!r.passed && totalV > 0) {
       const vSec = ce('div', 'check-section');
       const vTitle = ce('div', 'check-section-title');
-      vTitle.textContent = `🚨 违规 (${totalV})`;
+      vTitle.innerHTML = `${iconHtml('alert', 11)} 违规 (${totalV})`;
       vSec.appendChild(vTitle);
 
       // L5 - Irreversible
@@ -203,7 +203,7 @@ export class CheckPanel {
     // ── Stats ──
     const statsSec = ce('div', 'check-section');
     const statsTitle = ce('div', 'check-section-title');
-    statsTitle.textContent = '📊 统计';
+    statsTitle.innerHTML = `${iconHtml('chart', 11)} 统计`;
     statsSec.appendChild(statsTitle);
 
     const statsGrid = ce('div', 'check-stats-grid');
@@ -219,7 +219,7 @@ export class CheckPanel {
     if (r.passed_checks.length > 0) {
       const apSec = ce('div', 'check-section');
       const apTitle = ce('div', 'check-section-title');
-      apTitle.textContent = `✅ 自动放行 (${r.passed_checks.length})`;
+      apTitle.innerHTML = `${iconHtml('check-circle', 11)} 自动放行 (${r.passed_checks.length})`;
       apSec.appendChild(apTitle);
       for (const c of r.passed_checks.slice(0, 8)) {
         const item = ce('div', 'check-passed-item');

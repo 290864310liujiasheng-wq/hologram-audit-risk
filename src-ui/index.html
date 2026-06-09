@@ -992,6 +992,14 @@
       display: inline-block; transition: all var(--snap);
     }
     .check-tab-status.check-pass { background: var(--pass); box-shadow: 0 0 5px var(--pass); }
+    .check-tab-status.check-loading {
+      background: rgba(100, 140, 200, 0.3);
+      animation: check-pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes check-pulse {
+      0%, 100% { opacity: 0.4; }
+      50% { opacity: 0.8; }
+    }
     .check-tab-status.check-fail {
       background: var(--fail); box-shadow: 0 0 5px var(--fail);
       animation: alert-pulse 2s ease-in-out infinite;
