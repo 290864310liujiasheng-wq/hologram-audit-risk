@@ -21,14 +21,82 @@ from .pipeline import PipelineRunner, IncrementalCache
 from .analysis.coupling import CouplingDepthAnalyzer
 
 
-def _analyze_and_output(root: str, output_json: bool = False, output_path: str = "") -> Graph:
-    """分析项目并输出。使用增量缓存，重复打开只分析变更文件。"""
+def _analyze_and_output(root: str, output_json: bool = False, output_path: str = "",
+                        changed_files: list = None) -> Graph:
+    """分析项目并输出。支持增量模式：只分析变更文件，在原图上打补丁。"""
     root = os.path.abspath(root)
 
-    # 持久化缓存：<project>/.hologram/cache/
+    # 持久化缓存
     cache_dir = os.path.join(root, ".hologram", "cache")
     cache = IncrementalCache(cache_dir)
 
+    # ── 增量模式 ──
+    if changed_files:
+        graph_path = output_path or os.path.join(root, "hologram_graph.json")
+        if os.path.exists(graph_path):
+            graph = Graph.from_json(graph_path)
+        else:
+            graph = Graph(source_root=root)
+
+        registry = AdapterRegistry()
+        registry.register(PythonAdapter())
+        registry.register(TypeScriptAdapter())
+        runner = PipelineRunner(registry, cache)
+
+        diff = runner.run_incremental(root, changed_files, graph)
+
+        # 增量跨文件解析
+        if diff.added_nodes:
+            resolver = CrossFileResolver()
+            changed_ids = [n.id for n in diff.added_nodes]
+            resolver.resolve_incremental(graph, changed_ids)
+
+        # 增量耦合分析 — 重新分类所有边（补上新增/修改边缺失的 coupling_depth）
+        try:
+            coupler = CouplingDepthAnalyzer()
+            sources = {}
+            for fp in changed_files:
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        sources[fp] = f.read()
+                except (OSError, PermissionError):
+                    pass
+            for fp, src in sources.items():
+                coupler.pre_scan_file(fp, src)
+            # Only pre-scan changed files; analyze() re-classifies all edges
+            cr = coupler.analyze(graph, sources)
+            graph.coupling_summary = cr
+            print(f"  coupling: L1={cr['total_l1']} L2={cr['total_l2']} L3={cr['total_l3']} L4={cr['total_l4']}", file=sys.stderr)
+        except Exception as exc:
+            print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
+
+        cache.save_to_disk()
+
+        # Always save graph to disk for future incremental runs
+        save_path = output_path or os.path.join(root, "hologram_graph.json")
+        graph.to_json(save_path)
+
+        print(f"[inc] {len(diff.added_nodes)} nodes added, "
+              f"{len(diff.removed_nodes)} removed, "
+              f"{len(diff.added_edges)} edges added "
+              f"→ {graph.node_count} total nodes", file=sys.stderr)
+
+        # Output
+        if output_json:
+            import datetime
+            d = graph.to_dict()
+            d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
+            if hasattr(graph, 'coupling_summary'):
+                d["meta"]["coupling"] = {k: graph.coupling_summary[k] for k in
+                    ('total_l1', 'total_l2', 'total_l3', 'total_l4') if k in graph.coupling_summary}
+            json.dump(d, sys.stdout, indent=2, ensure_ascii=False)
+        else:
+            graph.to_json(graph_path)
+            print(f"  saved: {graph_path}", file=sys.stderr)
+
+        return graph
+
+    # ── 全量模式（原有逻辑）──
     registry = AdapterRegistry()
     registry.register(PythonAdapter())
     registry.register(TypeScriptAdapter())
@@ -74,7 +142,10 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     except Exception as exc:
         print(f"  community detection skipped: {exc}", file=sys.stderr)
 
-    # Output
+    # Output — always save to disk first (enables incremental cache reuse)
+    save_path = output_path or os.path.join(root, "hologram_graph.json")
+    graph.to_json(save_path)
+
     if output_json:
         # JSON to stdout
         d = graph.to_dict()
@@ -104,12 +175,13 @@ def main():
 
         # 子命令通过 CLI 处理
         if cmd in ("analyze", "neighbors", "impact", "path", "diff", "serve",
-                    "fragile", "cycle", "coupling-report", "check", "constraints"):
+                    "fragile", "cycle", "coupling-report", "check", "constraints",
+                    "incremental"):
             from .cli import main as cli_main
             cli_main()
             return
 
-        # python -m src_python <project_root> [--format json] [-o output.json]
+        # python -m src_python <project_root> [--format json] [-o output.json] [--files f1 f2 ...]
         root = cmd
         output_json = "--format" in sys.argv and "json" in sys.argv
         output_path = ""
@@ -118,7 +190,13 @@ def main():
             if idx + 1 < len(sys.argv):
                 output_path = sys.argv[idx + 1]
 
-        _analyze_and_output(root, output_json, output_path)
+        # 增量模式：--files f1.py f2.py ...
+        changed_files = None
+        if "--files" in sys.argv:
+            idx = sys.argv.index("--files")
+            changed_files = sys.argv[idx + 1:]
+
+        _analyze_and_output(root, output_json, output_path, changed_files)
     else:
         # 默认分析当前目录
         _analyze_and_output(".", output_path="hologram_graph.json")

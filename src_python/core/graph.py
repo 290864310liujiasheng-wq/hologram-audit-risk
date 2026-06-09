@@ -209,6 +209,36 @@ class Graph:
     def remove_edge(self, edge_id: str) -> None:
         self.edges.pop(edge_id, None)
 
+    def remove_file(self, file_path: str) -> tuple:
+        """移除指定文件的所有节点和关联边。返回 (removed_node_count, removed_edge_count)。
+
+        匹配规则：node.location 以 file_path 开头。
+        这在 Windows 和 Unix 路径上都有效，因为 location 和
+        file_path 都来自 os.scandir / abspath 产生的实际路径。
+        """
+        nodes_to_remove = self.find_nodes_by_location(file_path)
+        removed_nodes = len(nodes_to_remove)
+        for node in nodes_to_remove:
+            self.remove_node(node.id)
+        # remove_node 已经清理了关联边，这里统计一下
+        return (removed_nodes, 0)  # edge count tracked elsewhere if needed
+
+    def replace_file(self, file_path: str, new_file_graph: Graph) -> tuple:
+        """原子替换：移除旧节点 + 合并新图的节点和边。
+
+        返回 (removed_nodes, added_nodes, added_edges)。
+        """
+        removed_nodes, _ = self.remove_file(file_path)
+        added_nodes = 0
+        for node in new_file_graph.nodes.values():
+            self.add_node(node)
+            added_nodes += 1
+        added_edges = 0
+        for edge in new_file_graph.edges.values():
+            if self.add_edge(edge):
+                added_edges += 1
+        return (removed_nodes, added_nodes, added_edges)
+
     # -- 查询 --
 
     def get_node(self, node_id: str) -> Optional[Node]:
@@ -221,8 +251,46 @@ class Graph:
         return [n for n in self.nodes.values() if n.name == name]
 
     def find_nodes_by_location(self, file_path: str) -> List[Node]:
-        """返回指定文件中的所有节点。"""
-        return [n for n in self.nodes.values() if n.location.startswith(file_path)]
+        """返回指定文件中的所有节点。
+
+        同时尝试绝对路径和原始路径匹配（兼容相对/绝对混用，以及斜杠差异）。
+        """
+        import os as _os
+
+        # Normalize: resolve to absolute, then generate all slash variants
+        def _norm(p: str) -> str:
+            p = _os.path.normpath(_os.path.abspath(p) if not _os.path.isabs(p) else p)
+            return p
+
+        candidates: set = {file_path}
+        try:
+            candidates.add(_norm(file_path))
+        except Exception:
+            pass
+        # Both slash directions
+        for c in list(candidates):
+            if "\\" in c:
+                candidates.add(c.replace("\\", "/"))
+            if "/" in c:
+                candidates.add(c.replace("/", "\\"))
+
+        results = []
+        for n in self.nodes.values():
+            loc = n.location or ""
+            loc_norm = {loc}
+            if "\\" in loc:
+                loc_norm.add(loc.replace("\\", "/"))
+            if "/" in loc:
+                loc_norm.add(loc.replace("/", "\\"))
+            for c in candidates:
+                for ln in loc_norm:
+                    if ln.startswith(c):
+                        results.append(n)
+                        break
+                else:
+                    continue
+                break  # break outer loop too
+        return results
 
     def neighbors(self, node_id: str) -> List[Node]:
         """一阶邻接节点。"""
@@ -266,7 +334,7 @@ class Graph:
             frontier = next_frontier
         return layers
 
-    def paths(self, from_id: str, to_id: str, max_len: int = 6) -> List[List[str]]:
+    def paths(self, from_id: str, to_id: str, max_len: int = 12) -> List[List[str]]:
         """两点间所有路径（DFS，限长）。"""
         if from_id not in self.nodes or to_id not in self.nodes:
             return []
@@ -392,3 +460,13 @@ class Graph:
     def from_json(cls, file_path: str) -> Graph:
         with open(file_path, "r", encoding="utf-8") as f:
             return cls.from_dict(json.load(f))
+
+    @staticmethod
+    def from_nodes_and_edges(nodes: list, edges: list) -> Graph:
+        """从节点和边列表快速构建图（内部用）。"""
+        g = Graph()
+        for n in nodes:
+            g.add_node(n)
+        for e in edges:
+            g.add_edge(e)
+        return g

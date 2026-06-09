@@ -5,6 +5,9 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -60,7 +63,7 @@ function edgeColorByType(edgeType: string, direction: string): THREE.Color {
   return new THREE.Color(0x5599cc);
 }
 function edgeOpacityByDepth(depth: number): number {
-  switch (depth) { case 1: return 0.08; case 2: return 0.10; case 3: return 0.14; case 4: return 0.20; default: return 0.09; }
+  switch (depth) { case 1: return 0.14; case 2: return 0.18; case 3: return 0.24; case 4: return 0.32; default: return 0.16; }
 }
 
 const BG_COLOR = 0x030812;
@@ -208,6 +211,7 @@ export class StarGraph {
   private raycaster: THREE.Raycaster;
   private mouse = new THREE.Vector2(-999, -999);
   private hoveredIdx = -1;
+  private hoveredGalaxyIdx = -1;
   private hoverScale = 0;
   private targetHoverScale = 0;
 
@@ -215,9 +219,11 @@ export class StarGraph {
   private labelsContainer!: HTMLDivElement;
   private labelDivs: HTMLDivElement[] = [];
 
-  // Tooltip & Detail card
+  // Tooltip & Detail card & Pie menu
   private tooltipEl!: HTMLDivElement;
   private detailCard!: HTMLDivElement;
+  private pieMenu!: HTMLDivElement;
+  private pieNodeIdx = -1;
   private selectedIdx = -1;
 
   // Focus
@@ -246,6 +252,10 @@ export class StarGraph {
   private galaxyClouds: THREE.Points[] = [];
   private galaxyGlows: THREE.Sprite[] = [];
 
+  // Post-processing (full mode only)
+  private composer!: EffectComposer;
+  private bloomPass!: UnrealBloomPass;
+
   // Animation
   private pulseTime = 0;
   private tmpVec3 = new THREE.Vector3();
@@ -267,6 +277,19 @@ export class StarGraph {
     if (mode === 'full') { this.renderer.toneMapping = THREE.ACESFilmicToneMapping; this.renderer.toneMappingExposure = 1.4; }
     container.appendChild(this.renderer.domElement);
 
+    // ── Post-processing pipeline (full mode) ──
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(container.clientWidth, container.clientHeight),
+      mode === 'full' ? 1.4 : 0.8,  // strength
+      0.4,   // radius — soft bloom
+      0.2,   // threshold — bloom everything slightly bright
+    );
+    if (mode === 'full') {
+      this.composer.addPass(this.bloomPass);
+    }
+
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.06;
@@ -277,6 +300,7 @@ export class StarGraph {
     this.sphereGeo = new THREE.SphereGeometry(1, 24, 16);
 
     if (mode !== 'minimal') this.buildStarfield();
+    if (mode === 'full') this.buildNebulaDust();
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
     this.galaxyGroup.add(this.nodeGroup);
@@ -287,6 +311,7 @@ export class StarGraph {
     this.setupHover();
     this.setupTooltip();
     this.setupDetailCard();
+    this.setupPieMenu();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
@@ -294,10 +319,36 @@ export class StarGraph {
     if (mode === 'minimal') this.labelsContainer.style.display = 'none';
     this.container.appendChild(this.labelsContainer);
 
-    // Events
-    this.container.addEventListener('click', (e: MouseEvent) => this.onClick(e));
+    // Events — detect drag vs click on the canvas (OrbitControls captures pointer events here)
+    let pointerDown = new THREE.Vector2();
+    let pointerDragged = false;
+    const canvas = this.renderer.domElement;
+    canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+      pointerDown.set(e.clientX, e.clientY);
+      pointerDragged = false;
+    });
+    canvas.addEventListener('pointermove', (e: PointerEvent) => {
+      if (Math.abs(e.clientX - pointerDown.x) > 4 || Math.abs(e.clientY - pointerDown.y) > 4) {
+        pointerDragged = true;
+      }
+    });
+    canvas.addEventListener('pointerup', (e: PointerEvent) => {
+      if (pointerDragged) return;
+      // Ctrl+click or right-click → pie menu
+      if (e.ctrlKey || e.button === 2) {
+        this.onContextMenu(e);
+      } else {
+        this.onClick(e);
+      }
+    });
+    // Prevent browser context menu on canvas
+    canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     window.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && this.blastMode) { this.exitBlastMode(); }
+      if (e.key === 'Escape') {
+        if (this.pieMenu?.classList.contains('visible')) { this.hidePieMenu(); e.stopImmediatePropagation(); return; }
+        if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
+        if (this.blastMode) { this.exitBlastMode(); return; }
+      }
       if (e.key === 'b' || e.key === 'B') {
         if (this.blastMode) { this.exitBlastMode(); }
         else if (this.hoveredIdx >= 0) { this.startBlastMode(this.hoveredIdx); }
@@ -310,7 +361,55 @@ export class StarGraph {
     this.animate();
   }
 
+  // ── Cross-edge energy flow (fold mode) ──────────────────
+  private crossFlowParticles!: THREE.Points;
+  private crossFlowData: { segIdx: number; t: number; speed: number }[] = [];
+  private crossFlowSegments: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number }[] = [];
+
   // ── Starfield ────────────────────────────────────────────
+
+  // ── Nebula dust (full mode) ──────────────────────────────
+  private nebulaDust!: THREE.Points;
+  private nebulaPhases: number[] = [];
+
+  private buildNebulaDust(): void {
+    const count = 300;
+    const posArr = new Float32Array(count * 3);
+    const colArr = new Float32Array(count * 3);
+    const rMin = 80, rMax = 900;
+    for (let i = 0; i < count; i++) {
+      const r = rMin + Math.random() * (rMax - rMin);
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      posArr[i * 3] = Math.cos(theta) * Math.sin(phi) * r;
+      posArr[i * 3 + 1] = Math.sin(phi) * r * 0.4;
+      posArr[i * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
+      // Deep space colors: purple, teal, amber
+      const hues = [0.6, 0.65, 0.7, 0.55, 0.12, 0.08]; // purples, teals, warm ambers
+      const hue = hues[Math.floor(Math.random() * hues.length)];
+      const c = new THREE.Color(); c.setHSL(hue, 0.6, 0.5 + Math.random() * 0.3);
+      colArr[i * 3] = c.r; colArr[i * 3 + 1] = c.g; colArr[i * 3 + 2] = c.b;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 18, map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.12,
+    });
+    this.nebulaDust = new THREE.Points(geo, mat);
+    this.nebulaPhases = new Array(count).fill(0).map(() => Math.random() * Math.PI * 2);
+    this.scene.add(this.nebulaDust);
+  }
+
+  private animateNebulaDust(): void {
+    if (!this.nebulaDust) return;
+    this.nebulaDust.rotation.y += 0.0001;
+    this.nebulaDust.rotation.x += 0.00005;
+    // Subtle opacity pulse
+    const op = 0.08 + Math.sin(this.pulseTime * 0.2) * 0.04;
+    (this.nebulaDust.material as THREE.PointsMaterial).opacity = op;
+  }
 
   private buildStarfield(): void {
     const isFull = this.mode === 'full';
@@ -364,7 +463,15 @@ export class StarGraph {
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
     this.tooltipEl.querySelector('.tt-name')!.textContent = node.name;
     const metaEl = this.tooltipEl.querySelector('.tt-meta')!;
-    metaEl.textContent = `${TYPE_LABELS[kind] || kind.toUpperCase()} · 度 ${this.deg[this.hoveredIdx]}`;
+    let metaText = `${TYPE_LABELS[kind] || kind.toUpperCase()} · 度 ${this.deg[this.hoveredIdx]}`;
+    // Show community context in all views when available
+    const cid = this.nodeCommMap.get(this.hoveredIdx);
+    if (cid) {
+      const comm = this.communities.find(c => c.id === cid);
+      const commLabel = comm ? comm.label.split('/')[0].replace(/_/g, ' ') : cid;
+      metaText += ` · 🌌 ${commLabel}`;
+    }
+    metaEl.textContent = metaText;
     (metaEl as HTMLElement).dataset['kind'] = kind;
     this.tooltipEl.querySelector('.tt-loc')!.textContent = node.location || '';
     const i = this.hoveredIdx;
@@ -402,12 +509,22 @@ export class StarGraph {
 
   private onClick(e: MouseEvent): void {
     if (this.nodeCores.length === 0) return;
-    // In universe fold view, no node interaction — only galaxies
-    if (this.foldMode && !this.enteredGalaxyId) return;
     const rect = this.container.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
+    // In universe fold view: click galaxies to enter them
+    if (this.foldMode && !this.enteredGalaxyId) {
+      const coreSprites = this.galaxyGlows.filter((_, i) => i % 2 === 1);
+      const galaxyHits = this.raycaster.intersectObjects(coreSprites);
+      if (galaxyHits.length > 0) {
+        const gIdx = galaxyHits[0].object.userData['galaxyIndex'] as number | undefined;
+        if (gIdx !== undefined && gIdx < this.galaxyMeta.length) {
+          this.enterGalaxy(this.galaxyMeta[gIdx].id);
+        }
+      }
+      return;
+    }
     // Only intersect visible nodes
     const visibleCores = this.nodeCores.filter(c => c.visible);
     const hits = this.raycaster.intersectObjects(visibleCores);
@@ -456,6 +573,222 @@ export class StarGraph {
     this.detailCard.style.left = `${left}px`; this.detailCard.style.top = `${top}px`;
   }
 
+  // ── Pie Menu ──────────────────────────────────────────────
+
+  private setupPieMenu(): void {
+    this.pieMenu = document.createElement('div');
+    this.pieMenu.id = 'pie-menu';
+    this.pieMenu.innerHTML = `
+      <div class="pie-item" data-action="blast"><span class="pie-icon">💥</span><span>波及</span></div>
+      <div class="pie-item" data-action="focus"><span class="pie-icon">🔍</span><span>聚焦</span></div>
+      <div class="pie-item" data-action="path"><span class="pie-icon">🔗</span><span>路径</span></div>
+      <div class="pie-item" data-action="info"><span class="pie-icon">📋</span><span>信息</span></div>`;
+    this.pieMenu.style.cssText =
+      'position:absolute;z-index:20;pointer-events:auto;display:none;' +
+      'background:rgba(6,12,24,0.95);border:1px solid rgba(88,120,180,0.3);' +
+      'border-radius:8px;padding:4px;box-shadow:0 8px 32px rgba(0,0,0,0.5);' +
+      'flex-direction:column;gap:2px;min-width:80px;';
+    // Pie item hover style
+    const style = document.createElement('style');
+    style.textContent = `
+      #pie-menu .pie-item {
+        display:flex;align-items:center;gap:8px;padding:6px 12px;
+        font-size:13px;color:#c9d1d9;border-radius:5px;cursor:pointer;
+        transition:background 0.1s;white-space:nowrap;
+      }
+      #pie-menu .pie-item:hover { background:rgba(88,120,180,0.25);color:#e6edf3; }
+      #pie-menu .pie-icon { font-size:14px;width:20px;text-align:center; }
+    `;
+    this.pieMenu.appendChild(style);
+    this.container.appendChild(this.pieMenu);
+    // Click handlers on pie items
+    this.pieMenu.querySelectorAll('.pie-item').forEach(item => {
+      item.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        const action = (item as HTMLElement).dataset['action'];
+        const idx = this.pieNodeIdx;
+        this.hidePieMenu();
+        this.handlePieAction(action, idx);
+      });
+    });
+  }
+
+  private onContextMenu(e: PointerEvent | MouseEvent): void {
+    if (this.foldMode && !this.enteredGalaxyId) return;
+    const rect = this.container.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
+    if (hits.length === 0) return;
+    const idx = (hits[0].object as THREE.Mesh).userData['nodeIndex'] as number;
+    if (idx === undefined || idx < 0) return;
+    this.pieNodeIdx = idx;
+    this.showPieMenu(e.clientX, e.clientY);
+  }
+
+  private showPieMenu(x: number, y: number): void {
+    this.pieMenu.style.display = 'flex';
+    this.pieMenu.style.left = `${x}px`;
+    this.pieMenu.style.top = `${y}px`;
+    this.pieMenu.classList.add('visible');
+  }
+
+  private hidePieMenu(): void {
+    this.pieMenu.style.display = 'none';
+    this.pieMenu.classList.remove('visible');
+    this.pieNodeIdx = -1;
+  }
+
+  private handlePieAction(action: string | undefined, idx: number): void {
+    if (idx < 0 || idx >= this.graphNodes.length) return;
+    switch (action) {
+      case 'blast': this.startBlastMode(idx); break;
+      case 'focus': this.flyToNode(idx); break;
+      case 'path':
+        if (this._pathSource < 0) {
+          this.setPathSource(idx);
+        } else if (idx !== this._pathSource) {
+          this.setPathTarget(idx);
+        }
+        break;
+      case 'info': this.showDetail(idx); break;
+    }
+  }
+
+  // ── Path finding ─────────────────────────────────────────
+
+  private _pathSource = -1;
+  private _pathTarget = -1;
+  private _pathNodes = new Set<number>();
+  private _pathEdges = new Set<number>();
+
+  private setPathSource(idx: number): void {
+    this._pathSource = idx;
+    this._pathTarget = -1;
+    this._pathNodes.clear(); this._pathEdges.clear();
+    // Highlight the source node in cyan
+    this.highlightPathNodes();
+    const st = document.getElementById('status-text');
+    if (st) st.textContent = `🔗 路径起点: ${this.graphNodes[idx].name} · 右键目标节点选"路径"完成 · ESC 取消`;
+  }
+
+  private setPathTarget(idx: number): void {
+    this._pathTarget = idx;
+    this.findShortestPath();
+    const st = document.getElementById('status-text');
+    const len = this._pathNodes.size;
+    if (st) st.textContent = len > 0
+      ? `🔗 路径: ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} · ${len} 节点 · ESC 清除`
+      : `🔗 未找到 ${this.graphNodes[this._pathSource].name} → ${this.graphNodes[this._pathTarget].name} 的路径`;
+  }
+
+  private findShortestPath(): void {
+    this._pathNodes.clear(); this._pathEdges.clear();
+    const src = this._pathSource, dst = this._pathTarget;
+    if (src < 0 || dst < 0) return;
+    // BFS with parent tracking
+    const n = this.graphNodes.length;
+    const visited = new Array<boolean>(n).fill(false);
+    const parent = new Array<number>(n).fill(-1);
+    const parentEdge = new Array<number>(n).fill(-1);
+    const queue = [src];
+    visited[src] = true;
+    let found = false;
+    while (queue.length > 0 && !found) {
+      const u = queue.shift()!;
+      for (let ei = 0; ei < (this.edgeIndexOf[u]?.length || 0); ei++) {
+        const edgeIdx = this.edgeIndexOf[u][ei];
+        const d = this.edgeDataList[edgeIdx];
+        const v = d.s === u ? d.t : d.s;
+        if (!visited[v]) {
+          visited[v] = true;
+          parent[v] = u;
+          parentEdge[v] = edgeIdx;
+          queue.push(v);
+          if (v === dst) { found = true; break; }
+        }
+      }
+    }
+    if (!found) return;
+    // Backtrack to collect path
+    let cur = dst;
+    while (cur !== src) {
+      this._pathNodes.add(cur);
+      this._pathEdges.add(parentEdge[cur]);
+      cur = parent[cur];
+    }
+    this._pathNodes.add(src);
+    this.highlightPathNodes();
+  }
+
+  private highlightPathNodes(): void {
+    const src = this._pathSource;
+    // Update all node glows: path nodes bright cyan, others dim
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const onPath = this._pathNodes.has(i) || i === src;
+      if (this.nodeGlows[i]) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity =
+          onPath ? 0.9 : (this._pathNodes.size > 0 ? 0.06 : 0.55);
+        if (onPath) {
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(
+            i === src ? 0x44ffdd : i === this._pathTarget ? 0xff8844 : 0x44ddff);
+        }
+      }
+      if (this.nodeCores[i]) {
+        this.nodeCores[i].visible = onPath || this._pathNodes.size === 0;
+      }
+    }
+    // Dim/hide non-path edges
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity =
+        this._pathNodes.size > 0 ? 0.01 : edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+    }
+    // Brighten path edges
+    this.rebuildPathEdges();
+  }
+
+  private rebuildPathEdges(): void {
+    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    if (this._pathEdges.size === 0) return;
+    const pos = this.nodePositions;
+    const verts: number[] = [];
+    for (const ei of this._pathEdges) {
+      const d = this.edgeDataList[ei];
+      verts.push(pos[d.s * 3], pos[d.s * 3 + 1], pos[d.s * 3 + 2],
+                 pos[d.t * 3], pos[d.t * 3 + 1], pos[d.t * 3 + 2]);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    this.highlightEdgeGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      color: 0x44ffcc, transparent: true, opacity: 0.8,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })));
+  }
+
+  private clearPath(): void {
+    this._pathSource = -1;
+    this._pathTarget = -1;
+    this._pathNodes.clear();
+    this._pathEdges.clear();
+    // Restore normal appearance
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      if (this.nodeGlows[i]) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
+      }
+      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+    }
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity =
+        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+    }
+    while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    const st = document.getElementById('status-text');
+    if (st && st.textContent?.startsWith('🔗')) st.textContent = '就绪';
+  }
+
   // ── Hover ────────────────────────────────────────────────
 
   private setupHover(): void {
@@ -469,9 +802,37 @@ export class StarGraph {
 
   private updateHover(): void {
     if (this.nodeCores.length === 0) return;
-    // In universe fold view, no node hover — only galaxies
+    // In universe fold view: hover galaxies to show tooltip + highlight
     if (this.foldMode && !this.enteredGalaxyId) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
+      // Galaxy hover detection — only test core sprites (small & precise)
+      this.raycaster.setFromCamera(this.mouse, this.camera);
+      const coreSprites = this.galaxyGlows.filter((_, i) => i % 2 === 1);
+      const galaxyHits = this.raycaster.intersectObjects(coreSprites);
+      if (galaxyHits.length > 0 && this.mouse.x > -999) {
+        this.container.style.cursor = 'pointer';
+        const gIdx = galaxyHits[0].object.userData['galaxyIndex'] as number | undefined;
+        if (gIdx !== undefined && gIdx < this.galaxyMeta.length) {
+          this.hoveredGalaxyIdx = gIdx;
+          const gm = this.galaxyMeta[gIdx];
+          const shortName = (gm.label || gm.id).split('/')[0].replace(/_/g, ' ');
+          this.tooltipEl.querySelector('.tt-name')!.textContent = `🌌 ${shortName}`;
+          this.tooltipEl.querySelector('.tt-meta')!.textContent = `${gm.memberIndices.length} 节点 · ${gm.memberIndices.length >= 30 ? '大型星团' : gm.memberIndices.length >= 10 ? '中型星团' : '小型星团'}`;
+          this.tooltipEl.querySelector('.tt-loc')!.textContent = '点击进入查看内部连线';
+          this.tmpVec3.copy(gm.centroid);
+          this.tmpVec3.project(this.camera);
+          if (this.tmpVec3.z <= 1) {
+            const x = (this.tmpVec3.x * 0.5 + 0.5) * this.container.clientWidth;
+            const y = (-this.tmpVec3.y * 0.5 + 0.5) * this.container.clientHeight;
+            this.tooltipEl.style.left = `${x + 18}px`; this.tooltipEl.style.top = `${y - 10}px`;
+            this.tooltipEl.classList.add('visible');
+          }
+        }
+      } else {
+        this.container.style.cursor = '';
+        this.tooltipEl.classList.remove('visible');
+        this.hoveredGalaxyIdx = -1;
+      }
       return;
     }
     this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -530,6 +891,26 @@ export class StarGraph {
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       div.style.opacity = String(opacity);
       div.style.display = (opacity > 0.05 && !this.foldMode) ? '' : 'none';
+    }
+    // Galaxy labels in universe fold view — brighter on hover
+    for (let k = 0; k < this.galaxyLabelDivs.length; k++) {
+      const div = this.galaxyLabelDivs[k];
+      const gIdx = Number(div.dataset['galaxyIndex']);
+      if (gIdx === undefined || gIdx >= this.galaxyMeta.length) continue;
+      const gm = this.galaxyMeta[gIdx];
+      this.tmpVec3.copy(gm.centroid);
+      this.tmpVec3.project(this.camera);
+      const behind = this.tmpVec3.z > 1;
+      const dist = this.camera.position.distanceTo(gm.centroid);
+      const opacity = behind ? 0 : Math.max(0, 1 - dist / 1500);
+      div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
+      div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
+      const hovered = gIdx === this.hoveredGalaxyIdx;
+      div.style.opacity = String(opacity * (hovered ? 1.0 : 0.7));
+      div.style.color = hovered ? 'rgba(255,220,160,0.95)' : '';
+      div.style.fontSize = hovered ? '12px' : '10px';
+      div.style.textShadow = hovered ? '0 0 14px rgba(255,180,60,0.9), 0 0 30px rgba(255,120,20,0.5)' : '';
+      div.style.display = (opacity > 0.03 && this.foldMode && !this.enteredGalaxyId) ? '' : 'none';
     }
   }
 
@@ -630,11 +1011,40 @@ export class StarGraph {
     this.foldMode = on;
     this.enteredGalaxyId = null;
     if (on) {
+      // Enable HDR tone mapping
+      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 1.1;
+      // Subtle bloom — only the brightest cores glow, not the whole cloud
+      if (this.mode === 'full') {
+        if (this.composer.passes.indexOf(this.bloomPass) === -1) {
+          this.composer.addPass(this.bloomPass);
+        }
+        this.bloomPass.strength = 0.7;
+        this.bloomPass.threshold = 0.55; // only very bright elements bloom
+      }
       this.applyFoldOverlay();
+      // Start cross-edge energy flow
+      this.initCrossEdgeFlow();
       const st = document.getElementById('status-text');
-      if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 搜索进入`;
+      if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
     } else {
       this.clearFoldOverlay();
+      // Restore original tone mapping + bloom for this mode
+      if (this.mode === 'full') {
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.4;
+        this.bloomPass.strength = 1.4;
+        this.bloomPass.threshold = 0.2;
+        if (this.composer.passes.indexOf(this.bloomPass) === -1) {
+          this.composer.addPass(this.bloomPass);
+        }
+      } else {
+        this.renderer.toneMapping = THREE.NoToneMapping;
+        this.renderer.toneMappingExposure = 1.0;
+        // Remove bloom for standard/minimal
+        const idx = this.composer.passes.indexOf(this.bloomPass);
+        if (idx !== -1) this.composer.removePass(this.bloomPass);
+      }
     }
   }
 
@@ -647,6 +1057,8 @@ export class StarGraph {
   // ══════════════════════════════════════════════════════════
 
   private static readonly CONSTELLATION_COLOR = 0xffaa44;
+  /** Communities with fewer members than this are hidden from the galaxy view. */
+  private static readonly MIN_GALAXY_SIZE = 5;
 
   private applyFoldOverlay(): void {
     // Hide all nodes
@@ -655,10 +1067,11 @@ export class StarGraph {
       if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
     }
-    // Dim all edges
+    // Dim all edges + hide edge flow particles
     for (const lines of this.edgeLineGroups) {
       (lines.material as THREE.LineBasicMaterial).opacity = 0.02;
     }
+    if (this.edgeParticles) this.edgeParticles.visible = false;
     if (this.enteredGalaxyId) {
       // Layer 2: inside a galaxy — show its nodes + internal edges as a constellation
       this._showConstellation(this.enteredGalaxyId);
@@ -669,6 +1082,8 @@ export class StarGraph {
   }
 
   private clearFoldOverlay(): void {
+    this.hoveredGalaxyIdx = -1;
+    this.hideGalaxyTitle();
     const isFull = this.mode === 'full';
     for (let i = 0; i < this.graphNodes.length; i++) {
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
@@ -682,7 +1097,9 @@ export class StarGraph {
       const depth = (lines.userData['edgeDepth'] as number) ?? 0;
       (lines.material as THREE.LineBasicMaterial).opacity = edgeOpacityByDepth(depth);
     }
+    if (this.edgeParticles) this.edgeParticles.visible = true;
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    this.clearCrossEdgeFlow();
     this.galaxyClouds = []; this.galaxyGlows = [];
   }
 
@@ -724,6 +1141,8 @@ export class StarGraph {
   }
 
   /** Enter a galaxy: hide clouds, reveal its constellation. */
+  private galaxyTitleEl!: HTMLDivElement;
+
   enterGalaxy(galaxyId: string): void {
     if (!this.foldMode || this.enteredGalaxyId === galaxyId) return;
     this.enteredGalaxyId = galaxyId;
@@ -731,17 +1150,89 @@ export class StarGraph {
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     this.galaxyClouds = []; this.galaxyGlows = [];
     this._showConstellation(galaxyId);
-    // Fly camera to galaxy centroid
+    // Set up independent camera orbit around the constellation centroid
     const gm = this.galaxyMeta.find(g => g.id === galaxyId);
-    if (gm) this.flyToNode(gm.memberIndices[0]); // fly to first member node
+    if (gm) {
+      // Compute cluster bounding radius
+      let clusterRadius = 30;
+      for (const mi of gm.memberIndices) {
+        const dx = this.nodePositions[mi * 3] - gm.centroid.x;
+        const dy = this.nodePositions[mi * 3 + 1] - gm.centroid.y;
+        const dz = this.nodePositions[mi * 3 + 2] - gm.centroid.z;
+        clusterRadius = Math.max(clusterRadius, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      }
+      const viewDist = clusterRadius * 3.2;
+      // Camera position: offset from centroid to frame the cluster
+      const camPos = gm.centroid.clone().add(
+        new THREE.Vector3(viewDist * 0.55, viewDist * 0.4, viewDist * 0.7));
+      // Animate camera + controls target to constellation space
+      this.focusTarget.copy(camPos);
+      this.focusStartCam.copy(this.camera.position);
+      this.focusStartLook.copy(this.controls.target);
+      this._constellationLookTarget = gm.centroid.clone();
+      this.focusActive = true; this.focusProgress = 0; this.focusNodeIdx = -1; this.focusFlash = 0;
+      // Independent orbit: target = centroid, no pan, bounded zoom
+      this.controls.target.copy(gm.centroid);
+      this.controls.enablePan = true;
+      this.controls.minDistance = clusterRadius * 1.5;
+      this.controls.maxDistance = clusterRadius * 8;
+    }
+    // Show fixed HUD title
+    this.showGalaxyTitle(gm);
     const st = document.getElementById('status-text');
     if (st) st.textContent = `🔍 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+  }
+
+  /** When flying to constellation, controls look at centroid, not at camera target. */
+  private _constellationLookTarget = new THREE.Vector3();
+
+  /** Show fixed galaxy title at top of viewport when inside a constellation. */
+  private showGalaxyTitle(gm: { id: string; label: string } | undefined): void {
+    if (!this.galaxyTitleEl) {
+      this.galaxyTitleEl = document.createElement('div');
+      this.galaxyTitleEl.id = 'galaxy-title';
+      this.galaxyTitleEl.style.cssText =
+        'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:15;' +
+        'font-size:18px;font-weight:700;letter-spacing:1px;pointer-events:none;' +
+        'color:#ffcc80;text-shadow:0 0 20px rgba(255,160,40,0.6),0 0 40px rgba(255,100,20,0.3);' +
+        'transition:opacity 0.3s;opacity:0;';
+      this.container.appendChild(this.galaxyTitleEl);
+    }
+    const shortName = gm ? gm.label.split('/')[0].replace(/_/g, ' ') : '';
+    this.galaxyTitleEl.textContent = `🌌 ${shortName}`;
+    this.galaxyTitleEl.style.opacity = '1';
+  }
+
+  private hideGalaxyTitle(): void {
+    if (this.galaxyTitleEl) this.galaxyTitleEl.style.opacity = '0';
+  }
+
+  /** Show a temporary floating label at the galaxy centroid. */
+  private showGalaxyLabel(gm: { id: string; label: string; centroid: THREE.Vector3 } | undefined): void {
+    if (!gm) return;
+    const label = document.createElement('div');
+    label.className = 'galaxy-flash-label';
+    label.textContent = `🌌 ${gm.label || gm.id}`;
+    label.style.cssText = 'position:absolute;z-index:12;pointer-events:none;font-size:16px;font-weight:700;color:#ffe0a0;text-shadow:0 0 20px rgba(255,180,60,0.8),0 0 40px rgba(255,140,30,0.4);white-space:nowrap;opacity:0;transition:opacity 0.2s;';
+    const halfW = this.container.clientWidth * 0.5, halfH = this.container.clientHeight * 0.5;
+    this.tmpVec3.copy(gm.centroid).project(this.camera);
+    label.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
+    label.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
+    label.style.transform = 'translate(-50%, -50%)';
+    this.container.appendChild(label);
+    requestAnimationFrame(() => { label.style.opacity = '1'; });
+    setTimeout(() => { label.style.opacity = '0'; setTimeout(() => label.remove(), 300); }, 1800);
   }
 
   /** Exit galaxy back to universe view. */
   exitGalaxy(): void {
     if (!this.foldMode || !this.enteredGalaxyId) return;
     this.enteredGalaxyId = null;
+    this.hideGalaxyTitle();
+    // Restore free controls
+    this.controls.enablePan = true;
+    this.controls.minDistance = 15;
+    this.controls.maxDistance = 4000;
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     // Re-hide all nodes
     for (let i = 0; i < this.graphNodes.length; i++) {
@@ -751,7 +1242,7 @@ export class StarGraph {
     }
     this.buildGalaxyClouds();
     const st = document.getElementById('status-text');
-    if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 搜索进入`;
+    if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 点击进入或搜索`;
   }
 
   // ── Galaxy clouds (universe view) ────────────────────────
@@ -763,11 +1254,13 @@ export class StarGraph {
     const goldenRatio = 0.618033988749895;
     for (let gi = 0; gi < total; gi++) {
       const gm = this.galaxyMeta[gi];
-      const r = 14 + Math.sqrt(gm.memberIndices.length) * 4.5;
-      // Unique warm hue per galaxy
-      const hue = ((gi * goldenRatio) % 1) * 0.12 + 0.07;
-      const tint = new THREE.Color(); tint.setHSL(hue, 0.8, 0.5);
-      const bright = new THREE.Color(); bright.setHSL(hue, 0.5, 0.85);
+      // Galaxies are aggregates — should dominate the view
+      // 5 nodes→81, 50 nodes→158, 120 nodes→220
+      const r = 45 + Math.sqrt(gm.memberIndices.length) * 16;
+      // Wide hue spread across the full warm-cool spectrum for distinction
+      const hue = ((gi * goldenRatio) % 1) * 0.26 + 0.03;  // 0.03–0.29 (orange→yellow→green→teal)
+      const tint = new THREE.Color(); tint.setHSL(hue, 0.7, 0.4);    // subdued ambient
+      const bright = new THREE.Color(); bright.setHSL(hue, 0.35, 0.7); // visible but not blinding
       // Shape variety: varying flattening and tilt per galaxy
       const flat = 0.3 + (gm.memberIndices.length % 7) * 0.05;  // 0.30-0.60 disk thickness
       const elon = 0.6 + (gm.memberIndices.length % 5) * 0.08;  // 0.60-0.92 equatorial elongation
@@ -776,7 +1269,7 @@ export class StarGraph {
       const ctA = Math.cos(tiltA), stA = Math.sin(tiltA);
       const ctB = Math.cos(tiltB), stB = Math.sin(tiltB);
       // ── Dense inner core particles (bright, tightly clustered) ──
-      const coreN = Math.min(40, 8 + Math.floor(gm.memberIndices.length * 0.6));
+      const coreN = Math.min(250, 25 + Math.floor(gm.memberIndices.length * 2.2));
       const corePos = new Float32Array(coreN * 3);
       const coreCol = new Float32Array(coreN * 3);
       for (let j = 0; j < coreN; j++) {
@@ -801,20 +1294,37 @@ export class StarGraph {
       coreGeo.setAttribute('position', new THREE.BufferAttribute(corePos, 3));
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
-        size: 1.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.75,
+        size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.55,
       })));
-      // ── Sparse outer halo particles (dimmer, wider spread) ──
-      const haloN = Math.min(200, 40 + gm.memberIndices.length * 3);
+      // ── Sparse outer halo particles with spiral arm structure ──
+      const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
       const haloPos = new Float32Array(haloN * 3);
       const haloCol = new Float32Array(haloN * 3);
+      const useSpiral = gm.memberIndices.length >= 8;
+      const armCount = gm.memberIndices.length >= 30 ? 3 : 2;
+      const twist = 0.08 + (gm.memberIndices.length % 13) * 0.007; // 1.5–2.5 full turns per galaxy
       for (let j = 0; j < haloN; j++) {
-        const dr = (0.25 + Math.abs(this._gaussRand()) * 0.75) * r;
-        const th = Math.random() * Math.PI * 2;
-        const ph = Math.acos(2 * Math.random() - 1);
-        let px = Math.cos(th) * Math.sin(ph) * dr;
-        let py = Math.sin(ph) * dr * flat;
-        let pz = Math.sin(th) * Math.sin(ph) * dr * elon;
+        let dr: number, px: number, py: number, pz: number;
+        if (useSpiral && Math.random() < 0.85) {
+          // Spiral arm particle
+          dr = (0.15 + Math.random() * 0.85) * r;
+          const armIdx = j % armCount;
+          const armAngle = dr * twist + (armIdx * Math.PI * 2) / armCount;
+          const scatter = Math.abs(this._gaussRand()) * 0.15 * r; // arm width
+          const a = armAngle + this._gaussRand() * 0.3; // angle jitter
+          px = Math.cos(a) * dr + this._gaussRand() * scatter;
+          py = this._gaussRand() * dr * flat * 0.3;
+          pz = Math.sin(a) * dr + this._gaussRand() * scatter;
+        } else {
+          // Random scatter halo
+          dr = (0.25 + Math.abs(this._gaussRand()) * 0.75) * r;
+          const th = Math.random() * Math.PI * 2;
+          const ph = Math.acos(2 * Math.random() - 1);
+          px = Math.cos(th) * Math.sin(ph) * dr;
+          py = Math.sin(ph) * dr * flat;
+          pz = Math.sin(th) * Math.sin(ph) * dr * elon;
+        }
         let rx = px * ctA - pz * stA; let rz = px * stA + pz * ctA;
         let ry = py * ctB - rz * stB; rz = py * stB + rz * ctB;
         haloPos[j * 3] = gm.centroid.x + rx;
@@ -827,26 +1337,55 @@ export class StarGraph {
       haloGeo.setAttribute('position', new THREE.BufferAttribute(haloPos, 3));
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
-        size: 1.0, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.45,
+        size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.40,
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
-      // ── Soft ambient glow sprite ──
+      // Tag halo particles with galaxy index for potential future use
+      haloCloud.userData = { galaxyIndex: gi, galaxyId: gm.id };
+      // ── Soft ambient glow sprite (ACES tone mapping prevents washout) ──
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.12,
+        depthWrite: false, transparent: true, opacity: 0.20,
       }));
       glow.position.copy(gm.centroid);
-      glow.scale.setScalar(r * 2.5);
+      glow.scale.setScalar(r * 4.5);
+      glow.userData = { galaxyIndex: gi, galaxyId: gm.id };
       this.commFoldGroup.add(glow); this.galaxyGlows.push(glow);
-      // ── Bright central core sprite ──
+      // ── Bright central core (additive — the focal point of each galaxy) ──
       const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.8,
+        depthWrite: false, transparent: true, opacity: 0.75,
       }));
       coreSprite.position.copy(gm.centroid);
-      coreSprite.scale.setScalar(r * 0.35);
+      coreSprite.scale.setScalar(r * 0.7);
+      coreSprite.userData = { galaxyIndex: gi, galaxyId: gm.id };
       this.commFoldGroup.add(coreSprite); this.galaxyGlows.push(coreSprite);
+    }
+    // ── Draw cross-galaxy edges (inter-cluster connections) ──
+    this.buildCrossEdges();
+    // ── Show labels for the largest galaxies ──
+    this.buildGalaxyLabels();
+  }
+
+  private galaxyLabelDivs: HTMLDivElement[] = [];
+  private buildGalaxyLabels(): void {
+    // Clean old labels
+    for (const d of this.galaxyLabelDivs) d.remove();
+    this.galaxyLabelDivs = [];
+    // Label the top ~15 galaxies by size
+    const maxLabels = Math.min(15, this.galaxyMeta.length);
+    for (let gi = 0; gi < maxLabels; gi++) {
+      const gm = this.galaxyMeta[gi];
+      const div = document.createElement('div');
+      div.className = 'galaxy-label';
+      // Extract a short name from the label (first part before /)
+      const shortName = gm.label.split('/')[0].replace(/^test_/, '').replace(/_/g, ' ');
+      div.textContent = shortName.length > 24 ? shortName.slice(0, 22) + '…' : shortName;
+      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size:10px;color:rgba(200,200,220,0.55);text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
+      this.container.appendChild(div);
+      div.dataset['galaxyIndex'] = String(gi); div.dataset['galaxyId'] = gm.id;
+      this.galaxyLabelDivs.push(div);
     }
   }
 
@@ -866,16 +1405,103 @@ export class StarGraph {
         gs ? gs.centroid.x : pos[d.s * 3], gs ? gs.centroid.y : pos[d.s * 3 + 1], gs ? gs.centroid.z : pos[d.s * 3 + 2],
         gt ? gt.centroid.x : pos[d.t * 3], gt ? gt.centroid.y : pos[d.t * 3 + 1], gt ? gt.centroid.z : pos[d.t * 3 + 2]);
       const c = edgeColorByType(d.edgeType, d.direction);
-      colors.push(c.r * 1.2, c.g * 1.2, c.b * 1.2, c.r * 1.2, c.g * 1.2, c.b * 1.2);
+      colors.push(c.r * 1.6, c.g * 1.6, c.b * 1.6, c.r * 1.6, c.g * 1.6, c.b * 1.6);
     }
     if (verts.length === 0) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.28,
+      vertexColors: true, transparent: true, opacity: 0.38,
       depthWrite: false, blending: THREE.AdditiveBlending,
     })));
+  }
+
+  // ── Cross-edge energy flow (data streaming between galaxies) ──
+
+  private initCrossEdgeFlow(): void {
+    if (this.crossFlowParticles) {
+      this.commFoldGroup.remove(this.crossFlowParticles);
+      this.crossFlowParticles.geometry.dispose();
+      (this.crossFlowParticles.material as THREE.Material).dispose();
+    }
+    // Build segment list from cross-edges
+    this.crossFlowSegments = [];
+    const seen = new Set<string>();
+    const pos = this.nodePositions;
+    for (const d of this.edgeDataList) {
+      const sc = this.nodeCommMap.get(d.s), tc = this.nodeCommMap.get(d.t);
+      if (!sc || !tc || sc === tc) continue;
+      const gs = this.galaxyMeta.find(g => g.id === sc);
+      const gt = this.galaxyMeta.find(g => g.id === tc);
+      if (!gs || !gt) continue;
+      const key = [sc, tc].sort().join('::');
+      if (seen.has(key)) continue; seen.add(key);
+      this.crossFlowSegments.push({
+        x1: gs.centroid.x, y1: gs.centroid.y, z1: gs.centroid.z,
+        x2: gt.centroid.x, y2: gt.centroid.y, z2: gt.centroid.z,
+      });
+    }
+    if (this.crossFlowSegments.length === 0) return;
+    // Create flow particles — 5 per segment for density
+    const totalParticles = this.crossFlowSegments.length * 5;
+    const pArr = new Float32Array(totalParticles * 3);
+    const cArr = new Float32Array(totalParticles * 3);
+    this.crossFlowData = [];
+    for (let i = 0; i < totalParticles; i++) {
+      const segIdx = i % this.crossFlowSegments.length;
+      const seg = this.crossFlowSegments[segIdx];
+      const t = Math.random();
+      pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
+      pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
+      pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
+      // Mix of cyan, gold, and warm white for visual variety
+      const colorChoice = Math.random();
+      if (colorChoice < 0.4) {
+        cArr[i * 3] = 0.4; cArr[i * 3 + 1] = 0.9; cArr[i * 3 + 2] = 1.0; // cyan
+      } else if (colorChoice < 0.8) {
+        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.8; cArr[i * 3 + 2] = 0.3; // gold
+      } else {
+        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.95; cArr[i * 3 + 2] = 0.85; // warm white
+      }
+      this.crossFlowData.push({ segIdx, t, speed: 0.004 + Math.random() * 0.012 });
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.9,
+    });
+    this.crossFlowParticles = new THREE.Points(geo, mat);
+    this.commFoldGroup.add(this.crossFlowParticles);
+  }
+
+  private animateCrossEdgeFlow(): void {
+    if (!this.crossFlowParticles || this.crossFlowSegments.length === 0) return;
+    const pArr = this.crossFlowParticles.geometry.attributes['position'].array as Float32Array;
+    for (let i = 0; i < this.crossFlowData.length; i++) {
+      const fd = this.crossFlowData[i];
+      fd.t += fd.speed;
+      if (fd.t > 1.1) fd.t = -0.1;
+      if (fd.t < 0) fd.t += 1.1;
+      const seg = this.crossFlowSegments[fd.segIdx];
+      if (!seg) continue;
+      const t = Math.max(0, Math.min(1, fd.t));
+      pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
+      pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
+      pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
+    }
+    this.crossFlowParticles.geometry.attributes['position'].needsUpdate = true;
+  }
+
+  private clearCrossEdgeFlow(): void {
+    if (this.crossFlowParticles) {
+      this.commFoldGroup.remove(this.crossFlowParticles);
+      this.crossFlowParticles.geometry.dispose();
+      (this.crossFlowParticles.material as THREE.Material).dispose();
+    }
+    this.crossFlowData = []; this.crossFlowSegments = [];
   }
 
   private _gaussRand(): number {
@@ -889,8 +1515,15 @@ export class StarGraph {
     if (!this.focusActive) return;
     this.focusProgress += 0.025;
     const t = easeInOutCubic(Math.min(1, this.focusProgress));
-    this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget.clone().add(new THREE.Vector3(80, 60, 100)), t);
-    this.controls.target.lerpVectors(this.focusStartLook, this.focusTarget, t);
+    // Constellation fly-to: focusTarget is camera destination, lookTarget is centroid
+    if (this.enteredGalaxyId !== null) {
+      this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget, t);
+      this.controls.target.lerpVectors(this.focusStartLook, this._constellationLookTarget, t);
+    } else {
+      // Node fly-to: focusTarget is node position, camera offsets from it
+      this.camera.position.lerpVectors(this.focusStartCam, this.focusTarget.clone().add(new THREE.Vector3(80, 60, 100)), t);
+      this.controls.target.lerpVectors(this.focusStartLook, this.focusTarget, t);
+    }
     if (this.focusNodeIdx >= 0 && this.focusNodeIdx < this.nodeGlows.length) {
       const base = 0.6 + (this.deg[this.focusNodeIdx] / this.maxDeg) * 2.8;
       const flashScale = 1 + Math.sin(this.focusProgress * 20) * 0.5 * this.focusFlash;
@@ -899,7 +1532,7 @@ export class StarGraph {
       this.nodeCores[this.focusNodeIdx].scale.setScalar(base * flashScale);
       this.focusFlash *= 0.97;
     }
-    if (t >= 1) { this.focusActive = false; setTimeout(() => this.restoreFocusNode(), 800); }
+    if (t >= 1) { this.focusActive = false; if (this.enteredGalaxyId === null) setTimeout(() => this.restoreFocusNode(), 800); }
   }
 
   private restoreFocusNode(): void {
@@ -952,17 +1585,23 @@ export class StarGraph {
       }
     }
     // Pre-compute galaxy members (centroids filled after layout)
+    // Only keep communities above minimum size — single-node communities are noise
     this.galaxyMeta = [];
+    let skippedSingletons = 0;
     for (const comm of this.communities) {
       const members: number[] = [];
       for (const nid of comm.node_ids) {
         const idx = nodeIdx.get(nid);
         if (idx !== undefined) members.push(idx);
       }
-      if (members.length > 0) {
+      if (members.length >= StarGraph.MIN_GALAXY_SIZE) {
         this.galaxyMeta.push({ id: comm.id, label: comm.label, centroid: new THREE.Vector3(), memberIndices: members });
+      } else if (members.length > 0 && members.length < StarGraph.MIN_GALAXY_SIZE) {
+        skippedSingletons += members.length;
       }
     }
+    // Sort galaxies by size descending so largest render first (OCD-friendly)
+    this.galaxyMeta.sort((a, b) => b.memberIndices.length - a.memberIndices.length);
 
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
@@ -986,10 +1625,12 @@ export class StarGraph {
     this.buildNodes(nodes, rawPos, deg);
     this.buildLabels(nodes, deg);
 
-    // Full mode: edge particle flow + twinkle data
+    // Edge particle flow — full mode dense, standard mode subtle, minimal none
+    if (this.mode !== 'minimal') {
+      this.initEdgeParticles(rawPos, eData);
+    }
     if (this.mode === 'full') {
       this.initTwinkleData(nodes.length);
-      this.initEdgeParticles(rawPos, eData);
     }
 
     // ── Compute galaxy centroids from layout ─────────────────
@@ -1016,6 +1657,10 @@ export class StarGraph {
     this.labelDivs = []; this.nodeLabelIdx = [];
     this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.edgeLineGroups = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
+    this.galaxyMeta = [];
+    this._pathSource = -1; this._pathTarget = -1; this._pathNodes.clear(); this._pathEdges.clear();
+    for (const d of this.galaxyLabelDivs) d.remove();
+    this.galaxyLabelDivs = [];
     this.neighborMap = []; this.edgeIndexOf = [];
     this.hoveredIdx = -1; this.targetHoverScale = 0;
     this.focusActive = false; this.focusNodeIdx = -1; this.selectedIdx = -1;
@@ -1125,7 +1770,7 @@ export class StarGraph {
       let text = `${nodeCount} 节点 · ${edgeCount} 边 · S${sCount} D${dCount} T${tCount}`;
       if (l4 > 0) text += ` · ⛔ L4×${l4}`;
       else if (l3 > 0) text += ` · ⚠ L3×${l3}`;
-      if (this.foldMode && this.communities.length > 0) text += ` · 🌀 ${this.communities.length} 星座`;
+      if (this.foldMode && this.galaxyMeta.length > 0) text += ` · 🌀 ${this.galaxyMeta.length} 星座`;
       st.textContent = text;
     }
   }
@@ -1139,10 +1784,16 @@ export class StarGraph {
 
   private initEdgeParticles(pos: Float32Array, data: EdgeData[]): void {
     // Remove old
-    if (this.edgeParticles) { this.scene.remove(this.edgeParticles); (this.edgeParticles.material as THREE.Material).dispose(); this.edgeParticles.geometry.dispose(); }
+    if (this.edgeParticles) { this.galaxyGroup.remove(this.edgeParticles); (this.edgeParticles.material as THREE.Material).dispose(); this.edgeParticles.geometry.dispose(); }
     this.edgeParticleData = [];
+    if (data.length === 0) return;
 
-    const count = Math.min(300, data.length * 2);
+    const isFull = this.mode === 'full';
+    const isMinimal = this.mode === 'minimal';
+    if (isMinimal) return; // no particles in minimal mode
+
+    // Many small subtle particles — ambient data flow, not flashy dots
+    const count = isFull ? Math.min(2000, data.length * 4) : Math.min(1000, data.length * 2);
     const pPos = new Float32Array(count * 3);
     const pCol = new Float32Array(count * 3);
 
@@ -1154,23 +1805,37 @@ export class StarGraph {
       pPos[i * 3 + 1] = pos[d.s * 3 + 1] + (pos[d.t * 3 + 1] - pos[d.s * 3 + 1]) * t;
       pPos[i * 3 + 2] = pos[d.s * 3 + 2] + (pos[d.t * 3 + 2] - pos[d.s * 3 + 2]) * t;
 
+      // Subtle color: match edge type, occasional gentle warm accent
       const c = edgeColorByType(d.edgeType, d.direction);
-      pCol[i * 3] = c.r; pCol[i * 3 + 1] = c.g; pCol[i * 3 + 2] = c.b;
+      const bright = 0.6 + Math.random() * 0.6;
+      pCol[i * 3] = Math.min(1, c.r * bright);
+      pCol[i * 3 + 1] = Math.min(1, c.g * bright);
+      pCol[i * 3 + 2] = Math.min(1, c.b * bright);
 
-      this.edgeParticleData.push({ edgeIdx: ei, t, speed: 0.002 + Math.random() * 0.008, dir: Math.random() > 0.5 ? 1 : -1 });
+      this.edgeParticleData.push({
+        edgeIdx: ei, t,
+        speed: (isFull ? 0.002 : 0.001) + Math.random() * (isFull ? 0.008 : 0.003),
+        dir: Math.random() > 0.5 ? 1 : -1,
+      });
     }
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
-    const mat = new THREE.PointsMaterial({ size: 0.8, map: this.glowTex, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, transparent: true, opacity: 0.7 });
+    const mat = new THREE.PointsMaterial({
+      size: isFull ? 1.2 : 0.7,
+      map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true,
+      opacity: isFull ? 0.6 : 0.45,
+    });
     this.edgeParticles = new THREE.Points(geo, mat);
     this.galaxyGroup.add(this.edgeParticles);
   }
 
   private animateEdgeParticles(): void {
-    if (!this.edgeParticles) return;
-    const pos = this.edgeParticles.geometry.attributes['position'].array as Float32Array;
+    if (!this.edgeParticles || this.edgeParticleData.length === 0) return;
+    const posArr = this.edgeParticles.geometry.attributes['position'].array as Float32Array;
+    const nPos = this.nodePositions;
     for (let i = 0; i < this.edgeParticleData.length; i++) {
       const pd = this.edgeParticleData[i];
       const d = this.edgeDataList[pd.edgeIdx];
@@ -1178,9 +1843,9 @@ export class StarGraph {
       pd.t += pd.speed * pd.dir;
       if (pd.t > 1) { pd.t = 1; pd.dir = -1; }
       if (pd.t < 0) { pd.t = 0; pd.dir = 1; }
-      pos[i * 3]     = this.nodePositions[d.s * 3]     + (this.nodePositions[d.t * 3]     - this.nodePositions[d.s * 3])     * pd.t;
-      pos[i * 3 + 1] = this.nodePositions[d.s * 3 + 1] + (this.nodePositions[d.t * 3 + 1] - this.nodePositions[d.s * 3 + 1]) * pd.t;
-      pos[i * 3 + 2] = this.nodePositions[d.s * 3 + 2] + (this.nodePositions[d.t * 3 + 2] - this.nodePositions[d.s * 3 + 2]) * pd.t;
+      posArr[i * 3]     = nPos[d.s * 3]     + (nPos[d.t * 3]     - nPos[d.s * 3])     * pd.t;
+      posArr[i * 3 + 1] = nPos[d.s * 3 + 1] + (nPos[d.t * 3 + 1] - nPos[d.s * 3 + 1]) * pd.t;
+      posArr[i * 3 + 2] = nPos[d.s * 3 + 2] + (nPos[d.t * 3 + 2] - nPos[d.s * 3 + 2]) * pd.t;
     }
     this.edgeParticles.geometry.attributes['position'].needsUpdate = true;
   }
@@ -1200,11 +1865,14 @@ export class StarGraph {
       this.starfield.rotation.y += 0.00006 * fx;
       this.starfield.rotation.x += 0.00002 * fx;
     }
-    if (isFull) this.animateEdgeParticles();
+    if (!isMinimal) this.animateEdgeParticles();
+    if (isFull) {
+      this.animateNebulaDust();
+    }
 
     if (isMinimal) {
       this.controls.update();
-      this.renderer.render(this.scene, this.camera);
+      this.composer.render();
       return;
     }
 
@@ -1228,22 +1896,55 @@ export class StarGraph {
       }
     }
 
-    // ── Galaxy cloud breathe (universe view only) ──────────
+    // ── Galaxy cloud breathe + core pulse + hover highlight + cross-edge flow ──
     if (this.foldMode && !this.enteredGalaxyId) {
+      this.animateCrossEdgeFlow();
       for (let k = 0; k < this.galaxyGlows.length; k++) {
         const glow = this.galaxyGlows[k];
         if (!glow) continue;
-        const d = Math.min(1, Math.max(0.05, this.camera.position.distanceTo(
-          this.galaxyMeta[Math.floor(k / 2)]?.centroid || this.camera.position) / 180));
-        const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
-        (glow.material as THREE.SpriteMaterial).opacity = 0.18 * d * w;
+        const gi = Math.floor(k / 2);
+        const gm = this.galaxyMeta[gi];
+        if (!gm) continue;
+        const hovered = gi === this.hoveredGalaxyIdx;
+        const d = Math.min(1, Math.max(0.05, this.camera.position.distanceTo(gm.centroid) / 180));
+        if (k % 2 === 0) {
+          // Ambient glow — slow breathe, boost on hover
+          const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
+          (glow.material as THREE.SpriteMaterial).opacity = (hovered ? 0.45 : 0.24) * d * w;
+        } else {
+          // Core sprite — heartbeat pulse, brighten + enlarge on hover
+          const hoverMul = hovered ? 1.6 : 1.0;
+          const beat = 0.8 + 0.2 * Math.abs(Math.sin(this.pulseTime * (1.2 + gi * 0.37)));
+          (glow.material as THREE.SpriteMaterial).opacity = 0.75 * d * beat * hoverMul;
+          const gm_r = 45 + Math.sqrt(gm.memberIndices.length) * 16;
+          const s = gm_r * 0.7 * (0.95 + 0.05 * Math.sin(this.pulseTime * (2 + gi * 0.41))) * (hovered ? 1.3 : 1.0);
+          glow.scale.setScalar(s);
+        }
+      }
+      // Hover highlight for halo particles
+      for (let ci = 0; ci < this.galaxyClouds.length; ci++) {
+        const cloud = this.galaxyClouds[ci];
+        if (!cloud) continue;
+        const gIdx = cloud.userData['galaxyIndex'] as number;
+        (cloud.material as THREE.PointsMaterial).opacity =
+          (gIdx === this.hoveredGalaxyIdx) ? 0.6 : 0.4;
       }
     }
 
     this.pulseTime += 0.03 * (isFull ? 1.5 : 1);
+    const inPathMode = this._pathSource >= 0;
     const galTime = performance.now() * 0.001; // galaxy time for color cycling
     for (let i = 0; i < this.nodeGlows.length; i++) {
       if (i === this.hoveredIdx || neighborSet.has(i) || i === this.focusNodeIdx) continue;
+      // Path mode: keep path nodes highlighted, non-path nodes dimmed
+      if (inPathMode) {
+        if (this._pathNodes.has(i) || i === this._pathSource) continue; // path node — keep highlight
+        if (this._pathNodes.size > 0) {
+          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.05;
+          this.nodeCores[i].visible = false;
+          continue;
+        }
+      }
       if (this.blastMode) {
         const d = this.blastDistances[i];
         if (d >= 0) {
@@ -1295,15 +1996,17 @@ export class StarGraph {
 
     this.updateTooltip(); this.updateLabels();
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render();
   }
 
   // ── Resize ───────────────────────────────────────────────
 
   private onResize = (): void => {
-    this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    this.renderer.setSize(w, h);
+    this.composer.setSize(w, h);
   };
 
   // ── Destroy ──────────────────────────────────────────────
@@ -1313,10 +2016,13 @@ export class StarGraph {
     window.removeEventListener('resize', this.onResize);
     for (const cloud of this.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
     for (const glow of this.galaxyGlows) (glow.material as THREE.Material).dispose();
+    if (this.nebulaDust) { this.nebulaDust.geometry.dispose(); (this.nebulaDust.material as THREE.Material).dispose(); }
+    this.bloomPass?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
     this.glowTex.dispose(); this.sphereGeo.dispose();
-    this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
+    for (const d of this.galaxyLabelDivs) d.remove(); this.galaxyLabelDivs = [];
+    this.galaxyTitleEl?.remove(); this.pieMenu?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
   }
 }
 

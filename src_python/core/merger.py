@@ -136,3 +136,68 @@ class CrossFileResolver:
                         break   # 只匹配第一个同名
 
         return added
+
+    def resolve_incremental(self, graph: Graph, changed_node_ids: list[str]) -> int:
+        """增量跨文件解析：只处理变化节点的跨文件关系。
+
+        Args:
+            graph: 当前全图
+            changed_node_ids: 本次变化的节点 ID 列表
+
+        Returns:
+            新增边数
+        """
+        if not changed_node_ids:
+            return 0
+
+        # 构建全局名称索引（需要全图，但只在首次或 dirty 时重建）
+        name_index: Dict[str, List[Node]] = {}
+        for node in graph.nodes.values():
+            if node.type != NodeType.SYMBOL:
+                continue
+            short = node.name.split(".")[-1]
+            name_index.setdefault(short, []).append(node)
+
+        changed_set = set(changed_node_ids)
+        added = 0
+
+        for node_id in changed_set:
+            node = graph.get_node(node_id)
+            if not node or node.type != NodeType.SYMBOL:
+                continue
+
+            # 处理 bases（继承关系）
+            bases: List[str] = node.properties.get("bases", [])
+            for base_name in bases:
+                short = base_name.split(".")[-1]
+                for target in name_index.get(short, []):
+                    if target.id != node.id:
+                        edge = Edge(
+                            id=Edge.make_id(),
+                            type=EdgeType.STRUCTURAL,
+                            direction="inherit",
+                            source=node.id,
+                            target=target.id,
+                        )
+                        if graph.add_edge(edge):
+                            added += 1
+                        break
+
+            # 处理 calls（调用关系）
+            calls: List[str] = node.properties.get("calls", [])
+            for call_name in calls:
+                short = call_name.split(".")[-1]
+                for target in name_index.get(short, []):
+                    if target.id != node.id:
+                        edge = Edge(
+                            id=Edge.make_id(),
+                            type=EdgeType.STRUCTURAL,
+                            direction="call",
+                            source=node.id,
+                            target=target.id,
+                        )
+                        if graph.add_edge(edge):
+                            added += 1
+                        break
+
+        return added

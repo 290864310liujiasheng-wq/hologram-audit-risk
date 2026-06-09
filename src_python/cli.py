@@ -596,6 +596,48 @@ def cmd_constraints(args) -> int:
     return 0
 
 
+def cmd_incremental(args) -> int:
+    """增量分析：只分析给定变更文件，输出 GraphDiff JSON。"""
+    root = os.path.abspath(args.root)
+    files = args.files
+
+    registry = AdapterRegistry()
+    registry.register(PythonAdapter())
+    registry.register(TypeScriptAdapter())
+
+    # 加载已有图
+    graph_path = args.graph or os.path.join(root, "hologram_graph.json")
+    if os.path.exists(graph_path):
+        graph = Graph.from_json(graph_path)
+    else:
+        graph = Graph(source_root=root)
+
+    runner = PipelineRunner(registry)
+    diff: GraphDiff = runner.run_incremental(root, files, graph)
+
+    # 增量跨文件解析
+    if diff.added_nodes:
+        resolver = CrossFileResolver()
+        changed_ids = [n.id for n in diff.added_nodes]
+        resolver.resolve_incremental(graph, changed_ids)
+
+    # 保存图
+    graph.to_json(graph_path)
+
+    # 输出 diff JSON
+    print(json.dumps({
+        "added_nodes": [n.to_dict() for n in diff.added_nodes],
+        "removed_nodes": [n.to_dict() for n in diff.removed_nodes if n.id],
+        "modified_nodes": [
+            {"node_id": mn.node_id, "name": mn.name, "changed": mn.changed_properties}
+            for mn in diff.modified_nodes
+        ],
+        "added_edges": [e.to_dict() for e in diff.added_edges],
+    }, indent=2, ensure_ascii=False))
+
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="hologram",
@@ -664,6 +706,13 @@ def main() -> None:
     p_serve.set_defaults(func=cmd_serve)
 
     # ── V3 commands ──
+
+    # hologram incremental (内部用：增量更新)
+    p_incremental = sub.add_parser("incremental", help="Incremental analysis for changed files (internal)")
+    p_incremental.add_argument("root", help="Project root directory")
+    p_incremental.add_argument("--files", nargs="+", required=True, help="Changed file paths")
+    p_incremental.add_argument("-g", "--graph", help="Graph JSON file path")
+    p_incremental.set_defaults(func=cmd_incremental)
 
     # hologram check
     p_check = sub.add_parser("check", help="Run constraint validation and show change summary (V3)")

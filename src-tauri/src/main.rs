@@ -130,11 +130,24 @@ fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
 }
 
 /// Run incremental analysis for a project, return JSON.
-fn run_incremental_analysis(project_path: &str) -> Option<String> {
+/// If changed_files is non-empty, only those files are re-analyzed (incremental patch).
+fn run_incremental_analysis(project_path: &str, changed_files: &[String]) -> Option<String> {
     let root = project_root();
+    let mut args: Vec<String> = vec![
+        "-m".into(), "src_python".into(),
+        project_path.into(),
+        "--format".into(), "json".into(),
+    ];
+    if !changed_files.is_empty() {
+        args.push("--files".into());
+        for f in changed_files {
+            args.push(f.clone());
+        }
+    }
+
     let output = Command::new(python())
         .current_dir(&root)
-        .args(["-m", "src_python", project_path, "--format", "json"])
+        .args(&args)
         .output()
         .ok()?;
 
@@ -357,15 +370,95 @@ print(json.dumps(summary, indent=2, ensure_ascii=False))
 // ═══════════════════════════════════════════════════════
 
 /// Load the graph JSON file and return it as a string.
+/// Tries: 1) explicit path, 2) default (hologram_full.json), 3) last project's hologram_graph.json.
 #[tauri::command]
 async fn load_graph_json(path: Option<String>) -> Result<String, String> {
-    let p = path.unwrap_or_else(default_graph);
-    std::fs::read_to_string(&p).map_err(|e| format!("Cannot read graph at {}: {e}", p))
+    // 1) explicit path
+    if let Some(ref p) = path {
+        if let Ok(content) = std::fs::read_to_string(p) {
+            if !content.trim().is_empty() {
+                return Ok(content);
+            }
+        }
+    }
+
+    // 2) default graph (written by analyze_and_load on every open)
+    let def = default_graph();
+    if let Ok(content) = std::fs::read_to_string(&def) {
+        if !content.trim().is_empty() {
+            return Ok(content);
+        }
+    }
+
+    // 3) last project's hologram_graph.json
+    let last_path_file = project_root().join(".last_project");
+    if let Ok(last_path) = std::fs::read_to_string(&last_path_file) {
+        let p = std::path::PathBuf::from(last_path.trim()).join("hologram_graph.json");
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            if !content.trim().is_empty() {
+                return Ok(content);
+            }
+        }
+    }
+
+    Err("No cached graph found".into())
+}
+
+/// Check if cached graph JSON is fresher than all source files — instant load.
+fn is_graph_fresh(graph_path: &str, project_path: &str) -> bool {
+    let graph_meta = match std::fs::metadata(graph_path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let graph_mtime = match graph_meta.modified() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    // If any source file is newer than the graph, it's stale
+    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs"];
+    for entry in walkdir::WalkDir::new(project_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext_with_dot = format!(".{}", ext);
+        if exts.contains(&ext_with_dot.as_str()) {
+            if let Ok(meta) = path.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    if mtime > graph_mtime {
+                        return false; // stale — at least one file changed
+                    }
+                }
+            }
+        }
+    }
+    true // fresh — no source file newer than graph
 }
 
 /// Analyze a folder and return the graph JSON. Uses incremental cache.
+/// Fast path: if cached graph is up-to-date, returns it instantly (no Python).
 #[tauri::command]
 async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String, String> {
+    // ── Fast path: cached graph still fresh ──
+    let cached_graph = std::path::PathBuf::from(&path).join("hologram_graph.json");
+    if is_graph_fresh(&cached_graph.to_string_lossy(), &path) {
+        if let Ok(content) = std::fs::read_to_string(&cached_graph) {
+            if !content.trim().is_empty() {
+                // Still update last-project tracking
+                let _ = std::fs::write(default_graph(), &content);
+                let _ = std::fs::write(project_root().join(".last_project"), &path);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_title("全息观测站");
+                }
+                return Ok(content);
+            }
+        }
+    }
+
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站 — 分析中...");
     }
@@ -399,6 +492,12 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
         return Err(format!("分析完成但无输出。stderr:\n{}", stderr));
     }
 
+    // Persist to default graph path for next startup
+    let _ = std::fs::write(default_graph(), &stdout);
+    // Also save the last project path to a simple config file
+    let last_path_file = project_root().join(".last_project");
+    let _ = std::fs::write(&last_path_file, &path);
+
     Ok(stdout)
 }
 
@@ -424,38 +523,38 @@ async fn start_watching(
 
     thread::spawn(move || {
         let mut last_mtimes = collect_file_mtimes(&path);
-        let debounce = Duration::from_secs(3);
+        let poll_interval = Duration::from_secs(1); // 1s polling, quicker than 3s
 
         while watcher.running.load(Ordering::SeqCst) {
-            thread::sleep(debounce);
+            thread::sleep(poll_interval);
 
             if !watcher.running.load(Ordering::SeqCst) { break; }
 
             let current_mtimes = collect_file_mtimes(&path);
 
-            // Check for any mtime changes or new/deleted files
-            let mut changed = false;
+            // Collect changed file paths (new, modified, or deleted)
+            let mut changed_files: Vec<String> = Vec::new();
             for (fp, mt) in &current_mtimes {
                 match last_mtimes.get(fp) {
-                    Some(old) if old != mt => { changed = true; break; }
-                    None => { changed = true; break; } // new file
+                    Some(old) if old != mt => changed_files.push(fp.clone()),
+                    None => changed_files.push(fp.clone()), // new file
                     _ => {}
                 }
             }
-            if !changed {
-                for fp in last_mtimes.keys() {
-                    if !current_mtimes.contains_key(fp) {
-                        changed = true; // deleted file
-                        break;
-                    }
+            // Deleted files
+            for fp in last_mtimes.keys() {
+                if !current_mtimes.contains_key(fp) {
+                    changed_files.push(fp.clone());
                 }
             }
 
-            if changed {
-                last_mtimes = current_mtimes;
-                if let Some(json) = run_incremental_analysis(&path) {
+            if !changed_files.is_empty() {
+                if let Some(json) = run_incremental_analysis(&path, &changed_files) {
+                    // Only update last_mtimes on SUCCESS — prevents event loss on error
+                    last_mtimes = current_mtimes;
                     let _ = app_handle.emit("graph-updated", json);
                 }
+                // On failure: changed_files will be re-detected next poll (last_mtimes unchanged)
             }
         }
     });

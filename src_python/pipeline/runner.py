@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from ..adapters.base import LanguageAdapter, AdapterResult
 from ..adapters.registry import AdapterRegistry
 from ..core.graph import Graph, Node, Edge
+from ..core.diff import GraphDiff
 from .discovery import discover_files
 from .cache import IncrementalCache
 
@@ -125,6 +126,88 @@ class PipelineRunner:
         report.phase = "done"
         report.elapsed_sec = time.time() - t0
         return merged_graph, report
+
+    def run_incremental(
+        self,
+        root: str,
+        changed_files: list[str],
+        merged_graph: Graph,
+    ) -> GraphDiff:
+        """
+        增量流水线：只分析变更文件，在原图上打补丁。
+
+        Args:
+            root: 项目根目录
+            changed_files: 变更文件路径列表（相对或绝对，会自动规范化）
+            merged_graph: 当前的全图（原地修改）
+
+        Returns:
+            GraphDiff 描述变更内容
+        """
+        import os as _os
+        from ..core.merger import CrossFileResolver
+
+        diff = GraphDiff()
+        changed_node_ids: list[str] = []
+
+        for raw_path in changed_files:
+            # 路径规范化：确保是绝对路径
+            file_path = raw_path if _os.path.isabs(raw_path) else _os.path.join(root, raw_path)
+            file_path = _os.path.normpath(file_path)
+            adapter = self.registry.find(file_path)
+            if not adapter:
+                continue
+
+            source = self._read_file(file_path)
+
+            # 文件被删除 → 移除所有节点
+            if source is None:
+                removed_nodes, _ = merged_graph.remove_file(file_path)
+                for _ in range(removed_nodes):
+                    diff.removed_nodes.append(Node(
+                        id="", type="symbol", name="", location=file_path, language="", kind="",
+                    ))
+                continue
+
+            # 分析文件（三阶段）
+            try:
+                result = adapter.analyze(file_path, source, merged_graph)
+            except Exception:
+                continue
+
+            # Remove old nodes for this file, add new ones
+            removed_nodes, added_nodes, added_edges = merged_graph.replace_file(
+                file_path,
+                Graph.from_nodes_and_edges(result.nodes, result.edges),
+            )
+
+            # Record changes
+            diff.added_nodes.extend(result.nodes)
+            diff.added_edges.extend(result.edges)
+
+            # Track changed node IDs for cross-file resolution
+            for node in result.nodes:
+                changed_node_ids.append(node.id)
+
+            # Update cache
+            file_hash = self.cache.hash_source(source)
+            file_graph = Graph.from_nodes_and_edges(result.nodes, result.edges)
+            self.cache.set(file_path, file_hash, file_graph)
+
+        # 增量跨文件解析：只处理变化节点的关系
+        if changed_node_ids:
+            resolver = CrossFileResolver()
+            resolver.resolve_incremental(merged_graph, changed_node_ids)
+
+        # 增量社区发现：图结构变化后重新聚类
+        try:
+            from ..core.community import CommunityDetector
+            detector = CommunityDetector()
+            detector.detect(merged_graph)
+        except Exception:
+            pass  # 社区发现失败不影响主流程
+
+        return diff
 
     def _read_file(self, path: str) -> Optional[str]:
         try:

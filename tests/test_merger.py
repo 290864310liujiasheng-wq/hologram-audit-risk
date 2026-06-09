@@ -88,3 +88,47 @@ class TestCrossFileResolver:
         resolver = CrossFileResolver()
         added = resolver.resolve(g)
         assert added == 0
+
+    # ── resolve_incremental ───────────────────────────────────
+
+    def test_resolve_incremental_only_targets_changed_nodes(self):
+        g = Graph()
+        n1 = Node("n1", NodeType.SYMBOL, "Base", "base.py:1", "python", "class")
+        n2 = Node("n2", NodeType.SYMBOL, "Child", "child.py:1", "python", "class",
+                  properties={"bases": ["Base"]})
+        n3 = Node("n3", NodeType.SYMBOL, "Other", "other.py:1", "python", "class",
+                  properties={"bases": ["Base"]})
+        g.add_node(n1); g.add_node(n2); g.add_node(n3)
+
+        resolver = CrossFileResolver()
+        # Only resolve for n2, not n3
+        added = resolver.resolve_incremental(g, ["n2"])
+        assert added >= 1
+        # Should have created inherit edge n2 → n1
+        inherit_edges = [e for e in g.edges.values()
+                         if e.direction == "inherit" and e.source == "n2"]
+        assert len(inherit_edges) >= 1
+        # n3 should NOT have been processed
+        n3_inherit = [e for e in g.edges.values()
+                      if e.direction == "inherit" and e.source == "n3"]
+        assert len(n3_inherit) == 0
+
+    def test_resolve_incremental_empty_changed_list(self):
+        g = Graph()
+        resolver = CrossFileResolver()
+        added = resolver.resolve_incremental(g, [])
+        assert added == 0
+
+    def test_resolve_incremental_handles_calls(self):
+        g = Graph()
+        n1 = Node("n1", NodeType.SYMBOL, "target_func", "target.py:5", "python", "function")
+        n2 = Node("n2", NodeType.SYMBOL, "source_func", "source.py:5", "python", "function",
+                  properties={"calls": ["target_func"]})
+        g.add_node(n1); g.add_node(n2)
+
+        resolver = CrossFileResolver()
+        added = resolver.resolve_incremental(g, ["n2"])
+        assert added >= 1
+        call_edges = [e for e in g.edges.values()
+                      if e.direction == "call" and e.source == "n2"]
+        assert len(call_edges) >= 1

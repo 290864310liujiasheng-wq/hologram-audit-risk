@@ -116,10 +116,26 @@ class FileWatcher:
             return
 
         print(f"Re-analyzing {len(files)} changed file(s)...", file=sys.stderr)
-        for fp in files:
-            self.cache.invalidate(fp)
 
-        self._full_rebuild()
+        # 如果已有图，走增量路径；否则全量重建
+        if self._graph is not None and self._graph.node_count > 0:
+            try:
+                diff = self._runner.run_incremental(self.root, files, self._graph)
+                from .core.diff import GraphDiff
+                changes = (len(diff.added_nodes) + len(diff.removed_nodes) +
+                           len(diff.added_edges) + len(diff.removed_edges))
+                print(f"  Incremental update: {len(diff.added_nodes)} added nodes, "
+                      f"{len(diff.removed_nodes)} removed, {changes} total changes", file=sys.stderr)
+                for cb in self._callbacks:
+                    try:
+                        cb(self._graph)
+                    except Exception:
+                        pass
+            except Exception:
+                print("  Incremental failed, falling back to full rebuild", file=sys.stderr)
+                self._full_rebuild()
+        else:
+            self._full_rebuild()
 
     def _full_rebuild(self) -> None:
         """全量重建图。"""
@@ -147,17 +163,39 @@ class FileWatcher:
         try:
             while True:
                 time.sleep(self.debounce_sec)
-                changed = False
-                for fp, old_mtime in list(last_mtimes.items()):
-                    try:
-                        new_mtime = os.path.getmtime(fp)
-                        if new_mtime > old_mtime:
-                            last_mtimes[fp] = new_mtime
-                            self._on_change(fp)
-                            changed = True
-                    except OSError:
-                        last_mtimes.pop(fp, None)
-                if changed:
-                    self._full_rebuild()
+                changed_files: list[str] = []
+                current_mtimes: dict[str, float] = {}
+                for dirpath, _, filenames in os.walk(self.root):
+                    for fn in filenames:
+                        fp = os.path.join(dirpath, fn)
+                        try:
+                            current_mtimes[fp] = os.path.getmtime(fp)
+                        except OSError:
+                            pass
+                # 检测变更
+                for fp, new_mtime in current_mtimes.items():
+                    old = last_mtimes.get(fp)
+                    if old is None or new_mtime > old:
+                        changed_files.append(fp)
+                for fp in last_mtimes:
+                    if fp not in current_mtimes:
+                        changed_files.append(fp)
+                if changed_files:
+                    last_mtimes = current_mtimes
+                    print(f"Polling: {len(changed_files)} changed file(s)", file=sys.stderr)
+                    self._on_change(changed_files[0])  # 触发 debounce
+                    # 直接增量更新
+                    if self._graph is not None and self._graph.node_count > 0:
+                        try:
+                            self._runner.run_incremental(self.root, changed_files, self._graph)
+                            for cb in self._callbacks:
+                                try:
+                                    cb(self._graph)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            self._full_rebuild()
+                    else:
+                        self._full_rebuild()
         except KeyboardInterrupt:
             pass

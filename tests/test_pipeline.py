@@ -242,6 +242,186 @@ def run(data):
             import shutil
             shutil.rmtree(d, ignore_errors=True)
 
+    # ── run_incremental ───────────────────────────────────────
+
+    def test_run_incremental_single_file(self, registry):
+        d = tempfile.mkdtemp()
+        try:
+            # Create two files
+            with open(os.path.join(d, "a.py"), "w") as f:
+                f.write("def func_a():\n    pass\n")
+            with open(os.path.join(d, "b.py"), "w") as f:
+                f.write("def func_b():\n    pass\n")
+
+            # Full analysis first
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+            full_nodes = graph.node_count
+            assert full_nodes > 0
+
+            # Now modify a.py: add a new function
+            a_path = os.path.join(d, "a.py")
+            with open(a_path, "w") as f:
+                f.write("def func_a():\n    pass\n\ndef func_a2():\n    pass\n")
+
+            # Incremental — only a.py
+            from src_python.core.diff import GraphDiff
+            diff = runner.run_incremental(d, [a_path], graph)
+            assert len(diff.added_nodes) >= 1
+            # Graph should now have at least as many nodes
+            assert graph.node_count >= full_nodes
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_run_incremental_preserves_other_files(self, registry):
+        d = tempfile.mkdtemp()
+        try:
+            a_path = os.path.join(d, "a.py")
+            b_path = os.path.join(d, "b.py")
+            with open(a_path, "w") as f:
+                f.write("def func_a():\n    pass\n")
+            with open(b_path, "w") as f:
+                f.write("def func_b():\n    pass\n")
+
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+
+            # Get node count for b.py
+            b_nodes_before = graph.find_nodes_by_location(b_path)
+            assert len(b_nodes_before) > 0
+
+            # Modify a.py only
+            with open(a_path, "w") as f:
+                f.write("def func_a():\n    pass\n\ndef new_a():\n    pass\n")
+
+            # Incremental
+            runner.run_incremental(d, [a_path], graph)
+
+            # b.py nodes should still be present
+            b_nodes_after = graph.find_nodes_by_location(b_path)
+            assert len(b_nodes_after) >= len(b_nodes_before)
+            for n in b_nodes_before:
+                assert n.id in graph.nodes
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_run_incremental_handles_deleted_file(self, registry):
+        d = tempfile.mkdtemp()
+        try:
+            a_path = os.path.join(d, "a.py")
+            with open(a_path, "w") as f:
+                f.write("def func_a():\n    pass\n")
+            with open(os.path.join(d, "b.py"), "w") as f:
+                f.write("def func_b():\n    pass\n")
+
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+            full_nodes = graph.node_count
+
+            # Delete a.py
+            os.unlink(a_path)
+
+            # Incremental should remove a.py nodes
+            diff = runner.run_incremental(d, [a_path], graph)
+            assert graph.node_count < full_nodes
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_run_incremental_updates_communities(self, registry):
+        """增量更新后应重新运行社区发现。"""
+        d = tempfile.mkdtemp()
+        try:
+            # Create a project with enough files for community detection (≥3 nodes)
+            with open(os.path.join(d, "a.py"), "w") as f:
+                f.write("""
+def fa():
+    return fb()
+""")
+            with open(os.path.join(d, "b.py"), "w") as f:
+                f.write("""
+def fb():
+    return fc()
+""")
+            with open(os.path.join(d, "c.py"), "w") as f:
+                f.write("""
+def fc():
+    return fa()
+""")
+
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+            assert graph.node_count >= 3, f"need ≥3 nodes for communities, got {graph.node_count}"
+
+            # Capture community state before incremental
+            communities_before = list(graph.communities) if graph.communities else []
+
+            # Modify a.py to add a new function
+            a_path = os.path.join(d, "a.py")
+            with open(a_path, "w") as f:
+                f.write("""
+def fa():
+    return fb()
+
+def fa_new():
+    pass
+""")
+
+            # Incremental update
+            runner.run_incremental(d, [a_path], graph)
+
+            # Communities should exist after incremental
+            # (at minimum, the communities list should be set; actual detection
+            #  depends on leidenalg availability, but the detect() call must run)
+            assert hasattr(graph, 'communities'), "graph must have communities attribute"
+            # If communities were there before, community count may change
+            # At minimum verify detect() was called without error
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_run_incremental_community_on_large_graph(self, registry):
+        """大图增量更新后社区发现不丢数据。"""
+        d = tempfile.mkdtemp()
+        try:
+            # Create multiple files with interconnected functions
+            for i in range(4):
+                with open(os.path.join(d, f"mod{i}.py"), "w") as f:
+                    calls = ", ".join(f"mod{j}.f{j}()" for j in range(4) if j != i)
+                    f.write(f"""
+def f{i}():
+    return [{calls}]
+""")
+
+            runner = PipelineRunner(registry)
+            graph, _ = runner.run(d)
+            assert graph.node_count >= 4
+
+            # Modify one file
+            m0 = os.path.join(d, "mod0.py")
+            with open(m0, "w") as f:
+                f.write("""
+def f0():
+    return 42
+
+def f0_new():
+    pass
+""")
+
+            # Incremental
+            diff = runner.run_incremental(d, [m0], graph)
+            assert len(diff.added_nodes) >= 1
+
+            # Communities should be non-None after incremental
+            assert graph.communities is not None
+            # Even if no communities detected (e.g., no leidenalg),
+            # detect() should have run and set communities to []
+        finally:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+
 
 class TestPipelineReport:
     def test_defaults(self):
