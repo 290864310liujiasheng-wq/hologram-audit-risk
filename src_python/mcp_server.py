@@ -30,7 +30,7 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from .core.graph import Graph, EdgeType
+from .core.graph import Graph, EdgeType, file_from_location
 
 
 class MCPServer:
@@ -231,19 +231,6 @@ class MCPServer:
 
     # ── 辅助: 从 location 提取文件路径 ─────────────────────
 
-    @staticmethod
-    def _file_from_location(loc: str) -> str:
-        """从 "path:lineno" 格式的 location 中提取文件路径。
-        Windows 兼容：处理 drive letter 冒号。
-        """
-        if not loc:
-            return loc
-        # 如果位置包含行号（最后一个 segment 是数字），则 rsplit
-        parts = loc.rsplit(":", 1)
-        if len(parts) == 2 and parts[1].strip().isdigit():
-            return parts[0]
-        # 否则整个字符串都是路径（可能为 Windows 绝对路径如 D:\foo.py）
-        return loc
 
     # ── V2: 懒加载分析结果 ────────────────────────────────
 
@@ -556,7 +543,7 @@ class MCPServer:
                     })
 
             # 检查是否有锁保护
-            lock_edges = [e for e in incoming if "lock" in (self.graph.get_node(e.source) or {}).get('name', '').lower()
+            lock_edges = [e for e in incoming if "lock" in getattr(self.graph.get_node(e.source), 'name', '').lower()
                           or getattr(e, 'properties', {}).get('is_lock')]
 
             if threads_info:
@@ -567,7 +554,7 @@ class MCPServer:
                     "has_concurrent_write": has_write,
                     "lock_detected": len(lock_edges) > 0,
                     "lock_edges": [e.id for e in lock_edges],
-                    "files": list(set(self._file_from_location(t.get("location", "")) for t in threads_info)),
+                    "files": list(set(file_from_location(t.get("location", "")) for t in threads_info)),
                 }
 
         if node_id:
@@ -578,7 +565,7 @@ class MCPServer:
             related = {}
             for rname, info in resources.items():
                 if node.location:
-                    node_file = self._file_from_location(node.location)
+                    node_file = file_from_location(node.location)
                     if node_file in info.get("files", []):
                         related[rname] = info
             resources = related
@@ -630,10 +617,10 @@ class MCPServer:
         for edge in self.graph.edges.values():
             edge_file = edge.properties.get("location", "") if hasattr(edge, 'properties') else ""
             if edge_file:
-                edge_file = self._file_from_location(edge_file)
+                edge_file = file_from_location(edge_file)
 
             src_node = self.graph.get_node(edge.source)
-            src_file = self._file_from_location(src_node.location) if src_node and src_node.location else ""
+            src_file = file_from_location(src_node.location) if src_node and src_node.location else ""
 
             if src_file and (module_name in src_file or src_file.endswith(module_name)):
                 cd = edge.properties.get("coupling_depth") if hasattr(edge, 'properties') else None
@@ -686,6 +673,7 @@ class MCPServer:
             store = TimelineStore(source_root)
             events = store.query(limit=limit, since=since)
             stats = store.stats()
+            store.close()
             return {
                 "events": events,
                 "total_events": len(events),

@@ -19,7 +19,6 @@ from .signals import Signal
 
 DEFAULT_CONSTRAINTS = {
     "routing": {
-        "l5_irreversible": True,     # L5 永远路由，不可关闭
         "l4_silent": True,           # L4 默认路由
         "l3_delayed": True,          # L3 默认路由
         "l2_blast": True,            # L2 默认路由
@@ -42,6 +41,9 @@ DEFAULT_CONSTRAINTS = {
             "secret",
             "token",
             "api_key",
+            "private_key",
+            "credential",
+            "authorization",
         ],
     },
 }
@@ -64,17 +66,26 @@ class ConstraintConfig:
         return {
             "routing": self.routing,
             "thresholds": self.thresholds,
-            "allowlist_modules": self.allowlist_modules,
-            "allowlist_files": self.allowlist_files,
-            "denylist_keywords": self.denylist_keywords,
+            "allowlist": {
+                "modules": self.allowlist_modules,
+                "files": self.allowlist_files,
+            },
+            "denylist": {
+                "keywords": self.denylist_keywords,
+            },
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> ConstraintConfig:
         routing = {**DEFAULT_CONSTRAINTS["routing"], **d.get("routing", {})}
         thresholds = {**DEFAULT_CONSTRAINTS["thresholds"], **d.get("thresholds", {})}
+        # 兼容两种格式：嵌套 {allowlist: {modules: [...], files: [...]}} 或扁平 {allowlist_modules: [...], ...}
         allowlist = d.get("allowlist", {})
+        if not allowlist and "allowlist_modules" in d:
+            allowlist = {"modules": d.get("allowlist_modules", []), "files": d.get("allowlist_files", [])}
         denylist = d.get("denylist", {})
+        if not denylist and "denylist_keywords" in d:
+            denylist = {"keywords": d.get("denylist_keywords", [])}
         return cls(
             routing=routing,
             thresholds=thresholds,
@@ -185,10 +196,17 @@ class ConstraintChecker:
 
         try:
             import yaml
+        except ImportError:
+            # yaml 未安装时回退到默认配置（非致命）
+            return ConstraintConfig.defaults()
+
+        try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             return ConstraintConfig.from_dict(data.get("constraints", {}))
-        except Exception:
+        except (yaml.YAMLError, OSError, ValueError) as exc:
+            import sys
+            print(f"Warning: failed to parse {config_path}: {exc}", file=sys.stderr)
             return ConstraintConfig.defaults()
 
     def check(self, signals: List[Signal]) -> ConstraintResult:
@@ -344,8 +362,16 @@ class ConstraintChecker:
         else:
             passed_checks.append(f"L2 routing disabled — {len(l2_signals)} signals suppressed")
 
-        # ── L1: 可见破坏 — 从不路由 ──
-        passed_checks.append(f"L1 signals suppressed ({len(l1_signals)} visible breakages — LLM can self-repair)")
+        # ── L1: 可见破坏 — 默认不路由（LLM 可自修复）──
+        if cfg.routing.get("l1_visible", False):
+            for s in l1_signals:
+                violations.append(ConstraintViolation(
+                    signal=s,
+                    constraint_name="l1_visible",
+                    message=f"L1 可见破坏: {s.description}",
+                ))
+        else:
+            passed_checks.append(f"L1 signals suppressed ({len(l1_signals)} visible breakages — LLM can self-repair)")
 
         # ── Denylist 强制路由 ──
         for s in signals:
@@ -426,9 +452,8 @@ class ConstraintChecker:
 constraints:
   # ── 路由开关 ──
   # 控制哪些级别的信号路由到人。
-  # L5 不可逆破坏永远路由（不可关闭）。
+  # 注：L5 不可逆破坏永远路由（不可关闭，无需配置项）。
   routing:
-    l5_irreversible: true        # L5 永远路由，不可关闭
     l4_silent: true              # L4 静默破坏默认路由
     l3_delayed: true             # L3 延迟破坏默认路由
     l2_blast: true               # L2 波及破坏默认路由
@@ -462,6 +487,8 @@ constraints:
       - "token"
       - "api_key"
       - "private_key"
+      - "credential"
+      - "authorization"
 """
 
     @staticmethod

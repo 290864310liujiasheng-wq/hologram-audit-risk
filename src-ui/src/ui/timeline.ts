@@ -1,7 +1,7 @@
 // Timeline Panel — 决策时间轴
 // 消费 hologram_timeline 命令的输出，渲染事件时间线
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../bridge';
 import { bus } from './events';
 
 export interface TimelineEvent {

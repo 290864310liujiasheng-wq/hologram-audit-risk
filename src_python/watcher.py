@@ -43,11 +43,13 @@ class FileWatcher:
 
     @property
     def graph(self) -> Optional[Graph]:
-        return self._graph
+        with self._lock:
+            return self._graph
 
     def on_graph_updated(self, callback: Callable[[Graph], None]) -> None:
         """注册回调：图更新时调用。"""
-        self._callbacks.append(callback)
+        with self._lock:
+            self._callbacks.append(callback)
 
     def start(self, blocking: bool = True) -> None:
         """启动文件监听。"""
@@ -118,17 +120,20 @@ class FileWatcher:
         print(f"Re-analyzing {len(files)} changed file(s)...", file=sys.stderr)
 
         # 如果已有图，走增量路径；否则全量重建
-        if self._graph is not None and self._graph.node_count > 0:
+        with self._lock:
+            graph_ref = self._graph
+            callbacks = list(self._callbacks)
+        if graph_ref is not None and graph_ref.node_count > 0:
             try:
-                diff = self._runner.run_incremental(self.root, files, self._graph)
+                diff = self._runner.run_incremental(self.root, files, graph_ref)
                 from .core.diff import GraphDiff
                 changes = (len(diff.added_nodes) + len(diff.removed_nodes) +
                            len(diff.added_edges) + len(diff.removed_edges))
                 print(f"  Incremental update: {len(diff.added_nodes)} added nodes, "
                       f"{len(diff.removed_nodes)} removed, {changes} total changes", file=sys.stderr)
-                for cb in self._callbacks:
+                for cb in callbacks:
                     try:
-                        cb(self._graph)
+                        cb(graph_ref)
                     except Exception:
                         pass
             except Exception:
@@ -140,8 +145,10 @@ class FileWatcher:
     def _full_rebuild(self) -> None:
         """全量重建图。"""
         graph, report = self._runner.run(self.root)
-        self._graph = graph
-        for cb in self._callbacks:
+        with self._lock:
+            self._graph = graph
+            callbacks = list(self._callbacks)
+        for cb in callbacks:
             try:
                 cb(graph)
             except Exception:
@@ -183,14 +190,18 @@ class FileWatcher:
                 if changed_files:
                     last_mtimes = current_mtimes
                     print(f"Polling: {len(changed_files)} changed file(s)", file=sys.stderr)
-                    self._on_change(changed_files[0])  # 触发 debounce
+                    for fp in changed_files:
+                        self._on_change(fp)  # 全部加入 pending，触发 debounce
                     # 直接增量更新
-                    if self._graph is not None and self._graph.node_count > 0:
+                    with self._lock:
+                        graph_ref = self._graph
+                        callbacks = list(self._callbacks)
+                    if graph_ref is not None and graph_ref.node_count > 0:
                         try:
-                            self._runner.run_incremental(self.root, changed_files, self._graph)
-                            for cb in self._callbacks:
+                            self._runner.run_incremental(self.root, changed_files, graph_ref)
+                            for cb in callbacks:
                                 try:
-                                    cb(self._graph)
+                                    cb(graph_ref)
                                 except Exception:
                                     pass
                         except Exception:

@@ -17,10 +17,33 @@ use tauri::{Emitter, Manager};
 // ═══════════════════════════════════════════════════════
 
 /// Find the Python executable with required dependencies.
+/// Checks: 1) HOLOGRAM_PYTHON env var  2) sibling venv  3) python3 / python on PATH
 fn python() -> String {
-    let system_python = r"C:\Users\Administrator\AppData\Local\Python\pythoncore-3.14-64\python.exe";
-    if std::path::Path::new(system_python).exists() {
-        return system_python.to_string();
+    // 1) Explicit override via environment variable
+    if let Ok(p) = std::env::var("HOLOGRAM_PYTHON") {
+        if std::path::Path::new(&p).exists() {
+            return p;
+        }
+    }
+    // 2) Project-local venv (sibling to project root)
+    let venv_python = project_root()
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join(".venv")
+        .join("Scripts")
+        .join("python.exe");
+    if venv_python.exists() {
+        return venv_python.to_string_lossy().to_string();
+    }
+    // 3) System PATH fallbacks
+    for name in &["python3", "python"] {
+        if std::process::Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
+            return name.to_string();
+        }
     }
     "python".to_string()
 }
@@ -634,7 +657,8 @@ async fn start_watching(
 
     thread::spawn(move || {
         let mut last_mtimes = collect_file_mtimes(&path);
-        let poll_interval = Duration::from_secs(1); // 1s polling, quicker than 3s
+        let poll_interval = Duration::from_secs(1);
+        let mut consecutive_failures: u32 = 0;
 
         while watcher.running.load(Ordering::SeqCst) {
             thread::sleep(poll_interval);
@@ -661,11 +685,21 @@ async fn start_watching(
 
             if !changed_files.is_empty() {
                 if let Some(json) = run_incremental_analysis(&path, &changed_files) {
-                    // Only update last_mtimes on SUCCESS — prevents event loss on error
                     last_mtimes = current_mtimes;
+                    consecutive_failures = 0;
                     let _ = app_handle.emit("graph-updated", json);
+                } else {
+                    consecutive_failures += 1;
+                    // After 3 consecutive failures, update mtimes anyway to break the retry loop
+                    // and notify the user that live updates are degraded
+                    if consecutive_failures >= 3 {
+                        last_mtimes = current_mtimes;
+                        let _ = app_handle.emit("graph-updated", format!(
+                            r#"{{"error":"分析失败 (已重试{}次)，实时更新已暂停。保存文件后将重新尝试。"}}"#,
+                            consecutive_failures
+                        ));
+                    }
                 }
-                // On failure: changed_files will be re-detected next poll (last_mtimes unchanged)
             }
         }
     });

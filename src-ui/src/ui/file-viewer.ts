@@ -2,7 +2,7 @@
 // 可从简报/详情卡片/聊天中点击文件名呼出，显示代码内容
 // 支持拖拽移动、调整大小、关闭
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../bridge';
 
 interface ViewerState {
   open: boolean;
@@ -74,7 +74,6 @@ export class FileViewer {
       overflow: 'hidden',
       minWidth: '280px',
       minHeight: '180px',
-      resize: 'both',
     });
 
     // Header (draggable)

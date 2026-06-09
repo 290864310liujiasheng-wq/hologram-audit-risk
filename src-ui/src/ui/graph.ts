@@ -2078,6 +2078,7 @@ export class StarGraph {
 
   private onResize = (): void => {
     const w = this.container.clientWidth, h = this.container.clientHeight;
+    if (h === 0 || w === 0) return;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);

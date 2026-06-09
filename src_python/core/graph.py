@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -255,11 +256,9 @@ class Graph:
 
         同时尝试绝对路径和原始路径匹配（兼容相对/绝对混用，以及斜杠差异）。
         """
-        import os as _os
-
         # Normalize: resolve to absolute, then generate all slash variants
         def _norm(p: str) -> str:
-            p = _os.path.normpath(_os.path.abspath(p) if not _os.path.isabs(p) else p)
+            p = os.path.normpath(os.path.abspath(p) if not os.path.isabs(p) else p)
             return p
 
         candidates: set = {file_path}
@@ -442,8 +441,19 @@ class Graph:
     def from_dict(cls, d: Dict[str, Any]) -> Graph:
         g = cls(source_root=d.get("meta", {}).get("source_root", ""))
         for nd in d.get("nodes", []):
+            # Normalize type/kind fields from strings (JSON round-trip)
+            nd["type"] = NodeType(nd["type"]) if isinstance(nd.get("type"), str) else nd["type"]
+            if isinstance(nd.get("kind"), str):
+                try:
+                    nd["kind"] = SymbolKind(nd["kind"])
+                except ValueError:
+                    try:
+                        nd["kind"] = MediumKind(nd["kind"])
+                    except ValueError:
+                        pass  # keep as string if unknown
             g.add_node(Node(**nd))
         for ed in d.get("edges", []):
+            ed["type"] = EdgeType(ed["type"]) if isinstance(ed.get("type"), str) else ed["type"]
             g.add_edge(Edge(**ed))
         for cd in d.get("communities", []):
             g.communities.append(Community(
@@ -470,3 +480,16 @@ class Graph:
         for e in edges:
             g.add_edge(e)
         return g
+
+
+def file_from_location(loc: str) -> str:
+    """从 "path:lineno" 格式的 location 中提取文件路径。
+
+    Windows 兼容：处理 drive letter 冒号。
+    """
+    if not loc:
+        return loc
+    parts = loc.rsplit(":", 1)
+    if len(parts) == 2 and parts[1].strip().isdigit():
+        return parts[0]
+    return loc

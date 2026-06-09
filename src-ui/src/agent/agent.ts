@@ -393,10 +393,12 @@ export class Agent {
     let result: string;
     let errMsg = '';
     try {
-      // AbortSignal check before long execution
       if (signal.aborted) throw new Error('aborted');
       result = await t.execute(args);
+      // Re-check after execution — the tool may have been slow
+      if (signal.aborted) throw new Error('aborted');
     } catch (e: any) {
+      if (e?.name === 'AbortError' || e?.message?.includes('aborted')) throw e;
       result = `error: ${e.message || e}`;
       errMsg = firstLine(e.message || String(e));
     }

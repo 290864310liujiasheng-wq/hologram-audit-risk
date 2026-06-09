@@ -309,7 +309,7 @@ def new_helper(x):
 
         # diff
         from src_python.cli import cmd_diff
-        ns_diff = argparse.Namespace(before=v1_path, after=v2_path)
+        ns_diff = argparse.Namespace(before=v1_path, after=v2_path, json=False)
         result = cmd_diff(ns_diff)
         assert result == 0
 

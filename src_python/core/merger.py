@@ -102,6 +102,12 @@ class CrossFileResolver:
     def resolve(self, graph: Graph) -> int:
         """
         在图内解析跨文件关系。返回新增边数。
+
+        识别模式：
+          - 继承匹配 → 建立 INHERIT 边
+          - 函数调用匹配 → 建立 CALL 边
+
+        (跨文件 IMPORT 边需语义级适配器支持，暂不处理。)
         """
         added = 0
 
@@ -134,6 +140,23 @@ class CrossFileResolver:
                         if graph.add_edge(edge):
                             added += 1
                         break   # 只匹配第一个同名
+
+            # 处理 calls（调用关系）
+            calls: List[str] = node.properties.get("calls", [])
+            for call_name in calls:
+                short = call_name.split(".")[-1]
+                for target in name_index.get(short, []):
+                    if target.id != node.id:
+                        edge = Edge(
+                            id=Edge.make_id(),
+                            type=EdgeType.STRUCTURAL,
+                            direction="call",
+                            source=node.id,
+                            target=target.id,
+                        )
+                        if graph.add_edge(edge):
+                            added += 1
+                        break
 
         return added
 

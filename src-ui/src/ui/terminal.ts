@@ -3,7 +3,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../bridge';
 
 export class TerminalPanel {
   private panel!: HTMLElement;

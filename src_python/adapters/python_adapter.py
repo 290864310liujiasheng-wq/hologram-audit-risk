@@ -275,9 +275,16 @@ class _SymbolVisitor(ast.NodeVisitor):
             # 在本文件符号表中查找
             if short in self._local_symbols:
                 self._make_edge(caller_id, self._local_symbols[short], StructuralDirection.CALL)
-            elif "." in callee_name:
-                # 跨模块调用——记下引用，在跨文件解析阶段补全
-                pass
+            else:
+                # 跨模块调用——记录引用，在跨文件解析阶段补全
+                # 如果是从 import 来的短名，解析为全限定名
+                full_ref = self._import_map.get(short, callee_name)
+                for n in self.nodes:
+                    if n.id == caller_id:
+                        calls = n.properties.setdefault("calls", [])
+                        if full_ref not in calls:
+                            calls.append(full_ref)
+                        break
 
         self.generic_visit(node)
 
@@ -383,7 +390,6 @@ class _MediaVisitor(ast.NodeVisitor):
         ("threading.Semaphore", "Semaphore", MediumKind.SHARED_MEMORY, DataDirection.READ),
     ]
 
-    # 过于通用的动词，只按全限定名匹配，不按短名匹配
     # 过于通用的动词，只按全限定名匹配，不按短名匹配
     _GENERIC_VERBS: Set[str] = {
         "get", "set", "execute", "executemany", "commit", "add", "query",

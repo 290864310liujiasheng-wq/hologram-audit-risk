@@ -2,8 +2,7 @@
 // 三模式星图：minimal / standard / full — 独立实例，切换即重建
 
 import '@xterm/xterm/css/xterm.css';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke, listen, isMockMode } from './bridge';
 import { StarGraph, VisualMode } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
@@ -384,7 +383,7 @@ async function init(): Promise<void> {
       setupAgent();
       runCheck();
       timelinePanel.setProjectPath(root || null);
-      statusText.textContent = '已加载缓存图谱';
+      statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       if (root) { try { await invoke('start_watching', { path: root }); } catch { /* ignore */ } }
       return;
     }

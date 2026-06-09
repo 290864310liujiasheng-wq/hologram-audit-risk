@@ -9,6 +9,7 @@ python -m src_python 入口。
 
 import os
 import sys
+import datetime
 import json
 
 from .adapters import AdapterRegistry, PythonAdapter
@@ -83,7 +84,6 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
 
         # Output
         if output_json:
-            import datetime
             d = graph.to_dict()
             d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
             if hasattr(graph, 'coupling_summary'):
@@ -130,8 +130,6 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         print(f"  coupling: L1={cr['total_l1']} L2={cr['total_l2']} L3={cr['total_l3']} L4={cr['total_l4']}", file=sys.stderr)
     except Exception as exc:
         print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
-    except Exception as exc:
-        print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
 
     # Community detection (graceful degradation)
     try:
@@ -149,7 +147,6 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     if output_json:
         # JSON to stdout
         d = graph.to_dict()
-        import datetime
         d["meta"]["generated_at"] = datetime.datetime.now().isoformat()
         # Attach coupling summary for frontend status bar
         if hasattr(graph, 'coupling_summary'):

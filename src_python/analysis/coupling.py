@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, SymbolKind
+from ..core.graph import Graph, Node, Edge, NodeType, EdgeType, SymbolKind, file_from_location
 
 
 # ============================================================
@@ -299,18 +299,6 @@ def _detect_data_paths_python(file_path: str, source: str) -> List[Dict[str, Any
 class CouplingDepthAnalyzer:
     """对图上的每条结构边进行耦合深度分类。"""
 
-    @staticmethod
-    def _file_from_location(loc: str) -> str:
-        """从 "path:lineno" 格式的 location 中提取文件路径。
-        Windows 兼容：处理 drive letter 冒号。
-        """
-        if not loc:
-            return loc
-        parts = loc.rsplit(":", 1)
-        if len(parts) == 2 and parts[1].strip().isdigit():
-            return parts[0]
-        return loc
-
     def __init__(self):
         self._file_source_cache: Dict[str, str] = {}
         self._all_exports_cache: Dict[str, Set[str]] = {}
@@ -348,7 +336,7 @@ class CouplingDepthAnalyzer:
             # 按源文件聚合报告
             src_node = graph.get_node(edge.source)
             if src_node and src_node.location:
-                mod_file = self._file_from_location(src_node.location)
+                mod_file = file_from_location(src_node.location)
                 if mod_file not in module_reports:
                     module_reports[mod_file] = CouplingReport(
                         module_name=os.path.splitext(os.path.basename(mod_file))[0],
@@ -417,9 +405,20 @@ class CouplingDepthAnalyzer:
         tgt_name = tgt_node.name
         tgt_short = tgt_name.split(".")[-1]
 
-        # Python 约定：_ 开头的是私有/内部
+        # Python 约定：__ 开头（非 dunder）是严重私有
         if tgt_short.startswith("__") and not tgt_short.endswith("__"):
             return CouplingLevel.L4_ENCAPSULATION_VIOLATION
+
+        # 检查 __all__ 导出列表（如果目标文件有定义）
+        tgt_file = file_from_location(tgt_node.location or "")
+        exports = self._all_exports_cache.get(tgt_file)
+        if exports:
+            # 有 __all__ → 按导出列表判定
+            if tgt_short in exports:
+                return CouplingLevel.L1_PUBLIC_API
+            return CouplingLevel.L2_INTERNAL_IMPORT
+
+        # Python 约定：_ 开头的是私有/内部
         if tgt_short.startswith("_"):
             return CouplingLevel.L2_INTERNAL_IMPORT
 

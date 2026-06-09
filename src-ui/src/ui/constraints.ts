@@ -1,7 +1,7 @@
 // Constraints Panel — 约束配置 UI
 // 编辑 hologram.constraints.yaml 的图形界面
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from '../bridge';
 
 interface ConstraintsData {
   routing: Record<string, boolean>;

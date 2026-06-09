@@ -89,6 +89,25 @@ def cmd_analyze(args) -> int:
     if communities:
         print(f"  Communities detected: {len(communities)}", file=sys.stderr)
 
+    # 耦合深度分析
+    try:
+        from .analysis.coupling import CouplingDepthAnalyzer
+        coupler = CouplingDepthAnalyzer()
+        sources = {}
+        for fp in report.files:
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                    sources[fp] = f.read()
+            except (OSError, PermissionError):
+                pass
+        for fp, src in sources.items():
+            coupler.pre_scan_file(fp, src)
+        cr = coupler.analyze(graph, sources)
+        graph.coupling_summary = cr
+        print(f"  coupling: L1={cr['total_l1']} L2={cr['total_l2']} L3={cr['total_l3']} L4={cr['total_l4']}", file=sys.stderr)
+    except Exception as exc:
+        print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
+
     # 输出
     graph.to_json(output)
     print(f"Graph saved: {output}")
@@ -436,7 +455,10 @@ def cmd_check(args) -> int:
         changed_files = sorted(all_files)
 
     if not changed_files:
-        print("No changed files detected.", file=sys.stderr)
+        if args.json:
+            _safe_print(json.dumps({"passed": True, "message": "No changes detected"}, ensure_ascii=False))
+        else:
+            _safe_print("No changes detected — passed.")
         return 0
 
     print(f"Changed files: {len(changed_files)}", file=sys.stderr)

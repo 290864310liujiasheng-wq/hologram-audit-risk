@@ -4,6 +4,12 @@ import os
 import tempfile
 import pytest
 
+try:
+    import yaml
+    _yaml_available = True
+except ImportError:
+    _yaml_available = False
+
 from src_python.routing.constraints import (
     ConstraintChecker, ConstraintConfig, ConstraintResult, ConstraintViolation,
     DEFAULT_CONSTRAINTS,
@@ -37,7 +43,7 @@ class TestConstraintConfig:
 
     def test_defaults_routing(self):
         cfg = ConstraintConfig.defaults()
-        assert cfg.routing["l5_irreversible"] is True
+        assert "l5_irreversible" not in cfg.routing  # L5 永远硬编码路由，无配置项
         assert cfg.routing["l4_silent"] is True
         assert cfg.routing["l3_delayed"] is True
         assert cfg.routing["l2_blast"] is True
@@ -57,6 +63,9 @@ class TestConstraintConfig:
         assert "secret" in cfg.denylist_keywords
         assert "token" in cfg.denylist_keywords
         assert "api_key" in cfg.denylist_keywords
+        assert "private_key" in cfg.denylist_keywords
+        assert "credential" in cfg.denylist_keywords
+        assert "authorization" in cfg.denylist_keywords
 
     def test_from_dict_override(self):
         data = {
@@ -65,7 +74,7 @@ class TestConstraintConfig:
         }
         cfg = ConstraintConfig.from_dict(data)
         assert cfg.routing["l4_silent"] is False
-        assert cfg.routing["l5_irreversible"] is True  # 未覆写的保持默认
+        assert cfg.routing["l3_delayed"] is True  # 未覆写的保持默认
         assert cfg.thresholds["blast_radius_max"] == 50
         assert cfg.thresholds["cross_community_tolerance"] == 0  # 保持默认
 
@@ -439,10 +448,12 @@ class TestConfigFileLoading:
         checker = ConstraintChecker(temp_project)
         # 应回退到默认配置
         cfg = checker.config
-        assert cfg.routing["l5_irreversible"] is True
+        assert "l5_irreversible" not in cfg.routing  # 配置中已移除，L5 硬编码
         assert cfg.thresholds["blast_radius_max"] == 20
 
     def test_write_and_load_default_config(self, temp_project):
+        if not _yaml_available:
+            pytest.skip("yaml module not installed")
         path = ConstraintChecker.write_default_config(temp_project)
         assert os.path.exists(path)
         assert os.path.basename(path) == "hologram.constraints.yaml"
@@ -450,12 +461,14 @@ class TestConfigFileLoading:
         # 加载写入的配置
         checker = ConstraintChecker(temp_project)
         cfg = checker.config
-        assert cfg.routing["l5_irreversible"] is True
+        assert "l5_irreversible" not in cfg.routing  # 配置中已移除，L5 硬编码
         assert cfg.thresholds["blast_radius_max"] == 20
         assert "password" in cfg.denylist_keywords
 
     def test_load_custom_config(self, temp_project):
         """自定义 YAML 配置加载。"""
+        if not _yaml_available:
+            pytest.skip("yaml module not installed")
         config_path = os.path.join(temp_project, "hologram.constraints.yaml")
         with open(config_path, "w", encoding="utf-8") as f:
             f.write("""
@@ -474,7 +487,7 @@ constraints:
         checker = ConstraintChecker(temp_project)
         cfg = checker.config
         assert cfg.routing["l4_silent"] is False
-        assert cfg.routing["l5_irreversible"] is True  # 未覆写的保持默认
+        assert cfg.routing["l3_delayed"] is True  # 未覆写的保持默认
         assert cfg.thresholds["blast_radius_max"] == 50
         assert "legacy.py" in cfg.allowlist_modules
         assert "custom_secret" in cfg.denylist_keywords
@@ -482,7 +495,7 @@ constraints:
     def test_generate_default_config_content(self):
         content = ConstraintChecker.generate_default_config("/test")
         assert "constraints:" in content
-        assert "l5_irreversible" in content
+        assert "L5 不可逆破坏永远路由" in content
         assert "blast_radius_max" in content
         assert "password" in content
 

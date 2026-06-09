@@ -258,11 +258,13 @@ class TypeScriptAdapter(LanguageAdapter):
             )
             result.nodes.append(medium)
 
-        # 数据库操作模式
+        # 数据库操作模式 — 先剥离注释避免误报
+        source_no_comments = re.sub(r'//[^\n]*', ' ', source)        # 单行注释
+        source_no_comments = re.sub(r'/\*.*?\*/', ' ', source_no_comments, flags=re.DOTALL)  # 块注释
         db_patterns = [r'\.query\s*\(', r'\.execute\s*\(', r'\.find\s*\(', r'\.findOne\s*\(',
                         r'\.findMany\s*\(', r'\.create\s*\(', r'\.insert\s*\(', r'\.delete\s*\(']
         for pattern in db_patterns:
-            if re.search(pattern, source):
+            if re.search(pattern, source_no_comments):
                 medium = Node(
                     id=Node.make_id(),
                     type=NodeType.MEDIUM,

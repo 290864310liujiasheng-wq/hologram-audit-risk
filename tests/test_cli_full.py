@@ -213,7 +213,7 @@ class TestCmdDiffFull:
         before, after = two_graphs
         try:
             import argparse
-            ns = argparse.Namespace(before=before, after=after)
+            ns = argparse.Namespace(before=before, after=after, json=False)
             result = cmd_diff(ns)
             assert result == 0
         finally:

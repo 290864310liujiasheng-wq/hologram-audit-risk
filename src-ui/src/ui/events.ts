@@ -33,6 +33,15 @@ class EventBus {
       }
     }
   }
+
+  /** Remove all handlers for a given event (or all events if no arg). */
+  clear(event?: string): void {
+    if (event) {
+      this.handlers.delete(event);
+    } else {
+      this.handlers.clear();
+    }
+  }
 }
 
 export const bus = new EventBus();

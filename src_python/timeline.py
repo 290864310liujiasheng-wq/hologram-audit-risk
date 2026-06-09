@@ -130,7 +130,7 @@ class TimelineStore:
         self.store_dir = os.path.join(self.project_root, self.DEFAULT_DIR)
         self.db_path = os.path.join(self.store_dir, self.DEFAULT_DB)
         os.makedirs(self.store_dir, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_db()
 
