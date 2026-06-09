@@ -23,6 +23,7 @@ interface GraphJSON {
 }
 
 interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; }
+interface CommunityData { id: string; label: string; node_ids: string[]; }
 
 export type VisualMode = 'minimal' | 'standard' | 'full';
 
@@ -234,6 +235,17 @@ export class StarGraph {
   private blastDistances: number[] = [];
   private blastMaxDist = 8;
 
+  // ── Community / Galaxy fold overlay ──────────────────────
+  private foldMode = false;
+  private enteredGalaxyId: string | null = null;             // null=universe, string=inside a galaxy
+  private communities: CommunityData[] = [];
+  private nodeCommMap = new Map<number, string>();           // nodeIdx → communityId
+  private commFoldGroup = new THREE.Group();                 // galaxy clouds + constellation edges
+  // Galaxy cloud data (computed after layout)
+  private galaxyMeta: { id: string; label: string; centroid: THREE.Vector3; memberIndices: number[] }[] = [];
+  private galaxyClouds: THREE.Points[] = [];
+  private galaxyGlows: THREE.Sprite[] = [];
+
   // Animation
   private pulseTime = 0;
   private tmpVec3 = new THREE.Vector3();
@@ -268,6 +280,7 @@ export class StarGraph {
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
     this.galaxyGroup.add(this.nodeGroup);
+    this.galaxyGroup.add(this.commFoldGroup);
     this.scene.add(this.galaxyGroup);
 
     this.raycaster = new THREE.Raycaster();
@@ -389,11 +402,15 @@ export class StarGraph {
 
   private onClick(e: MouseEvent): void {
     if (this.nodeCores.length === 0) return;
+    // In universe fold view, no node interaction — only galaxies
+    if (this.foldMode && !this.enteredGalaxyId) return;
     const rect = this.container.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
-    const hits = this.raycaster.intersectObjects(this.nodeCores);
+    // Only intersect visible nodes
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
     const idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
     else if (idx < 0) this.hideDetail();
@@ -452,8 +469,15 @@ export class StarGraph {
 
   private updateHover(): void {
     if (this.nodeCores.length === 0) return;
+    // In universe fold view, no node hover — only galaxies
+    if (this.foldMode && !this.enteredGalaxyId) {
+      if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
+      return;
+    }
     this.raycaster.setFromCamera(this.mouse, this.camera);
-    const hits = this.raycaster.intersectObjects(this.nodeCores);
+    // Only intersect visible nodes
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
     const newIdx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
     if (newIdx !== this.hoveredIdx) {
       // Restore previous hovered node
@@ -505,7 +529,7 @@ export class StarGraph {
       div.style.left = `${this.tmpVec3.x * halfW + halfW}px`;
       div.style.top = `${-this.tmpVec3.y * halfH + halfH}px`;
       div.style.opacity = String(opacity);
-      div.style.display = opacity > 0.05 ? '' : 'none';
+      div.style.display = (opacity > 0.05 && !this.foldMode) ? '' : 'none';
     }
   }
 
@@ -582,7 +606,283 @@ export class StarGraph {
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
     if (idx < 0) return false;
+    // If fold mode is on, enter that galaxy instead of flying to node
+    if (this.foldMode) {
+      const cid = this.nodeCommMap.get(idx);
+      if (cid) { this.enterGalaxy(cid); return true; }
+      // Orphan node — can't enter, just fly
+      this.flyToNode(idx); return true;
+    }
     this.flyToNode(idx); return true;
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Community / Galaxy fold overlay
+  // ══════════════════════════════════════════════════════════
+
+  get isFolded(): boolean { return this.foldMode; }
+  get isInsideGalaxy(): boolean { return this.enteredGalaxyId !== null; }
+  get communityCount(): number { return this.communities.length; }
+
+  /** Toggle galaxy fold overlay on/off. Re-renders from stored data. */
+  setFoldMode(on: boolean): void {
+    if (on === this.foldMode) return;
+    this.foldMode = on;
+    this.enteredGalaxyId = null;
+    if (on) {
+      this.applyFoldOverlay();
+      const st = document.getElementById('status-text');
+      if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 搜索进入`;
+    } else {
+      this.clearFoldOverlay();
+    }
+  }
+
+  toggleFold(): void { this.setFoldMode(!this.foldMode); }
+
+  // ══════════════════════════════════════════════════════════
+  // Fold overlay — two layers
+  //   Layer 1 (universe): galaxy clouds at centroids, unique hues, nodes hidden
+  //   Layer 2 (inside):   single constellation — member nodes + internal edges lit
+  // ══════════════════════════════════════════════════════════
+
+  private static readonly CONSTELLATION_COLOR = 0xffaa44;
+
+  private applyFoldOverlay(): void {
+    // Hide all nodes
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+      if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
+    }
+    // Dim all edges
+    for (const lines of this.edgeLineGroups) {
+      (lines.material as THREE.LineBasicMaterial).opacity = 0.02;
+    }
+    if (this.enteredGalaxyId) {
+      // Layer 2: inside a galaxy — show its nodes + internal edges as a constellation
+      this._showConstellation(this.enteredGalaxyId);
+    } else {
+      // Layer 1: universe view — galaxy clouds at centroids, no cross edges
+      this.buildGalaxyClouds();
+    }
+  }
+
+  private clearFoldOverlay(): void {
+    const isFull = this.mode === 'full';
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
+      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
+      const glowColor = GLOW_COLORS[kind] || 0x4488cc;
+      if (this.nodeCores[i]) { this.nodeCores[i].visible = true; (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor); }
+      if (this.nodeGlows[i]) { this.nodeGlows[i].visible = true; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
+      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
+    }
+    for (const lines of this.edgeLineGroups) {
+      const depth = (lines.userData['edgeDepth'] as number) ?? 0;
+      (lines.material as THREE.LineBasicMaterial).opacity = edgeOpacityByDepth(depth);
+    }
+    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    this.galaxyClouds = []; this.galaxyGlows = [];
+  }
+
+  /** Reveal one galaxy as a constellation: member nodes glow + internal edges bright. */
+  private _showConstellation(galaxyId: string): void {
+    const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+    if (!gm) return;
+    const isFull = this.mode === 'full';
+    const cc = new THREE.Color(StarGraph.CONSTELLATION_COLOR);
+    for (const mi of gm.memberIndices) {
+      if (this.nodeCores[mi]) {
+        this.nodeCores[mi].visible = true;
+        (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(isFull ? 0xffffff : StarGraph.CONSTELLATION_COLOR);
+      }
+      if (this.nodeGlows[mi]) {
+        this.nodeGlows[mi].visible = true;
+        (this.nodeGlows[mi].material as THREE.SpriteMaterial).color.set(StarGraph.CONSTELLATION_COLOR);
+      }
+    }
+    // Internal edges for this galaxy only
+    const pos = this.nodePositions;
+    const verts: number[] = [], colors: number[] = [];
+    for (let ei = 0; ei < this.edgeDataList.length; ei++) {
+      const { s, t } = this.edgeDataList[ei];
+      const sc = this.nodeCommMap.get(s), tc = this.nodeCommMap.get(t);
+      if (!sc || sc !== galaxyId || tc !== galaxyId) continue;
+      verts.push(pos[s * 3], pos[s * 3 + 1], pos[s * 3 + 2], pos[t * 3], pos[t * 3 + 1], pos[t * 3 + 2]);
+      colors.push(cc.r, cc.g, cc.b, cc.r, cc.g, cc.b);
+    }
+    if (verts.length > 0) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.5,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      })));
+    }
+  }
+
+  /** Enter a galaxy: hide clouds, reveal its constellation. */
+  enterGalaxy(galaxyId: string): void {
+    if (!this.foldMode || this.enteredGalaxyId === galaxyId) return;
+    this.enteredGalaxyId = galaxyId;
+    // Clear fold group (clouds), re-apply for constellation view
+    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    this.galaxyClouds = []; this.galaxyGlows = [];
+    this._showConstellation(galaxyId);
+    // Fly camera to galaxy centroid
+    const gm = this.galaxyMeta.find(g => g.id === galaxyId);
+    if (gm) this.flyToNode(gm.memberIndices[0]); // fly to first member node
+    const st = document.getElementById('status-text');
+    if (st) st.textContent = `🔍 星座: ${gm?.label || galaxyId} · ${gm?.memberIndices.length || 0} 节点 · ESC 退回`;
+  }
+
+  /** Exit galaxy back to universe view. */
+  exitGalaxy(): void {
+    if (!this.foldMode || !this.enteredGalaxyId) return;
+    this.enteredGalaxyId = null;
+    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
+    // Re-hide all nodes
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+      if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
+      if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
+    }
+    this.buildGalaxyClouds();
+    const st = document.getElementById('status-text');
+    if (st) st.textContent = `🌀 ${this.galaxyMeta.length} 星团 · 搜索进入`;
+  }
+
+  // ── Galaxy clouds (universe view) ────────────────────────
+
+  /** Build galaxy clusters — dense core + sparse halo, each visually distinct. */
+  private buildGalaxyClouds(): void {
+    this.galaxyClouds = []; this.galaxyGlows = [];
+    const total = this.galaxyMeta.length;
+    const goldenRatio = 0.618033988749895;
+    for (let gi = 0; gi < total; gi++) {
+      const gm = this.galaxyMeta[gi];
+      const r = 14 + Math.sqrt(gm.memberIndices.length) * 4.5;
+      // Unique warm hue per galaxy
+      const hue = ((gi * goldenRatio) % 1) * 0.12 + 0.07;
+      const tint = new THREE.Color(); tint.setHSL(hue, 0.8, 0.5);
+      const bright = new THREE.Color(); bright.setHSL(hue, 0.5, 0.85);
+      // Shape variety: varying flattening and tilt per galaxy
+      const flat = 0.3 + (gm.memberIndices.length % 7) * 0.05;  // 0.30-0.60 disk thickness
+      const elon = 0.6 + (gm.memberIndices.length % 5) * 0.08;  // 0.60-0.92 equatorial elongation
+      const tiltA = (gm.id.charCodeAt(gm.id.length - 1) * 2.3) % (Math.PI * 2);
+      const tiltB = (gm.id.charCodeAt(0) * 1.5) % (Math.PI * 0.5);
+      const ctA = Math.cos(tiltA), stA = Math.sin(tiltA);
+      const ctB = Math.cos(tiltB), stB = Math.sin(tiltB);
+      // ── Dense inner core particles (bright, tightly clustered) ──
+      const coreN = Math.min(40, 8 + Math.floor(gm.memberIndices.length * 0.6));
+      const corePos = new Float32Array(coreN * 3);
+      const coreCol = new Float32Array(coreN * 3);
+      for (let j = 0; j < coreN; j++) {
+        const dr = Math.abs(this._gaussRand()) * 0.25 * r;
+        const th = Math.random() * Math.PI * 2;
+        const ph = Math.acos(2 * Math.random() - 1);
+        let px = Math.cos(th) * Math.sin(ph) * dr;
+        let py = Math.sin(ph) * dr * flat * 0.6;
+        let pz = Math.sin(th) * Math.sin(ph) * dr * elon;
+        // Double rotation
+        let rx = px * ctA - pz * stA; let rz = px * stA + pz * ctA;
+        let ry = py * ctB - rz * stB; rz = py * stB + rz * ctB;
+        corePos[j * 3] = gm.centroid.x + rx;
+        corePos[j * 3 + 1] = gm.centroid.y + ry;
+        corePos[j * 3 + 2] = gm.centroid.z + rz;
+        const f = 1 - (dr / (r * 0.25)) * 0.3;
+        coreCol[j * 3] = bright.r * f + (1 - f);
+        coreCol[j * 3 + 1] = bright.g * f + (1 - f) * 0.7;
+        coreCol[j * 3 + 2] = bright.b * f + (1 - f) * 0.3;
+      }
+      const coreGeo = new THREE.BufferGeometry();
+      coreGeo.setAttribute('position', new THREE.BufferAttribute(corePos, 3));
+      coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
+      this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
+        size: 1.5, map: this.glowTex, blending: THREE.AdditiveBlending,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.75,
+      })));
+      // ── Sparse outer halo particles (dimmer, wider spread) ──
+      const haloN = Math.min(200, 40 + gm.memberIndices.length * 3);
+      const haloPos = new Float32Array(haloN * 3);
+      const haloCol = new Float32Array(haloN * 3);
+      for (let j = 0; j < haloN; j++) {
+        const dr = (0.25 + Math.abs(this._gaussRand()) * 0.75) * r;
+        const th = Math.random() * Math.PI * 2;
+        const ph = Math.acos(2 * Math.random() - 1);
+        let px = Math.cos(th) * Math.sin(ph) * dr;
+        let py = Math.sin(ph) * dr * flat;
+        let pz = Math.sin(th) * Math.sin(ph) * dr * elon;
+        let rx = px * ctA - pz * stA; let rz = px * stA + pz * ctA;
+        let ry = py * ctB - rz * stB; rz = py * stB + rz * ctB;
+        haloPos[j * 3] = gm.centroid.x + rx;
+        haloPos[j * 3 + 1] = gm.centroid.y + ry;
+        haloPos[j * 3 + 2] = gm.centroid.z + rz;
+        const f = 1 - (dr / r) * 0.7;
+        haloCol[j * 3] = tint.r * f; haloCol[j * 3 + 1] = tint.g * f; haloCol[j * 3 + 2] = tint.b * f;
+      }
+      const haloGeo = new THREE.BufferGeometry();
+      haloGeo.setAttribute('position', new THREE.BufferAttribute(haloPos, 3));
+      haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
+      const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
+        size: 1.0, map: this.glowTex, blending: THREE.AdditiveBlending,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.45,
+      }));
+      this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
+      // ── Soft ambient glow sprite ──
+      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
+        depthWrite: false, transparent: true, opacity: 0.12,
+      }));
+      glow.position.copy(gm.centroid);
+      glow.scale.setScalar(r * 2.5);
+      this.commFoldGroup.add(glow); this.galaxyGlows.push(glow);
+      // ── Bright central core sprite ──
+      const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
+        depthWrite: false, transparent: true, opacity: 0.8,
+      }));
+      coreSprite.position.copy(gm.centroid);
+      coreSprite.scale.setScalar(r * 0.35);
+      this.commFoldGroup.add(coreSprite); this.galaxyGlows.push(coreSprite);
+    }
+  }
+
+  private buildCrossEdges(): void {
+    const seen = new Set<string>();
+    const verts: number[] = [], colors: number[] = [];
+    const pos = this.nodePositions;
+    for (const d of this.edgeDataList) {
+      const sc = this.nodeCommMap.get(d.s), tc = this.nodeCommMap.get(d.t);
+      if (!sc && !tc) continue;
+      if (sc === tc) continue;
+      const key = [sc || '', tc || ''].sort().join('::') + `::${d.edgeType}::${d.direction}`;
+      if (seen.has(key)) continue; seen.add(key);
+      const gs = sc ? this.galaxyMeta.find(g => g.id === sc) : null;
+      const gt = tc ? this.galaxyMeta.find(g => g.id === tc) : null;
+      verts.push(
+        gs ? gs.centroid.x : pos[d.s * 3], gs ? gs.centroid.y : pos[d.s * 3 + 1], gs ? gs.centroid.z : pos[d.s * 3 + 2],
+        gt ? gt.centroid.x : pos[d.t * 3], gt ? gt.centroid.y : pos[d.t * 3 + 1], gt ? gt.centroid.z : pos[d.t * 3 + 2]);
+      const c = edgeColorByType(d.edgeType, d.direction);
+      colors.push(c.r * 1.2, c.g * 1.2, c.b * 1.2, c.r * 1.2, c.g * 1.2, c.b * 1.2);
+    }
+    if (verts.length === 0) return;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.28,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    })));
+  }
+
+  private _gaussRand(): number {
+    let u = 0, v = 0;
+    while (u === 0) u = Math.random();
+    while (v === 0) v = Math.random();
+    return Math.min(3, Math.max(-3, Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v))) / 3;
   }
 
   private updateFocus(): void {
@@ -642,6 +942,28 @@ export class StarGraph {
       this.edgeIndexOf[s].push(ei); this.edgeIndexOf[t].push(ei);
     }
 
+    // ── Parse communities & build node→community index ──────
+    this.communities = ((graph as any).communities || []) as CommunityData[];
+    this.nodeCommMap.clear();
+    for (const comm of this.communities) {
+      for (const nid of comm.node_ids) {
+        const idx = nodeIdx.get(nid);
+        if (idx !== undefined) this.nodeCommMap.set(idx, comm.id);
+      }
+    }
+    // Pre-compute galaxy members (centroids filled after layout)
+    this.galaxyMeta = [];
+    for (const comm of this.communities) {
+      const members: number[] = [];
+      for (const nid of comm.node_ids) {
+        const idx = nodeIdx.get(nid);
+        if (idx !== undefined) members.push(idx);
+      }
+      if (members.length > 0) {
+        this.galaxyMeta.push({ id: comm.id, label: comm.label, centroid: new THREE.Vector3(), memberIndices: members });
+      }
+    }
+
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
@@ -670,6 +992,18 @@ export class StarGraph {
       this.initEdgeParticles(rawPos, eData);
     }
 
+    // ── Compute galaxy centroids from layout ─────────────────
+    for (const gm of this.galaxyMeta) {
+      let sx = 0, sy = 0, sz = 0;
+      for (const mi of gm.memberIndices) {
+        sx += rawPos[mi * 3]; sy += rawPos[mi * 3 + 1]; sz += rawPos[mi * 3 + 2];
+      }
+      gm.centroid.set(sx / gm.memberIndices.length, sy / gm.memberIndices.length, sz / gm.memberIndices.length);
+    }
+
+    // ── Apply fold overlay if active ─────────────────────────
+    if (this.foldMode) this.applyFoldOverlay();
+
     this.updateStatus(nodes.length, edges.length, graph.meta);
   }
 
@@ -677,9 +1011,11 @@ export class StarGraph {
     while (this.nodeGroup.children.length) this.nodeGroup.remove(this.nodeGroup.children[0]);
     while (this.edgeGroup.children.length) this.edgeGroup.remove(this.edgeGroup.children[0]);
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
+    while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
     this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.edgeLineGroups = [];
+    this.galaxyClouds = []; this.galaxyGlows = [];
     this.neighborMap = []; this.edgeIndexOf = [];
     this.hoveredIdx = -1; this.targetHoverScale = 0;
     this.focusActive = false; this.focusNodeIdx = -1; this.selectedIdx = -1;
@@ -789,6 +1125,7 @@ export class StarGraph {
       let text = `${nodeCount} 节点 · ${edgeCount} 边 · S${sCount} D${dCount} T${tCount}`;
       if (l4 > 0) text += ` · ⛔ L4×${l4}`;
       else if (l3 > 0) text += ` · ⚠ L3×${l3}`;
+      if (this.foldMode && this.communities.length > 0) text += ` · 🌀 ${this.communities.length} 星座`;
       st.textContent = text;
     }
   }
@@ -891,7 +1228,18 @@ export class StarGraph {
       }
     }
 
-    // Pulse + blast
+    // ── Galaxy cloud breathe (universe view only) ──────────
+    if (this.foldMode && !this.enteredGalaxyId) {
+      for (let k = 0; k < this.galaxyGlows.length; k++) {
+        const glow = this.galaxyGlows[k];
+        if (!glow) continue;
+        const d = Math.min(1, Math.max(0.05, this.camera.position.distanceTo(
+          this.galaxyMeta[Math.floor(k / 2)]?.centroid || this.camera.position) / 180));
+        const w = 1 + Math.sin(this.pulseTime * 0.5 + k * 1.7) * 0.12;
+        (glow.material as THREE.SpriteMaterial).opacity = 0.18 * d * w;
+      }
+    }
+
     this.pulseTime += 0.03 * (isFull ? 1.5 : 1);
     const galTime = performance.now() * 0.001; // galaxy time for color cycling
     for (let i = 0; i < this.nodeGlows.length; i++) {
@@ -963,6 +1311,8 @@ export class StarGraph {
   destroy(): void {
     cancelAnimationFrame(this.animId);
     window.removeEventListener('resize', this.onResize);
+    for (const cloud of this.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
+    for (const glow of this.galaxyGlows) (glow.material as THREE.Material).dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
     this.glowTex.dispose(); this.sphereGeo.dispose();

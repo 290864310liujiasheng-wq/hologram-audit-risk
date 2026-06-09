@@ -14,6 +14,7 @@ const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
 const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButtonElement;
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
+const btnFold = document.getElementById('btn-fold') as HTMLButtonElement;
 
 // ── State ──
 let currentPath: string | null = null;
@@ -111,6 +112,20 @@ async function init(): Promise<void> {
 
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+
+  // Fold toggle
+  btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });
+  window.addEventListener('keydown', (e) => {
+    if ((e.key === 'f' || e.key === 'F') && document.activeElement?.tagName !== 'INPUT') {
+      starGraph.toggleFold(); updateFoldBtn();
+    }
+    if (e.key === 'Escape' && starGraph.isInsideGalaxy) {
+      starGraph.exitGalaxy();
+    }
+  });
+  function updateFoldBtn(): void {
+    btnFold.textContent = starGraph.isFolded ? '🌀 展开' : '🌀 折叠';
+  }
 
   // Live updates from file watcher
   listen<string>('graph-updated', (event) => {
