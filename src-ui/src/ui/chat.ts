@@ -5,6 +5,7 @@
 import type { Agent, AgentEvent } from '../agent/agent';
 import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
+import { iconHtml } from './icons';
 
 // ── Constants ──
 
@@ -95,10 +96,10 @@ export class ChatPanel {
     header.className = 'chat-header';
     const title = document.createElement('span');
     title.className = 'chat-title';
-    title.textContent = '💬 全息对话';
+    title.innerHTML = `${iconHtml('chat')} 全息对话`;
     const closeBtn = document.createElement('button');
     closeBtn.className = 'chat-close-btn';
-    closeBtn.textContent = '✕';
+    closeBtn.innerHTML = iconHtml('close', 16);
     closeBtn.addEventListener('click', () => this.close());
     header.append(title, closeBtn);
     this.panel.appendChild(header);
@@ -141,12 +142,12 @@ export class ChatPanel {
 
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat-send-btn';
-    this.sendBtn.textContent = '↑';
+    this.sendBtn.innerHTML = iconHtml('send');
     this.sendBtn.addEventListener('click', () => this.sendMessage());
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat-stop-btn hidden';
-    this.stopBtn.textContent = '■';
+    this.stopBtn.innerHTML = iconHtml('stop');
     this.stopBtn.addEventListener('click', () => this.abort());
 
     inputWrap.append(this.inputArea, this.sendBtn, this.stopBtn);
@@ -303,12 +304,12 @@ export class ChatPanel {
 
       const toggle = document.createElement('button');
       toggle.className = 'msg-reasoning-toggle';
-      toggle.textContent = '💭 思考过程';
+      toggle.innerHTML = `${iconHtml('chevron-right')} 思考过程`;
       toggle.addEventListener('click', () => {
         const content = toggle.nextElementSibling as HTMLElement;
         if (!content) return;
         const show = content.classList.toggle('msg-reasoning-open');
-        toggle.textContent = show ? '💭 收起思考' : '💭 思考过程';
+        toggle.innerHTML = show ? `${iconHtml('chevron-down')} 收起思考` : `${iconHtml('chevron-right')} 思考过程`;
       });
 
       this.currentReasoningContent = document.createElement('div');
@@ -374,14 +375,18 @@ export class ChatPanel {
     const header = document.createElement('div');
     header.className = 'msg-tool-header';
 
-    const icon = tool.read_only ? '📖' : '🔧';
+    const icon = tool.read_only
+      ? iconHtml('search', 13) // read-only → magnifying glass
+      : iconHtml('chevron-right', 13); // write → action arrow
     const nameEl = document.createElement('span');
     nameEl.className = 'tool-name';
-    nameEl.textContent = `${icon} ${tool.name}`;
+    nameEl.innerHTML = `${icon} ${tool.name}`;
 
     const status = document.createElement('span');
     status.className = 'tool-status';
-    status.textContent = tool.partial ? '⏳' : '⚡';
+    status.innerHTML = tool.partial
+      ? `<span class="tool-status-spin">${iconHtml('dot', 10)}</span>`
+      : iconHtml('blink-dot', 10);
 
     const argsEl = document.createElement('span');
     argsEl.className = 'tool-args';
@@ -411,7 +416,9 @@ export class ChatPanel {
 
     const status = card.querySelector('.tool-status') as HTMLElement;
     if (status) {
-      status.textContent = tool.err ? '❌' : '✅';
+      status.innerHTML = tool.err
+        ? iconHtml('close', 12)
+        : iconHtml('check-circle', 12);
       status.className = `tool-status ${tool.err ? 'tool-err' : 'tool-ok'}`;
     }
 

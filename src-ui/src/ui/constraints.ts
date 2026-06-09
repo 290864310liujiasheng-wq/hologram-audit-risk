@@ -42,41 +42,41 @@ export class ConstraintsPanel {
       bottom: '28px',
       width: '340px',
       maxWidth: '90vw',
-      background: 'rgba(6, 12, 24, 0.97)',
-      backdropFilter: 'blur(14px)',
-      WebkitBackdropFilter: 'blur(14px)',
-      borderLeft: '1px solid rgba(48, 60, 80, 0.5)',
+      background: 'var(--panel-bg, rgba(6, 12, 24, 0.97))',
+      backdropFilter: 'var(--blur, blur(14px))',
+      WebkitBackdropFilter: 'var(--blur, blur(14px))',
+      borderLeft: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.5))',
       zIndex: '16',
       display: 'flex',
       flexDirection: 'column',
       transform: 'translateX(100%)',
-      transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+      transition: 'transform var(--glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1))',
     });
 
     // Header
     const header = document.createElement('div');
     Object.assign(header.style, {
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '8px 12px', borderBottom: '1px solid rgba(48, 60, 80, 0.4)',
+      padding: '8px 12px', borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.4))',
       flexShrink: '0',
     });
 
     const title = document.createElement('span');
     title.textContent = '⚙️ 约束配置';
     Object.assign(title.style, {
-      fontSize: '13px', fontWeight: '600', color: '#7eb8ff', letterSpacing: '0.5px',
+      fontSize: '13px', fontWeight: '600', color: 'var(--signal, #7eb8ff)', letterSpacing: '0.5px',
     });
 
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '✕';
     Object.assign(closeBtn.style, {
       width: '24px', height: '24px', padding: '0',
-      background: 'none', border: 'none', color: '#4a5568',
+      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
       cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
-      transition: 'color 0.12s',
+      transition: 'color var(--snap, 0.12s)',
     });
-    closeBtn.addEventListener('mouseenter', () => closeBtn.style.color = '#c9d1d9');
-    closeBtn.addEventListener('mouseleave', () => closeBtn.style.color = '#4a5568');
+    closeBtn.addEventListener('mouseenter', () => closeBtn.style.color = 'var(--starlight-dim, #c9d1d9)');
+    closeBtn.addEventListener('mouseleave', () => closeBtn.style.color = 'var(--text-muted, #4a5568)');
     closeBtn.addEventListener('click', () => this.close());
 
     header.appendChild(title);
@@ -348,7 +348,7 @@ export class ConstraintsPanel {
       const btn = this.content.querySelector('.cs-btn-save') as HTMLElement;
       if (btn) {
         btn.textContent = '✅ 已保存';
-        btn.style.color = '#55aa55';
+        btn.style.color = 'var(--pass, #55aa55)';
         setTimeout(() => {
           btn.textContent = '💾 保存';
           btn.style.color = '';

@@ -1,0 +1,174 @@
+// Icon system — geometric SVG icons for deep-space command console
+// 统一规格: 18x18 viewBox · 1.5px stroke · round caps · 颜色走 CSS currentColor
+
+export interface IconDef {
+  /** SVG inner HTML (paths only, no <svg> wrapper) */
+  path: string;
+  /** Semantic label for screen readers */
+  label: string;
+}
+
+/** Raw icon definitions — paths in a 18×18 viewBox centered at (9,9). */
+const icons: Record<string, IconDef> = {
+  // ── Layout ──
+  'chevron-right': {
+    label: '展开',
+    path: '<polyline points="7,4 13,9 7,14"/>',
+  },
+  'chevron-down': {
+    label: '收起',
+    path: '<polyline points="4,7 9,13 14,7"/>',
+  },
+  'chevron-up': {
+    label: '收起',
+    path: '<polyline points="4,12 9,6 14,12"/>',
+  },
+  close: {
+    label: '关闭',
+    path: '<line x1="5" y1="5" x2="13" y2="13"/><line x1="13" y1="5" x2="5" y2="13"/>',
+  },
+
+  // ── Toolbar ──
+  'mode-minimal': {
+    label: '极简骨架',
+    path: '<circle cx="9" cy="9" r="3" fill="currentColor" fill-opacity="0.2"/><circle cx="9" cy="9" r="3"/>',
+  },
+  'mode-standard': {
+    label: '标准星图',
+    path: '<circle cx="9" cy="5" r="1.2"/><circle cx="5" cy="13" r="1.2"/><circle cx="13" cy="13" r="1.2"/><line x1="9" y1="6.2" x2="6" y2="12"/><line x1="9" y1="6.2" x2="12" y2="12"/><line x1="6" y1="12" x2="12" y2="12"/>',
+  },
+  'mode-full': {
+    label: '观赏模式',
+    path: '<path d="M9 1 L10.5 7.5 L9 5 L7.5 7.5 Z"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/><circle cx="9" cy="9" r="3"/><path d="M3 11 A7 7 0 0 0 15 11"/>',
+  },
+  fold: {
+    label: '折叠',
+    path: '<circle cx="9" cy="9" r="5"/><ellipse cx="9" cy="9" rx="7" ry="2.5"/><circle cx="9" cy="9" r="1" fill="currentColor" fill-opacity="0.3"/>',
+  },
+  'folder-open': {
+    label: '打开文件夹',
+    path: '<path d="M3 6 L3 15 L15 15 L15 6 L8.5 6 L7 3.5 L3 3.5 L3 6 Z"/><line x1="9" y1="9" x2="9" y2="12"/><line x1="7" y1="10.5" x2="11" y2="10.5"/>',
+  },
+
+  // ── Panels ──
+  check: {
+    label: '简报',
+    path: '<polygon points="9,2 2,15 16,15"/><line x1="9" y1="7" x2="9" y2="11"/><circle cx="9" cy="13" r="0.6" fill="currentColor"/>',
+  },
+  chat: {
+    label: '对话',
+    path: '<path d="M3 4 L3 11 L6 11 L9 14.5 L9 11 L15 11 L15 4 Z"/><circle cx="7" cy="7.5" r="1.2"/><circle cx="11.5" cy="7.5" r="1.2"/>',
+  },
+  diff: {
+    label: '变更',
+    path: '<circle cx="5" cy="5" r="2.5"/><circle cx="13" cy="13" r="2.5"/><circle cx="13" cy="5" r="2.5"/><line x1="6.5" y1="5" x2="11.5" y2="5"/><line x1="6.5" y1="13" x2="11.5" y2="13"/>',
+  },
+  timeline: {
+    label: '时间轴',
+    path: '<circle cx="5" cy="5" r="2"/><polyline points="5,7 5,13 8,12"/><line x1="5" y1="3" x2="13" y2="9"/><circle cx="13" cy="10" r="2"/>',
+  },
+  constraints: {
+    label: '约束',
+    path: '<circle cx="9" cy="4" r="2.5"/><line x1="5" y1="5.8" x2="13" y2="12.2"/><circle cx="5" cy="13" r="2.5"/><circle cx="13" cy="13" r="2.5"/>',
+  },
+  terminal: {
+    label: '终端',
+    path: '<rect x="2" y="3" width="14" height="12" rx="2"/><polyline points="5,7 7,9 5,11"/><line x1="8" y1="11" x2="13" y2="11"/>',
+  },
+  search: {
+    label: '搜索',
+    path: '<circle cx="7.5" cy="7.5" r="4"/><line x1="10.5" y1="10.5" x2="15" y2="15"/>',
+  },
+
+  // ── Actions ──
+  send: {
+    label: '发送',
+    path: '<polygon points="5,9 3,15 16,9 3,3"/>',
+  },
+  stop: {
+    label: '停止',
+    path: '<rect x="4" y="4" width="10" height="10" rx="1.5"/>',
+  },
+  alert: {
+    label: '警告',
+    path: '<polygon points="9,2 2,15 16,15"/><line x1="9" y1="7" x2="9" y2="11"/><circle cx="9" cy="13.5" r="0.7" fill="currentColor"/>',
+  },
+  'alert-circle': {
+    label: '警告',
+    path: '<circle cx="9" cy="9" r="6.5"/><line x1="9" y1="5" x2="9" y2="10"/><circle cx="9" cy="12.5" r="0.7" fill="currentColor"/>',
+  },
+  'check-circle': {
+    label: '通过',
+    path: '<circle cx="9" cy="9" r="6.5"/><polyline points="5.5,9 8,11.5 12.5,6.5"/>',
+  },
+  dot: {
+    label: '',
+    path: '<circle cx="9" cy="9" r="2.5" fill="currentColor"/>',
+  },
+  'blink-dot': {
+    label: '',
+    path: '<circle cx="9" cy="9" r="3" fill="currentColor" fill-opacity="0.35"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/>',
+  },
+
+  // ── Misc ──
+  plus: {
+    label: '添加',
+    path: '<line x1="9" y1="4" x2="9" y2="14"/><line x1="4" y1="9" x2="14" y2="9"/>',
+  },
+  save: {
+    label: '保存',
+    path: '<path d="M4 2 L4 14 L12 14 L14 12 L14 2 Z"/><line x1="7" y1="2" x2="7" y2="7"/><line x1="5" y1="7" x2="12" y2="7"/>',
+  },
+  reset: {
+    label: '重置',
+    path: '<path d="M3 5 A6 6 0 0 1 13 3"/><polyline points="3,5 7,5 7,1"/>',
+  },
+  brand: {
+    label: '',
+    path: '<circle cx="9" cy="9" r="2" fill="currentColor" fill-opacity="0.35"/><circle cx="9" cy="9" r="6"/><circle cx="9" cy="9" r="1" fill="currentColor"/><line x1="9" y1="3" x2="9" y2="7"/><line x1="9" y1="11" x2="9" y2="15"/><line x1="3" y1="9" x2="7" y2="9"/><line x1="11" y1="9" x2="15" y2="9"/>',
+  },
+};
+
+/**
+ * Render an icon to an HTML string.
+ * @param name Icon key from the icon set
+ * @param size In pixels (default: 15)
+ * @param cls Optional CSS class
+ */
+export function iconSvg(name: string, size = 15, cls = ''): string {
+  const def = icons[name];
+  if (!def) return `<span style="color:var(--fail)">?</span>`;
+  return `<svg class="hg-icon ${cls}" width="${size}" height="${size}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-label="${def.label}" role="img">${def.path}</svg>`;
+}
+
+/**
+ * Create a DOM element for an icon.
+ * @param name Icon key
+ * @param size In pixels
+ * @param color CSS color value (applied via stroke)
+ */
+export function iconEl(name: string, size = 15, color = ''): SVGSVGElement {
+  const def = icons[name];
+  if (!def) {
+    const span = document.createElement('span');
+    span.textContent = '?';
+    span.style.color = 'var(--fail)';
+    return span as unknown as SVGSVGElement;
+  }
+  const parser = new DOMParser();
+  const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" class="hg-icon" width="${size}" height="${size}" viewBox="0 0 18 18" fill="none" stroke="${color || 'currentColor'}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-label="${def.label}" role="img">${def.path}</svg>`;
+  const doc = parser.parseFromString(svgStr, 'image/svg+xml');
+  const svg = doc.documentElement as unknown as SVGSVGElement;
+  return svg;
+}
+
+/**
+ * Returns the SVG string for a given icon name — used in innerHTML contexts.
+ */
+export function iconHtml(name: string, size = 15): string {
+  return iconSvg(name, size);
+}
+
+export function hasIcon(name: string): boolean {
+  return name in icons;
+}

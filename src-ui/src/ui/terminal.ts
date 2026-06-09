@@ -41,12 +41,12 @@ export class TerminalPanel {
       right: '0',
       height: '260px',
       zIndex: '13',
-      background: 'rgba(4, 8, 16, 0.98)',
-      borderTop: '1px solid rgba(48, 60, 80, 0.5)',
+      background: 'var(--void-deep, rgba(4, 8, 16, 0.98))',
+      borderTop: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.5))',
       display: 'flex',
       flexDirection: 'column',
       transform: 'translateY(100%)',
-      transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+      transition: 'transform var(--glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1))',
     });
 
     // Tab (always visible)
@@ -63,7 +63,7 @@ export class TerminalPanel {
       alignItems: 'center',
       gap: '6px',
       padding: '4px 8px',
-      borderBottom: '1px solid rgba(48, 60, 80, 0.3)',
+      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
       flexShrink: '0',
     });
 
@@ -72,8 +72,8 @@ export class TerminalPanel {
     cwdLabel.textContent = '~';
     Object.assign(cwdLabel.style, {
       fontSize: '10px',
-      color: '#4a5568',
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      color: 'var(--text-muted, #4a5568)',
+      fontFamily: 'var(--font-mono, Cascadia Code, Fira Code, Consolas, monospace)',
       flex: '1',
     });
 
@@ -81,8 +81,8 @@ export class TerminalPanel {
     clearBtn.textContent = '清除';
     Object.assign(clearBtn.style, {
       fontSize: '10px', padding: '2px 8px',
-      background: 'rgba(30, 30, 40, 0.6)', color: '#8b949e',
-      border: '1px solid rgba(48, 60, 80, 0.4)', borderRadius: '4px',
+      background: 'rgba(18, 30, 48, 0.6)', color: 'var(--text-muted, #8b949e)',
+      border: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.4))', borderRadius: '4px',
       cursor: 'pointer',
     });
     clearBtn.addEventListener('click', () => this.term.clear());
@@ -107,15 +107,15 @@ export class TerminalPanel {
       display: 'flex',
       alignItems: 'center',
       gap: '0',
-      borderTop: '1px solid rgba(48, 60, 80, 0.3)',
+      borderTop: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
       flexShrink: '0',
     });
 
     const prompt = document.createElement('span');
     prompt.textContent = '>';
     Object.assign(prompt.style, {
-      color: '#7eb8ff',
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      color: 'var(--signal, #7eb8ff)',
+      fontFamily: 'var(--font-mono, Cascadia Code, Fira Code, Consolas, monospace)',
       fontSize: '13px',
       padding: '0 8px',
       fontWeight: '600',
@@ -128,10 +128,10 @@ export class TerminalPanel {
       height: '28px',
       padding: '0 8px',
       fontSize: '13px',
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontFamily: 'var(--font-mono, Cascadia Code, Fira Code, Consolas, monospace)',
       background: 'transparent',
       border: 'none',
-      color: '#c9d1d9',
+      color: 'var(--starlight-dim, #c9d1d9)',
       outline: 'none',
     });
     this.inputLine.placeholder = '输入命令… (Enter 执行)';

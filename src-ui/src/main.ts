@@ -17,6 +17,7 @@ import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from '.
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
+import { iconSvg } from './ui/icons';
 
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
@@ -110,14 +111,14 @@ async function openProject(path?: string): Promise<void> {
 
 function setLoading(active: boolean, folder?: string): void {
   btnOpen.disabled = active;
-  btnOpen.textContent = active ? '⏳ 分析中...' : '📂 打开文件夹';
+  btnOpen.innerHTML = active ? `${iconSvg('dot')} 分析中...` : `${iconSvg('folder-open')} 打开文件夹`;
   if (active) statusText.textContent = `正在分析 ${folder || ''}...`;
 }
 
 function showGraphView(path: string): void {
   currentPath = path;
   welcome.classList.add('hidden'); graphEl.classList.remove('hidden');
-  btnOpen.disabled = false; btnOpen.textContent = '📂 打开文件夹';
+  btnOpen.disabled = false; btnOpen.innerHTML = `${iconSvg('folder-open')} 打开文件夹`;
   tbPath.textContent = path;
   timelinePanel.setProjectPath(path);
   TerminalPanel.get().setCwd(path);
@@ -214,7 +215,9 @@ async function runCheck(): Promise<void> {
     const json = await invoke<string>('hologram_run_check', { path: currentPath });
     const result: CheckResult = JSON.parse(json);
     checkPanel.update(result);
-    btnCheck.textContent = result.passed ? '📋 简报' : '⚠️ 简报';
+    btnCheck.innerHTML = result.passed
+      ? `${iconSvg('check-circle')} 简报`
+      : `${iconSvg('alert')} 简报`;
   } catch (err: any) {
     console.error('Check failed:', err);
   } finally {
@@ -228,9 +231,23 @@ async function runCheck(): Promise<void> {
   }
 }
 
+// ── Icon setup ──
+
+function setupIcons(): void {
+  document.querySelectorAll('[data-icon]').forEach(el => {
+    const iconName = (el as HTMLElement).dataset['icon']!;
+    const svgStr = iconSvg(iconName);
+    // Prepend icon before existing text
+    el.insertAdjacentHTML('afterbegin', svgStr);
+    // Keep text for accessibility
+    (el as HTMLElement).classList.add('toolbar-btn');
+  });
+}
+
 // ── Init ──
 
 async function init(): Promise<void> {
+  setupIcons();
   setupModeSwitch();
 
   // Chat panel
@@ -268,7 +285,7 @@ async function init(): Promise<void> {
     if (diffActive) {
       starGraph.clearDiff();
       diffActive = false;
-      btnDiff.textContent = '📊 变更';
+      btnDiff.innerHTML = `${iconSvg('diff')} 变更`;
       statusText.textContent = '已清除变更着色';
     } else {
       if (!currentPath) { statusText.textContent = '请先打开项目'; return; }
@@ -283,8 +300,8 @@ async function init(): Promise<void> {
         } else {
           starGraph.showDiff(diff);
           diffActive = true;
-          btnDiff.textContent = '📊 清除';
-          statusText.textContent = `变更: +${diff.added_nodes?.length || 0}/-${diff.removed_nodes?.length || 0}/~${diff.modified_nodes?.length || 0}`;
+          btnDiff.innerHTML = `${iconSvg('diff')} 清除`;
+          statusText.textContent = `+${diff.added_nodes?.length || 0} / -${diff.removed_nodes?.length || 0} / ~${diff.modified_nodes?.length || 0}`;
         }
       } catch (err: any) {
         statusText.textContent = `变更分析失败: ${err}`;
@@ -348,7 +365,9 @@ async function init(): Promise<void> {
     }
   });
   function updateFoldBtn(): void {
-    btnFold.textContent = starGraph.isFolded ? '🌀 展开' : '🌀 折叠';
+    btnFold.innerHTML = starGraph.isFolded
+      ? `${iconSvg('fold')} 展开`
+      : `${iconSvg('fold')} 折叠`;
   }
 
   // Live updates from file watcher
@@ -360,12 +379,12 @@ async function init(): Promise<void> {
         currentGraphData = graph;
         starGraph.render(graph);
         // Clear diff on update
-        if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.textContent = '📊 变更'; }
+        if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
         setupAgent();
         runCheck();
         timelinePanel.setProjectPath(currentPath);
-        statusText.textContent = `🔄 已更新 (${nodeCount} 节点)`;
-        setTimeout(() => { if (statusText.textContent?.startsWith('🔄')) statusText.textContent = '就绪'; }, 3000);
+        statusText.textContent = `已更新 (${nodeCount} 节点)`;
+        setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
       }
     } catch { /* ignore */ }
   });

@@ -601,7 +601,7 @@ export class StarGraph {
       <div class="pie-item" data-action="info"><span class="pie-icon">📋</span><span>信息</span></div>`;
     this.pieMenu.style.cssText =
       'position:absolute;z-index:20;pointer-events:auto;display:none;' +
-      'background:rgba(6,12,24,0.95);border:1px solid rgba(88,120,180,0.3);' +
+      'background:var(--panel-bg,rgba(6,12,24,0.95));border:1px solid var(--panel-edge,rgba(88,120,180,0.3));' +
       'border-radius:8px;padding:4px;box-shadow:0 8px 32px rgba(0,0,0,0.5);' +
       'flex-direction:column;gap:2px;min-width:80px;';
     // Pie item hover style
@@ -609,10 +609,10 @@ export class StarGraph {
     style.textContent = `
       #pie-menu .pie-item {
         display:flex;align-items:center;gap:8px;padding:6px 12px;
-        font-size:13px;color:#c9d1d9;border-radius:5px;cursor:pointer;
+        font-size:13px;color:var(--starlight-dim,#c9d1d9);border-radius:5px;cursor:pointer;
         transition:background 0.1s;white-space:nowrap;
       }
-      #pie-menu .pie-item:hover { background:rgba(88,120,180,0.25);color:#e6edf3; }
+      #pie-menu .pie-item:hover { background:rgba(80,140,240,0.25);color:var(--starlight,#e6edf3); }
       #pie-menu .pie-icon { font-size:14px;width:20px;text-align:center; }
     `;
     this.pieMenu.appendChild(style);
@@ -1457,7 +1457,7 @@ export class StarGraph {
       // Extract a short name from the label (first part before /)
       const shortName = gm.label.split('/')[0].replace(/^test_/, '').replace(/_/g, ' ');
       div.textContent = shortName.length > 24 ? shortName.slice(0, 22) + '…' : shortName;
-      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size:10px;color:rgba(200,200,220,0.55);text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
+      div.style.cssText = 'position:absolute;z-index:3;pointer-events:none;font-size:10px;color:var(--starlight-dim,rgba(200,200,220,0.55));text-shadow:0 0 6px rgba(0,0,0,0.7);white-space:nowrap;transform:translate(-50%,-50%);';
       this.container.appendChild(div);
       div.dataset['galaxyIndex'] = String(gi); div.dataset['galaxyId'] = gm.id;
       this.galaxyLabelDivs.push(div);

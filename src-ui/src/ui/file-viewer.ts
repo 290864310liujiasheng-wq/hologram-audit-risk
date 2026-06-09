@@ -64,10 +64,10 @@ export class FileViewer {
       height: `${this.state.height}px`,
       left: `${this.state.x}px`,
       top: `${this.state.y}px`,
-      background: 'rgba(6, 12, 24, 0.97)',
-      backdropFilter: 'blur(14px)',
-      WebkitBackdropFilter: 'blur(14px)',
-      border: '1px solid rgba(48, 60, 80, 0.5)',
+      background: 'var(--panel-bg, rgba(6, 12, 24, 0.97))',
+      backdropFilter: 'var(--blur, blur(14px))',
+      WebkitBackdropFilter: 'var(--blur, blur(14px))',
+      border: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.5))',
       borderRadius: '8px',
       boxShadow: '0 12px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(88,120,180,0.08) inset',
       flexDirection: 'column',
@@ -83,23 +83,23 @@ export class FileViewer {
       alignItems: 'center',
       gap: '8px',
       padding: '6px 10px',
-      borderBottom: '1px solid rgba(48, 60, 80, 0.4)',
+      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.4))',
       cursor: 'move',
       userSelect: 'none',
       flexShrink: '0',
-      background: 'rgba(14, 22, 38, 0.9)',
+      background: 'var(--panel-bg, rgba(14, 22, 38, 0.9))',
     });
 
     this.title = document.createElement('span');
     Object.assign(this.title.style, {
       fontSize: '12px',
       fontWeight: '600',
-      color: '#7eb8ff',
+      color: 'var(--signal, #7eb8ff)',
       flex: '1',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontFamily: 'var(--font-mono, Cascadia Code, Fira Code, Consolas, monospace)',
     });
     this.title.textContent = '文件查看器';
 
@@ -107,8 +107,8 @@ export class FileViewer {
     pathLabel.className = 'fv-path';
     Object.assign(pathLabel.style, {
       fontSize: '10px',
-      color: '#4a5568',
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      color: 'var(--text-muted, #4a5568)',
+      fontFamily: 'var(--font-mono, Cascadia Code, Fira Code, Consolas, monospace)',
       overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
@@ -120,17 +120,17 @@ export class FileViewer {
     closeBtn.textContent = '✕';
     Object.assign(closeBtn.style, {
       width: '22px', height: '22px', padding: '0',
-      background: 'none', border: 'none', color: '#4a5568',
+      background: 'none', border: 'none', color: 'var(--text-muted, #4a5568)',
       cursor: 'pointer', fontSize: '14px', borderRadius: '4px',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      transition: 'color 0.12s, background 0.12s',
+      transition: 'color var(--snap, 0.12s), background var(--snap, 0.12s)',
     });
     closeBtn.addEventListener('mouseenter', () => {
-      closeBtn.style.color = '#c9d1d9';
+      closeBtn.style.color = 'var(--starlight-dim, #c9d1d9)';
       closeBtn.style.background = 'rgba(255,255,255,0.05)';
     });
     closeBtn.addEventListener('mouseleave', () => {
-      closeBtn.style.color = '#4a5568';
+      closeBtn.style.color = 'var(--text-muted, #4a5568)';
       closeBtn.style.background = 'none';
     });
     closeBtn.addEventListener('click', () => this.close());
@@ -228,7 +228,7 @@ export class FileViewer {
     if (pathLabel) pathLabel.textContent = filePath;
 
     this.pre.textContent = '⏳ 加载中...';
-    this.pre.style.color = '#4a5568';
+    this.pre.style.color = 'var(--text-muted, #4a5568)';
     this.el.style.display = 'flex';
 
     try {
@@ -236,12 +236,12 @@ export class FileViewer {
       this.state.content = content;
       this.state.loading = false;
       this.pre.textContent = content;
-      this.pre.style.color = '#c9d1d9';
+      this.pre.style.color = 'var(--starlight-dim, #c9d1d9)';
     } catch (err: any) {
       this.state.error = String(err);
       this.state.loading = false;
       this.pre.textContent = `❌ 读取失败: ${err}`;
-      this.pre.style.color = '#e05555';
+      this.pre.style.color = 'var(--fail, #e05555)';
     }
   }
 

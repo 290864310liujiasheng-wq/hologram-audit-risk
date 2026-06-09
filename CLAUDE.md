@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**先读 [PROJECT.md](PROJECT.md) — 那是项目施工图。**
+**先读 D:\HoloGramHG\CSS_MIGRATION.md — 那是项目施工图。**
 
 ## 用户
 
