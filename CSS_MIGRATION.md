@@ -475,6 +475,6 @@
 - [x] 面板反复开/关无异常 — toggle ×2 无 JS 错误
 - [x] Console 零 CSS 错误 — 48 个 `var()` 全部解析成功，无 Undefined Variable
 - [x] TypeScript 编译无错误 — `tsc --noEmit` 干净通过
-- [ ] 提交
+- [x] 提交
 
 > **2026-06-10 验证完成**：Playwright + Chrome headless 驱动，全 4 面板 DOM 样式检查通过。
