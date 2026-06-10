@@ -207,6 +207,14 @@ const icons: Record<string, IconDef> = {
     label: '代码',
     path: '<polyline points="6,5 2,9 6,13"/><polyline points="12,5 16,9 12,13"/><line x1="9" y1="13" x2="11" y2="3"/>',
   },
+  copy: {
+    label: '复制',
+    path: '<rect x="5" y="5" width="8" height="10" rx="1"/><polyline points="9,3 13,3 13,12 11,12"/>',
+  },
+  regenerate: {
+    label: '重新生成',
+    path: '<path d="M4 4 A6 6 0 0 1 13 2"/><polyline points="4,4 7.5,4 7.5,1"/><circle cx="13" cy="12" r="4"/><polyline points="10.5,12 12.5,10 14.5,12"/>',
+  },
 };
 
 /**

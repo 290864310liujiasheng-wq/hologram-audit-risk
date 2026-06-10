@@ -10,6 +10,7 @@ import { FileViewer } from './ui/file-viewer';
 import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
+import { SettingsPanel } from './ui/settings-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
@@ -55,6 +56,16 @@ let diffActive = false;
 
 function setupModeSwitch(): void {
   const buttons = document.querySelectorAll<HTMLButtonElement>('#mode-switch .mode-btn');
+
+  // Restore saved view mode on startup
+  const savedMode = loadSettings().display?.defaultViewMode || 'standard';
+  if (savedMode !== 'standard') {
+    currentMode = savedMode;
+    buttons.forEach(b => {
+      b.classList.toggle('active', (b as HTMLElement).dataset['mode'] === savedMode);
+    });
+  }
+
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset['mode'] as VisualMode;
@@ -62,6 +73,11 @@ function setupModeSwitch(): void {
       currentMode = mode;
       buttons.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+
+      // Persist view mode preference
+      const settings = loadSettings();
+      settings.display.defaultViewMode = mode;
+      saveSettings(settings);
 
       // Destroy old, create new with same data
       starGraph.destroy();
@@ -184,7 +200,13 @@ function setupAgent(): void {
 
   const pricing = defaultPricing(active.kind, active.model);
   const systemPrompt = buildSystemPrompt();
-  agent = new Agent(prov, registry, systemPrompt, { pricing }, chatPanel.sink);
+  const agentOpts = settings.agent || {};
+  agent = new Agent(prov, registry, systemPrompt, {
+    pricing,
+    temperature: agentOpts.temperature,
+    maxSteps: agentOpts.maxSteps,
+    contextWindow: agentOpts.contextWindow,
+  }, chatPanel.sink);
   chatPanel.setAgent(agent);
 }
 
@@ -464,6 +486,14 @@ async function init(): Promise<void> {
     updateTabs();
   });
 
+  // ── Settings button ──
+  const settingsPanel = SettingsPanel.get();
+  settingsPanel.setOnSave(() => setupAgent());
+  const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
+  btnSettings.addEventListener('click', () => {
+    settingsPanel.toggle();
+  });
+
   // Ctrl+L → open chat
   window.addEventListener('keydown', (e) => {
     if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
@@ -483,6 +513,11 @@ async function init(): Promise<void> {
       closeBottomSiblings('terminal');
       TerminalPanel.get().toggle();
       updateTabs();
+    }
+    // Ctrl+, → settings
+    if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      settingsPanel.toggle();
     }
     // Ctrl+E → file explorer toggle
     if ((e.key === 'e' || e.key === 'E') && (e.ctrlKey || e.metaKey)) {

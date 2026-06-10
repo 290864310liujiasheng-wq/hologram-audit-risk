@@ -10,10 +10,22 @@ export interface ProviderSettings {
   thinking?: string; // Anthropic extended thinking
 }
 
+export interface AgentSettings {
+  temperature: number;
+  maxSteps: number;
+  contextWindow: number;
+}
+
+export interface DisplaySettings {
+  defaultViewMode: 'minimal' | 'standard' | 'full';
+}
+
 export interface AppSettings {
   activeProvider: string; // provider name
   providers: ProviderSettings[];
   projectPath: string;
+  agent: AgentSettings;
+  display: DisplaySettings;
 }
 
 const STORAGE_KEY = 'hologram_settings';
@@ -38,6 +50,14 @@ const DEFAULTS: AppSettings = {
     },
   ],
   projectPath: '.',
+  agent: {
+    temperature: 0.7,
+    maxSteps: 10,
+    contextWindow: 0,
+  },
+  display: {
+    defaultViewMode: 'standard',
+  },
 };
 
 export function loadSettings(): AppSettings {

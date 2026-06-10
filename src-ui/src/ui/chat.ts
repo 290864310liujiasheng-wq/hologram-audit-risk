@@ -8,6 +8,9 @@ import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { visualizeAgentTool } from './agent-visualizer';
 import { bus } from './events';
+import { loadSettings } from '../settings';
+import { marked } from 'marked';
+import hljs from 'highlight.js';
 
 // ── Constants ──
 
@@ -27,6 +30,7 @@ export class ChatPanel {
   private inputArea!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
+  private footerEl!: HTMLElement;
 
   // Streaming state
   private agent: Agent | null = null;
@@ -42,6 +46,7 @@ export class ChatPanel {
   private pendingToolCards = new Map<string, HTMLElement>(); // id → card element
 
   private openState = false;
+  private lastUsageText = '';
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -59,6 +64,7 @@ export class ChatPanel {
   open(): void {
     this.openState = true;
     this.panel.classList.add('chat-open');
+    this.updateFooter();
     setTimeout(() => this.inputArea.focus(), 200);
     bus.emit('panel:toggle');
   }
@@ -162,6 +168,11 @@ export class ChatPanel {
 
     inputWrap.append(this.inputArea, this.sendBtn, this.stopBtn);
     this.panel.appendChild(inputWrap);
+
+    // Input footer — model badge, slash commands, usage
+    this.footerEl = document.createElement('div');
+    this.footerEl.className = 'chat-footer';
+    this.panel.appendChild(this.footerEl);
 
     this.container.appendChild(this.panel);
   }
@@ -278,7 +289,10 @@ export class ChatPanel {
         break;
 
       case EventKind.Message:
-        if (ev.text) this.appendText(ev.text, true);
+        if (ev.text) {
+          // Markdown 渲染：流式阶段用 textContent 积累的纯文本，完成后一次性渲染
+          this.renderMarkdownText(ev.text);
+        }
         this.flushReasoning();
         this.flushText();
         this.linkifyNodeNames();
@@ -342,7 +356,7 @@ export class ChatPanel {
     this.ensureAssistantBubble();
     if (!this.currentTextEl) {
       this.currentTextEl = document.createElement('div');
-      this.currentTextEl.className = 'msg-text';
+      this.currentTextEl.className = 'msg-text streaming';
       this.currentBubble!.appendChild(this.currentTextEl);
     }
     this.currentTextEl.textContent += text;
@@ -354,8 +368,67 @@ export class ChatPanel {
   }
 
   private flushText(): void {
+    // 移除流式光标
+    if (this.currentTextEl) {
+      this.currentTextEl.classList.remove('streaming');
+    }
+    // 添加消息操作按钮（复制等）
+    if (this.currentBubble) {
+      this.addMessageActions(this.currentBubble);
+    }
     this.currentTextEl = null;
     this.currentBubble = null;
+  }
+
+  // ── Markdown rendering (final only, not during streaming) ──
+
+  private renderMarkdownText(text: string): void {
+    this.ensureAssistantBubble();
+    // Replace streaming text element with markdown-rendered content
+    if (this.currentTextEl) {
+      this.currentTextEl.remove();
+    }
+    const el = document.createElement('div');
+    el.className = 'msg-text msg-markdown';
+    // Render markdown
+    const html = marked.parse(text) as string;
+    el.innerHTML = html;
+    // Syntax-highlight code blocks
+    el.querySelectorAll('pre code').forEach((block) => {
+      hljs.highlightElement(block as HTMLElement);
+    });
+    this.currentBubble!.appendChild(el);
+    this.currentTextEl = el;
+    this.scrollBottom();
+  }
+
+  // ── Message actions (copy button) ──
+
+  private addMessageActions(bubble: HTMLElement): void {
+    // Only for assistant bubbles
+    if (!bubble.classList.contains('assistant')) return;
+    const textEl = bubble.querySelector('.msg-text');
+    if (!textEl) return;
+
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-action-btn';
+    copyBtn.innerHTML = iconHtml('copy', 12);
+    copyBtn.title = '复制回复';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const txt = textEl.textContent || '';
+      navigator.clipboard.writeText(txt).then(() => {
+        copyBtn.innerHTML = iconHtml('check-circle', 12);
+        setTimeout(() => { copyBtn.innerHTML = iconHtml('copy', 12); }, 1500);
+      }).catch(() => {});
+    });
+
+    actions.append(copyBtn);
+    bubble.appendChild(actions);
   }
 
   // ── Tool cards ──
@@ -470,9 +543,11 @@ export class ChatPanel {
     if (cached > 0) label += ` · ${cached >= 1000 ? (cached / 1000).toFixed(1) + 'k' : cached} cache`;
     if (cost) label += ` · ${cost}`;
 
+    this.lastUsageText = label;
     pill.textContent = label;
     this.currentBubble!.appendChild(pill);
     this.scrollBottom();
+    this.updateFooter();
   }
 
   // ── Notice ──
@@ -483,6 +558,51 @@ export class ChatPanel {
     el.textContent = text;
     this.msgList.appendChild(el);
     this.scrollBottom();
+  }
+
+  // ── Footer — model badge, slash commands, usage ──
+
+  private updateFooter(): void {
+    const settings = loadSettings();
+    const active = settings.providers.find((p) => p.name === settings.activeProvider) || settings.providers[0];
+
+    // Model badge
+    let modelLabel = active?.model || 'unknown';
+    if (modelLabel.length > 18) modelLabel = modelLabel.slice(0, 17) + '…';
+
+    const thinking = active?.thinking ? ' · 思考' : '';
+    const usageStr = this.lastUsageText ? ` · ${this.lastUsageText}` : '';
+
+    this.footerEl.innerHTML = `
+      <div class="chat-footer-left">
+        <span class="chat-model-badge" title="${active?.name} / ${active?.model}">
+          ${iconHtml('agent', 10)} ${modelLabel}${thinking}
+        </span>
+        <span class="chat-usage-badge">${usageStr}</span>
+      </div>
+      <div class="chat-footer-right">
+        <button class="chat-slash-btn" data-text="哪些模块最脆弱？" title="查找脆弱模块">${iconHtml('alert', 9)} /fragile</button>
+        <button class="chat-slash-btn" data-text="检查循环依赖" title="检查循环依赖">${iconHtml('refresh', 9)} /cycles</button>
+        <button class="chat-slash-btn" data-text="分析最近改动的影响" title="影响分析">${iconHtml('blast', 9)} /impact</button>
+        <button class="chat-slash-btn" data-text="" data-placeholder="追踪从 " title="依赖路径">${iconHtml('link', 9)} /path</button>
+      </div>`;
+
+    // Wire slash buttons
+    this.footerEl.querySelectorAll('.chat-slash-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const el = btn as HTMLElement;
+        const text = el.dataset['text'] || '';
+        const placeholder = el.dataset['placeholder'] || '';
+        this.inputArea.value = text;
+        if (placeholder && !text) {
+          this.inputArea.value = placeholder;
+          this.inputArea.setSelectionRange(placeholder.length, placeholder.length);
+        }
+        this.inputArea.style.height = 'auto';
+        this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 120) + 'px';
+        this.inputArea.focus();
+      });
+    });
   }
 
   // ── Helpers ──
@@ -539,30 +659,39 @@ export class ChatPanel {
     const graph = this.starGraph;
     if (!graph) return;
 
-    const text = el.textContent || '';
-    // Find identifiers that look like code symbols (snake_case, CamelCase, dot.paths)
-    const tokens = extractCodeTokens(text);
-    if (tokens.length === 0) return;
+    // Use TreeWalker to only touch text nodes — safe for markdown HTML
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const textNodes: Text[] = [];
+    while (walker.nextNode()) {
+      textNodes.push(walker.currentNode as Text);
+    }
 
-    const html = replaceTokens(text, tokens, (token) => {
-      return `<span class="node-link" data-nodename="${escapeAttr(token)}" title="点击定位: ${escapeAttr(token)}">${token}</span>`;
-    });
+    for (const node of textNodes) {
+      const text = node.textContent || '';
+      const tokens = extractCodeTokens(text);
+      if (tokens.length === 0) continue;
 
-    if (html !== text) {
-      el.innerHTML = html;
-      // Attach click handlers
-      el.querySelectorAll('.node-link').forEach((link) => {
-        link.addEventListener('click', (e) => {
+      const fragment = linkifyTextNode(text, tokens, (token) => {
+        const span = document.createElement('span');
+        span.className = 'node-link';
+        span.dataset['nodename'] = token;
+        span.title = `点击定位: ${token}`;
+        span.textContent = token;
+        span.addEventListener('click', (e) => {
           e.stopPropagation();
-          const name = (link as HTMLElement).dataset['nodename'] || '';
-          if (name && graph) {
-            const found = graph.focusNode(name);
+          if (graph) {
+            const found = graph.focusNode(token);
             if (!found) {
-              this.addNotice(`未在图中找到 "${name}"`, 'info');
+              this.addNotice(`未在图中找到 "${token}"`, 'info');
             }
           }
         });
+        return span;
       });
+
+      if (fragment) {
+        node.parentNode!.replaceChild(fragment, node);
+      }
     }
   }
 
@@ -621,15 +750,16 @@ function extractCodeTokens(text: string): string[] {
   return tokens.slice(0, 30); // cap to avoid DOM bloat
 }
 
-function replaceTokens(
+/** Build a DocumentFragment from a text node, wrapping code tokens in link spans. */
+function linkifyTextNode(
   text: string,
   tokens: string[],
-  wrap: (token: string) => string,
-): string {
-  let result = '';
+  createLink: (token: string) => HTMLElement,
+): DocumentFragment | null {
+  const fragment = document.createDocumentFragment();
   let pos = 0;
+  let changed = false;
 
-  // Find the earliest occurrence of any token at each position
   while (pos < text.length) {
     let bestIdx = text.length;
     let bestToken = '';
@@ -641,16 +771,15 @@ function replaceTokens(
       }
     }
     if (!bestToken) {
-      result += escapeHtml(text.slice(pos));
+      fragment.appendChild(document.createTextNode(text.slice(pos)));
       break;
     }
-    result += escapeHtml(text.slice(pos, bestIdx));
-    result += wrap(bestToken);
+    if (bestIdx > pos) {
+      fragment.appendChild(document.createTextNode(text.slice(pos, bestIdx)));
+    }
+    fragment.appendChild(createLink(bestToken));
     pos = bestIdx + bestToken.length;
+    changed = true;
   }
-  return result;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return changed ? fragment : null;
 }
