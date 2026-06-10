@@ -711,8 +711,17 @@ async function init(): Promise<void> {
     }
   });
 
+  /** 焦点在输入框/文本区时不触发全局快捷键。 */
+  const isEditing = () => {
+    const el = document.activeElement;
+    if (!el) return false;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
+  };
+
   // Ctrl+L → open chat
   window.addEventListener('keydown', (e) => {
+    // 在输入框/文本区中打字时不触发全局快捷键
+    if (isEditing()) return;
     if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
@@ -720,7 +729,7 @@ async function init(): Promise<void> {
       updateTabs();
     }
     // Ctrl+D → diff toggle
-    if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey) && document.activeElement?.tagName !== 'INPUT') {
+    if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       btnDiff.click();
     }
@@ -771,7 +780,8 @@ async function init(): Promise<void> {
   // Fold toggle
   btnFold.addEventListener('click', () => { starGraph.toggleFold(); updateFoldBtn(); });
   window.addEventListener('keydown', (e) => {
-    if ((e.key === 'f' || e.key === 'F') && document.activeElement?.tagName !== 'INPUT') {
+    if (isEditing()) return;
+    if ((e.key === 'f' || e.key === 'F')) {
       starGraph.toggleFold(); updateFoldBtn();
     }
     if (e.key === 'Escape') {
