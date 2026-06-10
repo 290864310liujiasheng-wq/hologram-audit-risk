@@ -139,6 +139,12 @@ export class TimelinePanel {
     }
   }
 
+  isOpen(): boolean { return this.openState; }
+
+  close(): void {
+    if (this.openState) this.toggle();
+  }
+
   private render(): void {
     if (this.events.length === 0) {
       this.content.innerHTML = `<div class="tl-empty">暂无时间轴事件。开始编辑代码后，事件会自动记录。</div>`;

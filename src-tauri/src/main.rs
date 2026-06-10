@@ -12,6 +12,27 @@ use std::thread;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
+// Windows: hide console windows for Python subprocesses
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// CREATE_NO_WINDOW — suppress console popup on Windows
+#[cfg(windows)]
+const NO_WINDOW: u32 = 0x08000000;
+
+/// Build a Command that won't flash a console window on Windows
+/// and forces UTF-8 output from Python subprocesses.
+fn silent_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(NO_WINDOW);
+    }
+    cmd.env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1");
+    cmd
+}
+
 // ═══════════════════════════════════════════════════════
 // Python helpers
 // ═══════════════════════════════════════════════════════
@@ -25,19 +46,19 @@ fn python() -> String {
             return p;
         }
     }
-    // 2) Project-local venv (sibling to project root)
-    let venv_python = project_root()
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join(".venv")
-        .join("Scripts")
-        .join("python.exe");
-    if venv_python.exists() {
-        return venv_python.to_string_lossy().to_string();
+    // 2) Project-local venv (check both Windows and Unix layout)
+    let venv_dir = project_root().join(".venv");
+    for sub in &["Scripts", "bin"] {
+        let py = venv_dir.join(sub).join("python.exe");
+        if py.exists() { return py.to_string_lossy().to_string(); }
+        let py3 = venv_dir.join(sub).join("python3");
+        if py3.exists() { return py3.to_string_lossy().to_string(); }
+        let py_n = venv_dir.join(sub).join("python");
+        if py_n.exists() { return py_n.to_string_lossy().to_string(); }
     }
     // 3) System PATH fallbacks
     for name in &["python3", "python"] {
-        if std::process::Command::new(name)
+        if silent_command(name)
             .arg("--version")
             .output()
             .is_ok()
@@ -65,7 +86,7 @@ fn default_graph() -> String {
 /// Run a Python hologram CLI command and capture combined stdout+stderr.
 fn run_hologram(args: &[&str]) -> Result<String, String> {
     let root = project_root();
-    let output = Command::new(python())
+    let output = silent_command(&python())
         .current_dir(&root)
         .args(["-m", "src_python"])
         .args(args)
@@ -102,7 +123,7 @@ fn run_hologram(args: &[&str]) -> Result<String, String> {
 /// Run inline Python code and return output.
 fn run_python_code(code: &str) -> Result<String, String> {
     let root = project_root();
-    let output = Command::new(python())
+    let output = silent_command(&python())
         .current_dir(&root)
         .args(["-c", code])
         .output()
@@ -129,7 +150,9 @@ struct WatcherState {
 /// Collect mtimes of all Python/TypeScript/JS files under root.
 fn collect_file_mtimes(root: &str) -> HashMap<String, u64> {
     let mut map = HashMap::new();
-    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs"];
+    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs",
+                 ".go", ".rs", ".java", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+                 ".rb", ".cs", ".kt", ".kts", ".swift", ".php", ".lua"];
     for entry in walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -168,7 +191,7 @@ fn run_incremental_analysis(project_path: &str, changed_files: &[String]) -> Opt
         }
     }
 
-    let output = Command::new(python())
+    let output = silent_command(&python())
         .current_dir(&root)
         .args(&args)
         .output()
@@ -442,13 +465,13 @@ async fn hologram_run_health(path: String, days: Option<i32>) -> Result<String, 
 async fn exec_command(command: String, cwd: Option<String>) -> Result<String, String> {
     let dir = cwd.unwrap_or_else(|| project_root().to_string_lossy().to_string());
     let output = if cfg!(target_os = "windows") {
-        Command::new("cmd")
+        silent_command("cmd")
             .args(["/c", &command])
             .current_dir(&dir)
             .output()
             .map_err(|e| format!("无法执行命令: {e}"))?
     } else {
-        Command::new("sh")
+        silent_command("sh")
             .args(["-c", &command])
             .current_dir(&dir)
             .output()
@@ -469,10 +492,87 @@ async fn exec_command(command: String, cwd: Option<String>) -> Result<String, St
 // P4: File viewer — read file content for floating editor
 // ═══════════════════════════════════════════════════════
 
+#[derive(serde::Serialize)]
+struct DirEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    children: Option<Vec<DirEntry>>,
+}
+
+/// Recursively list directory contents (depth-limited to avoid huge trees).
+fn list_dir_recursive(root: &std::path::Path, depth: u32) -> Vec<DirEntry> {
+    let mut entries: Vec<DirEntry> = Vec::new();
+    if depth == 0 { return entries; }
+
+    // Directories to skip
+    let skip_dirs: std::collections::HashSet<&str> = [
+        ".git", ".hg", ".svn", "__pycache__", ".pytest_cache", ".mypy_cache",
+        "node_modules", ".venv", "venv", ".hologram", "dist", "build", "target",
+        ".next", ".nuxt", ".cache", "egg-info", ".eggs",
+    ].iter().cloned().collect();
+
+    let readdir = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(_) => return entries,
+    };
+
+    for entry in readdir.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files and dirs (except .env, .gitignore etc.)
+        if name.starts_with('.') && name != ".env" && name != ".gitignore" && name != ".editorconfig" {
+            continue;
+        }
+
+        let is_dir = path.is_dir();
+        if is_dir && skip_dirs.contains(name.as_str()) {
+            continue;
+        }
+
+        let children = if is_dir {
+            Some(list_dir_recursive(&path, depth - 1))
+        } else {
+            None
+        };
+
+        entries.push(DirEntry {
+            name,
+            path: path.to_string_lossy().to_string(),
+            is_dir,
+            children,
+        });
+    }
+
+    // Sort: dirs first, then alphabetically
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    entries
+}
+
+#[tauri::command]
+async fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
+    let root = std::path::PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err(format!("不是有效目录: {}", path));
+    }
+    Ok(list_dir_recursive(&root, 4))
+}
+
 #[tauri::command]
 async fn read_file_content(file_path: String) -> Result<String, String> {
     std::fs::read_to_string(&file_path)
         .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))
+}
+
+#[tauri::command]
+async fn write_file_content(file_path: String, content: String) -> Result<(), String> {
+    std::fs::write(&file_path, &content)
+        .map_err(|e| format!("无法写入文件 {}: {}", file_path, e))
 }
 
 // ═══════════════════════════════════════════════════════
@@ -550,7 +650,9 @@ fn is_graph_fresh(graph_path: &str, project_path: &str) -> bool {
     };
 
     // If any source file is newer than the graph, it's stale
-    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs"];
+    let exts = [".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs",
+                 ".go", ".rs", ".java", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+                 ".rb", ".cs", ".kt", ".kts", ".swift", ".php", ".lua"];
     for entry in walkdir::WalkDir::new(project_path)
         .follow_links(false)
         .into_iter()
@@ -600,7 +702,7 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
     let root = project_root();
     let python = python();
 
-    let output = Command::new(&python)
+    let output = silent_command(&python)
         .current_dir(&root)
         .args(["-m", "src_python", &path, "--format", "json"])
         .output()
@@ -749,7 +851,9 @@ fn main() {
             hologram_run_health,
             start_watching,
             stop_watching,
+            list_directory,
             read_file_content,
+            write_file_content,
             read_constraints,
             write_constraints,
             exec_command,

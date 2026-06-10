@@ -23,17 +23,22 @@ from typing import Dict, List, Optional, Set
 
 
 def _safe_print(text: str, **kwargs) -> None:
-    """Print that handles Windows GBK encoding gracefully."""
+    """Print UTF-8 safely — handles both terminal (GBK fallback) and pipe (Tauri)."""
     try:
         print(text, **kwargs)
     except UnicodeEncodeError:
-        # Replace characters that can't be encoded in the terminal codepage
-        safe = text.encode(sys.stdout.encoding or 'ascii', errors='replace').decode(
-            sys.stdout.encoding or 'ascii', errors='replace')
-        print(safe, **kwargs)
+        # Pipe mode (Tauri): force UTF-8
+        try:
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            print(text, **kwargs)
+        except Exception:
+            # Last resort: strip non-ASCII
+            safe = text.encode('ascii', errors='replace').decode('ascii')
+            print(safe, **kwargs)
 
 from .adapters import AdapterRegistry, PythonAdapter
 from .adapters.typescript_adapter import TypeScriptAdapter
+from .adapters.tree_sitter_adapter import TreeSitterAdapter
 from .core.graph import Graph
 from .core.merger import GraphMerger, CrossFileResolver
 from .core.community import CommunityDetector
@@ -71,7 +76,8 @@ def cmd_analyze(args) -> int:
 
     print(f"Analyzing: {root}")
     registry = AdapterRegistry()
-    registry.register(PythonAdapter())
+    registry.register(TreeSitterAdapter())  # fallback: 通用 tree-sitter（31+ 语言）
+    registry.register(PythonAdapter())      # Python 专用适配器（更精确）
     registry.register(TypeScriptAdapter())
 
     runner = PipelineRunner(registry)
@@ -376,9 +382,55 @@ def cmd_check(args) -> int:
 
     正常流（99%）：只输出一行 "✅ 通过"
     例外流（1%）：展开为变更摘要面板
+
+    快路径：如果源文件未变更且有缓存的 check 结果，直接返回。
     """
+    import time
     root = os.path.abspath(args.root)
     graph_path = args.graph or os.path.join(root, "hologram_graph.json")
+    cache_path = os.path.join(root, ".hologram", "last_check.json")
+    force = getattr(args, 'force', False)
+
+    # ── 快路径：源文件未变更 → 返回缓存结果 ──
+    if not force and os.path.exists(graph_path) and os.path.exists(cache_path):
+        graph_mtime = os.path.getmtime(graph_path)
+        cache_mtime = os.path.getmtime(cache_path)
+        # 检查源文件是否有比图更新的
+        src_newer = False
+        exts = {'.py', '.pyi', '.ts', '.tsx', '.js', '.jsx', '.mjs'}
+        for dirpath, _, filenames in os.walk(root):
+            # 跳过隐藏目录和 venv
+            if os.path.basename(dirpath).startswith('.') or 'venv' in dirpath or 'node_modules' in dirpath:
+                continue
+            for fn in filenames:
+                ext = os.path.splitext(fn)[1]
+                if ext in exts:
+                    fp = os.path.join(dirpath, fn)
+                    try:
+                        if os.path.getmtime(fp) > graph_mtime:
+                            src_newer = True
+                            break
+                    except OSError:
+                        pass
+            if src_newer:
+                break
+
+        if not src_newer:
+            # 源文件没变过，直接返回缓存的 check 结果
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cached = f.read()
+                if args.json:
+                    _safe_print(cached)
+                else:
+                    try:
+                        data = json.loads(cached)
+                        _safe_print(data.get('one_line', 'OK (cached, no changes)'))
+                    except Exception:
+                        _safe_print(cached)
+                return 0
+            except Exception:
+                pass  # 缓存损坏，继续完整分析
 
     # Step 1: 加载旧图（如果存在）
     before_graph = None
@@ -392,11 +444,13 @@ def cmd_check(args) -> int:
     print(f"Re-analyzing: {root}", file=sys.stderr)
     from .adapters import AdapterRegistry, PythonAdapter
     from .adapters.typescript_adapter import TypeScriptAdapter
+    from .adapters.tree_sitter_adapter import TreeSitterAdapter
     from .pipeline import PipelineRunner
     from .core.merger import CrossFileResolver
     from .core.community import CommunityDetector
 
     registry = AdapterRegistry()
+    registry.register(TreeSitterAdapter())
     registry.register(PythonAdapter())
     registry.register(TypeScriptAdapter())
 
@@ -548,12 +602,21 @@ def cmd_check(args) -> int:
     )
 
     # Step 9: 输出
+    json_output = json.dumps(summary.to_dict(), indent=2, ensure_ascii=False)
     if args.json:
-        _safe_print(json.dumps(summary.to_dict(), indent=2, ensure_ascii=False))
+        _safe_print(json_output)
     elif summary.passed:
         _safe_print(summary.one_line())
     else:
         _safe_print(summary_gen.render_panel(summary))
+
+    # Step 9.5: 缓存 check 结果（加速二次调用）
+    try:
+        os.makedirs(os.path.join(root, ".hologram"), exist_ok=True)
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            f.write(json_output)
+    except Exception:
+        pass
 
     # Step 10: 写入时间轴
     try:
@@ -630,6 +693,7 @@ def cmd_incremental(args) -> int:
     files = args.files
 
     registry = AdapterRegistry()
+    registry.register(TreeSitterAdapter())
     registry.register(PythonAdapter())
     registry.register(TypeScriptAdapter())
 

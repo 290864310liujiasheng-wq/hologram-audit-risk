@@ -193,6 +193,20 @@ const icons: Record<string, IconDef> = {
     label: '禁止',
     path: '<circle cx="9" cy="9" r="6"/><line x1="4.5" y1="4.5" x2="13.5" y2="13.5"/>',
   },
+
+  // ── File tree ──
+  'folder-closed': {
+    label: '文件夹',
+    path: '<path d="M3 3.5 L7.5 3.5 L9 5.5 L15 5.5 L15 14 L3 14 Z"/>',
+  },
+  refresh: {
+    label: '刷新',
+    path: '<path d="M3 5 A6 6 0 0 1 13 3"/><polyline points="3,5 7,5 7,1"/><path d="M15 12 A6 6 0 0 1 5 14"/><polyline points="15,12 11,12 11,16"/>',
+  },
+  code: {
+    label: '代码',
+    path: '<polyline points="6,5 2,9 6,13"/><polyline points="12,5 16,9 12,13"/><line x1="9" y1="13" x2="11" y2="3"/>',
+  },
 };
 
 /**

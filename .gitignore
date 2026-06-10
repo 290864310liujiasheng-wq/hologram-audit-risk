@@ -27,3 +27,6 @@ Thumbs.db
 
 # Test projects
 test_projects/
+hologram_full.json
+src_python/hologram_graph.json
+src_python/.hologram/

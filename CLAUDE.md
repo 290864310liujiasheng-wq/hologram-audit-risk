@@ -17,3 +17,4 @@
 - 程序层不做：不解释、不推断、不自动推断因果、不声称找到 bug 根源
 - 每完成一个阶段的任务，更新 [PROJECT.md](PROJECT.md) — 它是唯一真相源
 - `docs_archive/` 是历史文档，不再维护，不要引
+- **构建 exe**：必须用 `cargo tauri build`（前端+后端一起打包），不能用 `cargo build --release`（只编译 Rust，不打包前端）。前端改动要先 `cd src-ui && npm run build` 再 `cargo tauri build`

@@ -50,8 +50,7 @@ export class ConstraintsPanel {
       zIndex: '16',
       display: 'flex',
       flexDirection: 'column',
-      transform: 'translateX(100%)',
-      transition: 'transform var(--glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1))',
+      // transform + transition handled by CSS #constraints-panel
     });
 
     // Corner brackets
@@ -132,6 +131,8 @@ export class ConstraintsPanel {
     this.openState = false;
     this.panel.classList.remove('cs-open');
   }
+
+  isOpen(): boolean { return this.openState; }
 
   // ── Simple YAML parser (enough for the constraints file structure) ──
 

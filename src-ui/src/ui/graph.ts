@@ -56,15 +56,16 @@ const GLOW_COLORS: Record<string, number> = {
 
 function edgeColorByType(edgeType: string, direction: string): THREE.Color {
   if (edgeType === 'data' || edgeType === 'DATA') {
-    return direction === 'write' ? new THREE.Color(0xcc5555) : new THREE.Color(0x55aa55);
+    return direction === 'write' ? new THREE.Color(0xff7777) : new THREE.Color(0x66dd66);
   }
   if (edgeType === 'temporal' || edgeType === 'TEMPORAL') {
-    return new THREE.Color(0xdd9944);
+    return new THREE.Color(0xffaa55);
   }
-  return new THREE.Color(0x5599cc);
+  return new THREE.Color(0x88ccee);
 }
-function edgeOpacityByDepth(depth: number): number {
-  switch (depth) { case 1: return 0.14; case 2: return 0.18; case 3: return 0.24; case 4: return 0.32; default: return 0.16; }
+function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
+  const m = mode === 'full' ? 0.7 : mode === 'minimal' ? 0.6 : 1.0;
+  switch (depth) { case 1: return 0.18 * m; case 2: return 0.30 * m; case 3: return 0.44 * m; case 4: return 0.56 * m; default: return 0.22 * m; }
 }
 
 const BG_COLOR = 0x030812;
@@ -242,6 +243,11 @@ export class StarGraph {
   private focusStartLook = new THREE.Vector3();
   private focusFlash = 0;
 
+  // File highlight (from file tree)
+  private _fileHighlight = false;
+  private _fileHighlightIndices = new Set<number>();
+  private _fileOpacityOriginal = new Map<number, number>();
+
   // Blast
   private blastMode = false;
   private blastSource = -1;
@@ -306,8 +312,13 @@ export class StarGraph {
     this.glowTex = mode === 'full' ? createSpikeTexture() : createGlowTexture();
     this.sphereGeo = new THREE.SphereGeometry(1, 24, 16);
 
-    if (mode !== 'minimal') this.buildStarfield();
-    if (mode === 'full') this.buildNebulaDust();
+    // starfield disabled
+    // if (mode !== 'minimal') this.buildStarfield();
+    // nebulaDust disabled
+    // if (mode === 'full') this.buildNebulaDust();
+
+    if (mode !== 'minimal') this.buildHoloGrid();
+
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
     this.galaxyGroup.add(this.nodeGroup);
@@ -439,7 +450,7 @@ export class StarGraph {
         const theta = Math.random() * Math.PI * 2, phi = Math.acos(2 * Math.random() - 1);
         const r = L.r[0] + Math.random() * (L.r[1] - L.r[0]);
         posArr[idx * 3] = Math.cos(theta) * Math.sin(phi) * r;
-        posArr[idx * 3 + 1] = Math.sin(phi) * r * 0.55;
+        posArr[idx * 3 + 1] = Math.sin(phi) * r; // spherical
         posArr[idx * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
         const hsl = new THREE.Color();
         hsl.setHSL((L.hue[0] + Math.random() * (L.hue[1] - L.hue[0])) / 360, L.sat, L.l[0] + Math.random() * (L.l[1] - L.l[0]));
@@ -453,6 +464,88 @@ export class StarGraph {
     const mat = new THREE.PointsMaterial({ size: this.mode === 'full' ? 2.2 : 1.6, map: this.glowTex, blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true, transparent: true, opacity: this.mode === 'full' ? 1.0 : 0.55 });
     this.starfield = new THREE.Points(geo, mat);
     this.scene.add(this.starfield);
+  }
+
+  // ── Infinite holographic grid (shader-based) ──────────────
+  private holoGrid!: THREE.Mesh;
+  private holoGridY = -60;
+
+  private buildHoloGrid(): void {
+    const gridSize = 60; // world-unit spacing of major grid lines
+
+    const vert = /* glsl */ `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldPos = worldPos.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const frag = /* glsl */ `
+      varying vec3 vWorldPos;
+      uniform vec3 uCameraWorldPos;
+      uniform float uGridSize;
+      uniform float uFadeDist;
+
+      float gridLine(float coord, float size, float w) {
+        float d = abs(mod(coord + size * 0.5, size) - size * 0.5);
+        return 1.0 - smoothstep(0.0, w, d);
+      }
+
+      void main() {
+        float majorSize = uGridSize;
+        float minorSize = majorSize / 5.0;
+
+        // Major grid lines
+        float mx = gridLine(vWorldPos.x, majorSize, 0.5);
+        float mz = gridLine(vWorldPos.z, majorSize, 0.5);
+        float major = max(mx, mz);
+
+        // Minor grid lines (don't overlap majors)
+        float nx = gridLine(vWorldPos.x, minorSize, 0.25);
+        float nz = gridLine(vWorldPos.z, minorSize, 0.25);
+        float minor = max(nx, nz) * (1.0 - major);
+
+        // Fade with world-space distance from camera
+        float dist = length(vWorldPos.xz - uCameraWorldPos.xz);
+        float fade = 1.0 - smoothstep(uFadeDist * 0.4, uFadeDist, dist);
+
+        float alpha = (major * 0.15 + minor * 0.05) * fade;
+        gl_FragColor = vec4(0.15, 0.3, 0.5, alpha);
+      }
+    `;
+
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: vert,
+      fragmentShader: frag,
+      uniforms: {
+        uCameraWorldPos: { value: new THREE.Vector3() },
+        uGridSize: { value: gridSize },
+        uFadeDist: { value: 1800 },
+      },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    // Huge plane on XZ (rotated flat)
+    const geo = new THREE.PlaneGeometry(20000, 20000);
+    geo.rotateX(-Math.PI / 2);
+    this.holoGrid = new THREE.Mesh(geo, mat);
+    this.holoGrid.position.y = this.holoGridY;
+    this.holoGrid.renderOrder = 1;
+    this.scene.add(this.holoGrid);
+  }
+
+  private positionGrid(pos: Float32Array): void {
+    if (!this.holoGrid) return;
+    let minY = Infinity;
+    for (let i = 0; i < pos.length / 3; i++) {
+      minY = Math.min(minY, pos[i * 3 + 1]);
+    }
+    this.holoGridY = minY - 40;
+    this.holoGrid.position.y = this.holoGridY;
   }
 
   // ── Tooltip ──────────────────────────────────────────────
@@ -553,6 +646,13 @@ export class StarGraph {
   private showDetail(idx: number): void {
     this.selectedIdx = idx;
     const node = this.graphNodes[idx];
+    // Emit file path for file tree ↔ graph linking
+    if (node.location) {
+      const filePath = node.location.indexOf(':') >= 0
+        ? node.location.substring(0, node.location.lastIndexOf(':'))
+        : node.location;
+      window.dispatchEvent(new CustomEvent('graph:node-selected', { detail: filePath }));
+    }
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
     const dist = [0, 0, 0, 0, 0];
     for (const e of this.edgeDataList) { if (e.s === idx || e.t === idx) dist[e.couplingDepth] = (dist[e.couplingDepth] || 0) + 1; }
@@ -758,7 +858,7 @@ export class StarGraph {
     // Dim/hide non-path edges
     for (const lines of this.edgeLineGroups) {
       (lines.material as THREE.LineBasicMaterial).opacity =
-        this._pathNodes.size > 0 ? 0.01 : edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+        this._pathNodes.size > 0 ? 0.01 : edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
     }
     // Brighten path edges
     this.rebuildPathEdges();
@@ -797,7 +897,7 @@ export class StarGraph {
     }
     for (const lines of this.edgeLineGroups) {
       (lines.material as THREE.LineBasicMaterial).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0);
+        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
     }
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     const st = document.getElementById('status-text');
@@ -1012,6 +1112,108 @@ export class StarGraph {
     this.flyToNode(idx); return true;
   }
 
+  // ── File highlight (文件树 → 星图联动) ────────────────────
+
+  /** Highlight all nodes belonging to a file (match by location prefix). */
+  highlightFile(filePath: string): void {
+    const normalized = filePath.replace(/\\/g, '/');
+    this._fileHighlightIndices.clear();
+    this._fileOpacityOriginal.clear();
+
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
+      const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
+      if (f === normalized) {
+        this._fileHighlightIndices.add(i);
+      }
+    }
+
+    if (this._fileHighlightIndices.size === 0) return;
+
+    this._fileHighlight = true;
+    this._applyFileHighlight();
+  }
+
+  /** Highlight all nodes under a directory (recursive prefix match). */
+  highlightFolder(folderPath: string): void {
+    const normalized = folderPath.replace(/\\/g, '/');
+    const prefix = normalized.endsWith('/') ? normalized : normalized + '/';
+    this._fileHighlightIndices.clear();
+    this._fileOpacityOriginal.clear();
+
+    for (let i = 0; i < this.graphNodes.length; i++) {
+      const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
+      const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
+      if (f.startsWith(prefix)) {
+        this._fileHighlightIndices.add(i);
+      }
+    }
+
+    if (this._fileHighlightIndices.size === 0) return;
+
+    this._fileHighlight = true;
+    this._applyFileHighlight();
+  }
+
+  clearFileHighlight(): void {
+    this._fileHighlight = false;
+    this._fileHighlightIndices.clear();
+    this._applyFileHighlight();
+  }
+
+  private _applyFileHighlight(): void {
+    const hl = this._fileHighlight;
+    const idxs = this._fileHighlightIndices;
+
+    // Nodes: dim non-highlighted
+    for (let i = 0; i < this.nodeGlows.length; i++) {
+      const visible = !hl || idxs.has(i);
+      if (hl && !visible && this.nodeGlows[i].visible) {
+        this._fileOpacityOriginal.set(i, (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.03;
+        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = 0.03;
+      } else if (!hl && this._fileOpacityOriginal.has(i)) {
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)!;
+        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)! * 0.6;
+        this._fileOpacityOriginal.delete(i);
+      }
+    }
+
+    // Edges: dim all when highlighting
+    for (const lines of this.edgeLineGroups) {
+      const mat = lines.material as THREE.LineBasicMaterial;
+      if (hl) {
+        (lines as any).__prevOpacity = mat.opacity;
+        mat.opacity = 0.015;
+      } else if ((lines as any).__prevOpacity !== undefined) {
+        mat.opacity = (lines as any).__prevOpacity;
+        delete (lines as any).__prevOpacity;
+      }
+    }
+
+    // Labels: hide non-highlighted
+    for (let k = 0; k < this.nodeLabelIdx.length; k++) {
+      this.labelDivs[k].style.display = (!hl || idxs.has(this.nodeLabelIdx[k])) ? '' : 'none';
+    }
+
+    // Fly to centroid of highlighted nodes
+    if (hl && idxs.size > 0) {
+      let cx = 0, cy = 0, cz = 0;
+      for (const i of idxs) {
+        cx += this.nodePositions[i * 3];
+        cy += this.nodePositions[i * 3 + 1];
+        cz += this.nodePositions[i * 3 + 2];
+      }
+      const n = idxs.size;
+      this.focusTarget.set(cx / n, cy / n, cz / n);
+      this.focusStartCam.copy(this.camera.position);
+      this.focusStartLook.copy(this.controls.target);
+      this.focusActive = true;
+      this.focusProgress = 0;
+      this.focusFlash = 0;
+    }
+  }
+
   // ══════════════════════════════════════════════════════════
   // Community / Galaxy fold overlay
   // ══════════════════════════════════════════════════════════
@@ -1169,7 +1371,7 @@ export class StarGraph {
     }
     for (const lines of this.edgeLineGroups) {
       const depth = (lines.userData['edgeDepth'] as number) ?? 0;
-      (lines.material as THREE.LineBasicMaterial).opacity = edgeOpacityByDepth(depth);
+      (lines.material as THREE.LineBasicMaterial).opacity = edgeOpacityByDepth(depth, this.mode);
     }
     if (this.edgeParticles) this.edgeParticles.visible = true;
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
@@ -1698,6 +1900,7 @@ export class StarGraph {
     this.buildEdges(rawPos, eData);
     this.buildNodes(nodes, rawPos, deg);
     this.buildLabels(nodes, deg);
+    this.positionGrid(rawPos);
 
     // Edge particle flow — full mode dense, standard mode subtle, minimal none
     if (this.mode !== 'minimal') {
@@ -1764,7 +1967,7 @@ export class StarGraph {
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
         geo.setAttribute('color', new THREE.Float32BufferAttribute(cl, 3));
-        const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: edgeOpacityByDepth(g.depth), depthWrite: false, blending: g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending });
+        const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: edgeOpacityByDepth(g.depth, this.mode), depthWrite: false, blending: g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending });
         const lines = new THREE.LineSegments(geo, mat);
         this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
       }
@@ -1930,20 +2133,17 @@ export class StarGraph {
     this.animId = requestAnimationFrame(() => this.animate());
     const isMinimal = this.mode === 'minimal';
     const isFull = this.mode === 'full';
-    const fx = isFull ? 3 : isMinimal ? 0 : 1;
-
     // Full mode: auto-rotate the entire galaxy (nodes + edges + highlights + particles)
     if (isFull) { this.galaxyGroup.rotation.y += 0.0008; this.galaxyGroup.rotation.x += 0.0002; }
 
-    if (!isMinimal) {
-      this.starfield.rotation.y += 0.00006 * fx;
-      this.starfield.rotation.x += 0.00002 * fx;
-    }
-    if (!isMinimal) this.animateEdgeParticles();
-    if (isFull) {
-      this.animateNebulaDust();
+    // Infinite grid follows camera Y — always at viewer level, capped below nodes
+    if (this.holoGrid) {
+      const sMat = this.holoGrid.material as THREE.ShaderMaterial;
+      sMat.uniforms['uCameraWorldPos'].value.copy(this.camera.position);
+      this.holoGrid.position.y = Math.min(this.camera.position.y, this.holoGridY);
     }
 
+    if (!isMinimal) this.animateEdgeParticles();
     if (isMinimal) {
       this.controls.update();
       this.composer.render();

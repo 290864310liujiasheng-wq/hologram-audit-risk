@@ -31,6 +31,7 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 | 图diff | core/diff.py | 6 |
 | Python适配器 | adapters/python_adapter.py | 21 |
 | TS适配器 | adapters/typescript_adapter.py | 23 |
+| **Tree-sitter 适配器** | adapters/tree_sitter_adapter.py | — |
 | 适配器注册 | adapters/registry.py | 9 |
 | 流水线编排 | pipeline/runner.py | 27 |
 | 增量缓存 | pipeline/cache.py | — |
@@ -71,7 +72,7 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 | Galaxy云渲染 | graph.ts buildGalaxyClouds() | ✅ spiral arms + golden ratio色调 |
 | 跨星系连线 | graph.ts buildCrossEdges() | ✅ |
 | 能量流粒子 | graph.ts crossFlowParticles | ✅ |
-| 星场 + 星云尘埃 | graph.ts buildStarfield/buildNebulaDust | ✅ full mode专属 |
+| 全息参考网格 | graph.ts buildHoloGrid() — shader 无限网格 | ✅ 静态，shader 绘制 |
 | Bloom后处理 | graph.ts UnrealBloomPass | ✅ full mode ACES色调映射 |
 | 悬停Tooltip | graph.ts setupTooltip() | ✅ |
 | 详情卡片 | graph.ts setupDetailCard() | ✅ 耦合分布条 |
@@ -81,12 +82,18 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 | 搜索节点 | main.ts doSearch() → starGraph.focusNode() | ✅ |
 | **聊天面板** | chat.ts ChatPanel → Agent → Provider → ToolRegistry | ✅ P0 |
 | **简报面板** | check.ts CheckPanel → hologram_run_check → summary.py | ✅ P1 |
+| **约束面板** | constraints.ts ConstraintsPanel — YAML 规则编辑 | ✅ |
+| **终端面板** | terminal.ts TerminalPanel — xterm.js 内嵌终端 | ✅ |
+| **时间轴面板** | timeline.ts — 左侧滑入，固定左边缘入口 | ✅ |
+| **Dock 标签页** | index.html dock-tabs + main.ts 互斥逻辑 | ✅ 右: 对话/约束 · 底: 简报/终端 |
+| **浮动文件查看器** | file-viewer.ts — Monaco Editor 标签页窗口 | ✅ 语法高亮/Ctrl+S/拖拽/缩放 |
 | Agent 引擎 | agent.ts 569行 + tool.ts 276行 (14个工具) | ✅ |
 | Provider 层 | anthropic.ts + openai.ts + types.ts | ✅ |
 | 事件总线 | events.ts — navigate:node 跨组件通信 | ✅ |
 | **简报 ↔ 星图链路** | Signal.graph_node_ids + summary enrich + 前端点击跳转 | ✅ P2 |
-| **CSS 变量换皮** | index.html :root + constraints/terminal/file-viewer/graph 内联 → var() | ✅ 2026-06-10 |
-| **原型视觉对齐** | Google Fonts (Orbitron/JetBrains/Noto SC) + 深空气氛层(星场/全息网格/轨道环/扫描线/暗角) + 面板角括号装饰 + CSS 重写对齐原型 | ✅ 2026-06-10 |
+| **CSS 对比度修复** | --starlight-dim 0.7→0.85, --text-muted 0.5→0.65, 45处硬编码提亮 | ✅ 2026-06-10 |
+| **原型视觉对齐** | Google Fonts (Orbitron/JetBrains/Noto SC) + 深空气氛层(全息网格/轨道环/扫描线/暗角) + 面板角括号装饰 | ✅ 2026-06-10 |
+| **Tree-sitter 多语言适配器** | 通用 TreeSitterAdapter 实现 LanguageAdapter 接口，支持 15 种语言（Python/JS/TS/Go/Rust/Java/C/C++/Ruby/C#/Kotlin/Swift/PHP/Lua/TSX），GrammarManager 自动下载编译缓存 | ✅ 2026-06-10 |
 
 ### 未落地 ❌ — 感知升级（Vibe Coding 安全后视镜）
 
@@ -105,15 +112,16 @@ V3 约束框架  routing/signals.py     L5-L1破坏信号 + 约束校验(YAML) +
 - 事件驱动耦合检测：A emit 事件 B listen — 静态图上无边的 L4 隐形耦合
 - 废弃/动态引用扫描：`importlib`、`getattr`、类路径字符串注入的暗区
 
-> 2026-06-10: 原型视觉对齐完工。8 文件变更 — Google Fonts + 深空气氛 + 角括号装饰 + CSS 全部对齐 prototype.html 水准。
-> 2026-06-10: CSS 变量换皮完工。4 个 TS 文件内联样式全部迁移到 var() 引用，index.html :root 底座统一主题。
-> 2026-06-09: P0-P4 全线完工。22 个 Tauri 命令，16 个 Agent 工具，740 个 Python 测试。
+> 2026-06-10: Tree-sitter 多语言适配器落地 — TreeSitterAdapter 实现 LanguageAdapter 接口，GrammarManager 管理下载/编译/缓存，15 种语言支持（Python/JS/TS/Go/Rust/Java/C/C++/Ruby/C#/Kotlin/Swift/PHP/Lua/TSX），架构为 TreeSitterAdapter 做 fallback → PythonAdapter/TypeScriptAdapter 覆盖专用语言。796 测试全部通过，零回归。
+> 2026-06-10: 面板优化大回合 — CSS 对比度全局提亮、shader 无限全息网格、dock 标签页互斥、时间轴左侧面板、浮动文件窗口 Monaco Editor 集成。
+> 2026-06-10: 原型视觉对齐 + CSS 变量换皮完工。
+> 2026-06-09: P0-P4 全线完工。21 个 Tauri 命令，16 个 Agent 工具，740 个 Python 测试。
 
 ---
 
 ## Tauri 桥接层（src-tauri/src/main.rs）
 
-20 个 `#[tauri::command]`，全部透传 Python CLI：
+21 个 `#[tauri::command]`，全部透传 Python CLI：
 
 ```
 hologram_analyze · hologram_neighbors · hologram_impact · hologram_path

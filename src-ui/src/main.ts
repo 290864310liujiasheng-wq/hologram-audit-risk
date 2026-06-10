@@ -7,6 +7,7 @@ import { StarGraph, VisualMode } from './ui/graph';
 import { ChatPanel } from './ui/chat';
 import { CheckPanel, type CheckResult } from './ui/check';
 import { FileViewer } from './ui/file-viewer';
+import { FileTreePanel } from './ui/file-tree';
 import { TimelinePanel } from './ui/timeline';
 import { ConstraintsPanel } from './ui/constraints';
 import { TerminalPanel } from './ui/terminal';
@@ -24,6 +25,7 @@ const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
 const statusText = document.getElementById('status-text')!;
 const tbPath = document.getElementById('tb-path')!;
+const btnExplorer = document.getElementById('btn-explorer') as HTMLButtonElement;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
 const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButtonElement;
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
@@ -102,8 +104,12 @@ async function openProject(path?: string): Promise<void> {
     starGraph.render(graph);
     showGraphView(folder);
     setupAgent();
+    setLoading(false); // 图已就绪，不等 check
+    // 文件树
+    if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
+    // 后台异步跑 check + watcher
     runCheck();
-    try { await invoke('start_watching', { path: folder }); } catch { /* ignore */ }
+    invoke('start_watching', { path: folder }).catch(() => {});
   } catch (err: any) {
     statusText.textContent = `分析失败: ${err}`; setLoading(false); throw err;
   }
@@ -270,15 +276,90 @@ async function init(): Promise<void> {
     FileViewer.get().open(filePath);
   });
 
+  // File tree → star graph highlight
+  bus.on('highlight:file', (filePath: string) => {
+    starGraph.highlightFile(filePath);
+  });
+  bus.on('highlight:folder', (folderPath: string) => {
+    starGraph.highlightFolder(folderPath);
+  });
+  bus.on('highlight:clear', () => {
+    starGraph.clearFileHighlight();
+  });
+
   // "Send to Agent" from detail card (P4: 发送给 Agent)
   bus.on('agent:query', (question: string) => {
+    if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
     chatPanel.ask(question);
+    updateTabs();
+  });
+
+  // ── Dock tabs: sync active state ──
+  const rightTabs = document.getElementById('right-tabs')!;
+  const bottomTabs = document.getElementById('bottom-tabs')!;
+  rightTabs.style.display = '';
+  bottomTabs.style.display = '';
+  const updateTabs = () => {
+    rightTabs.querySelectorAll('.dock-tab').forEach(t => {
+      const p = (t as HTMLElement).dataset['panel'];
+      const active = (p === 'chat' && chatPanel.isOpen()) || (p === 'constraints' && ConstraintsPanel.get().isOpen());
+      t.classList.toggle('active', !!active);
+    });
+    bottomTabs.querySelectorAll('.dock-tab').forEach(t => {
+      const p = (t as HTMLElement).dataset['panel'];
+      const active = (p === 'check' && checkPanel.isOpen()) || (p === 'terminal' && TerminalPanel.get().isOpen());
+      t.classList.toggle('active', !!active);
+    });
+  };
+
+  // ── Right dock: chat ↔ constraints (mutual exclusion) ──
+  rightTabs.addEventListener('click', (e) => {
+    const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
+    if (!tab) return;
+    const p = tab.dataset['panel'];
+    if (p === 'chat') {
+      if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+      chatPanel.toggle();
+    } else if (p === 'constraints') {
+      if (currentPath) ConstraintsPanel.get().load(currentPath);
+      if (chatPanel.isOpen()) chatPanel.close();
+      ConstraintsPanel.get().toggle();
+    }
+    updateTabs();
   });
 
   const btnChat = document.getElementById('btn-chat') as HTMLButtonElement;
-  btnChat.addEventListener('click', () => chatPanel.toggle());
+  btnChat.addEventListener('click', () => {
+    if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
+    chatPanel.toggle();
+    updateTabs();
+  });
 
-  btnCheck.addEventListener('click', () => checkPanel.toggle());
+  // ── Bottom dock: check ↔ terminal (mutual exclusion) ──
+  const closeBottomSiblings = (except: string) => {
+    if (except !== 'check' && checkPanel.isOpen()) checkPanel.close();
+    if (except !== 'terminal' && TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
+  };
+
+  bottomTabs.addEventListener('click', (e) => {
+    const tab = (e.target as HTMLElement).closest('.dock-tab') as HTMLElement;
+    if (!tab) return;
+    const p = tab.dataset['panel'];
+    if (p === 'check') {
+      closeBottomSiblings('check');
+      checkPanel.toggle();
+    } else if (p === 'terminal') {
+      closeBottomSiblings('terminal');
+      TerminalPanel.get().toggle();
+    }
+    updateTabs();
+  });
+
+  btnCheck.addEventListener('click', () => {
+    closeBottomSiblings('check');
+    checkPanel.toggle();
+    updateTabs();
+  });
 
   // ── P4: Diff button — compare current graph with previous snapshot ──
   btnDiff.addEventListener('click', async () => {
@@ -313,24 +394,39 @@ async function init(): Promise<void> {
   btnTimeline.addEventListener('click', () => {
     if (currentPath) timelinePanel.setProjectPath(currentPath);
     timelinePanel.toggle();
+    tlHandle.classList.toggle('active', timelinePanel.isOpen());
+  });
+
+  // Left-edge timeline handle
+  const tlHandle = document.getElementById('tl-handle')!;
+  tlHandle.addEventListener('click', () => {
+    if (currentPath) timelinePanel.setProjectPath(currentPath);
+    timelinePanel.toggle();
+    tlHandle.classList.toggle('active', timelinePanel.isOpen());
   });
 
   // ── P4: Constraints button ──
   btnConstraints.addEventListener('click', () => {
     if (currentPath) ConstraintsPanel.get().load(currentPath);
+    if (chatPanel.isOpen()) chatPanel.close();
     ConstraintsPanel.get().toggle();
+    updateTabs();
   });
 
   // ── P4: Terminal button ──
   btnTerminal.addEventListener('click', () => {
+    closeBottomSiblings('terminal');
     TerminalPanel.get().toggle();
+    updateTabs();
   });
 
   // Ctrl+L → open chat
   window.addEventListener('keydown', (e) => {
     if ((e.key === 'l' || e.key === 'L') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
+      if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
       chatPanel.toggle();
+      updateTabs();
     }
     // Ctrl+D → diff toggle
     if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey) && document.activeElement?.tagName !== 'INPUT') {
@@ -340,7 +436,17 @@ async function init(): Promise<void> {
     // Ctrl+` → terminal toggle
     if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
+      closeBottomSiblings('terminal');
       TerminalPanel.get().toggle();
+      updateTabs();
+    }
+    // Ctrl+E → file explorer toggle
+    if ((e.key === 'e' || e.key === 'E') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      const ft = FileTreePanel.get();
+      if (!ft.isOpen() && currentPath) ft.load(currentPath);
+      ft.toggle();
+      btnExplorer.classList.toggle('active', ft.isOpen());
     }
   });
 
@@ -349,6 +455,14 @@ async function init(): Promise<void> {
   const open = () => openProject();
   btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
+
+  // File explorer toggle
+  btnExplorer.addEventListener('click', () => {
+    const ft = FileTreePanel.get();
+    if (!ft.isOpen() && currentPath) ft.load(currentPath);
+    ft.toggle();
+    btnExplorer.classList.toggle('active', ft.isOpen());
+  });
 
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
