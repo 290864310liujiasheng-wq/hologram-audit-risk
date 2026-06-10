@@ -61,11 +61,11 @@ function edgeColorByType(edgeType: string, direction: string): THREE.Color {
   if (edgeType === 'temporal' || edgeType === 'TEMPORAL') {
     return new THREE.Color(0xffaa55);
   }
-  return new THREE.Color(0x88ccee);
+  return new THREE.Color(0x6699cc);
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
   const m = mode === 'full' ? 0.7 : mode === 'minimal' ? 0.6 : 1.0;
-  switch (depth) { case 1: return 0.18 * m; case 2: return 0.30 * m; case 3: return 0.44 * m; case 4: return 0.56 * m; default: return 0.22 * m; }
+  switch (depth) { case 1: return 0.14 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
 }
 
 const BG_COLOR = 0x030812;
@@ -558,6 +558,8 @@ export class StarGraph {
   }
 
   private updateTooltip(): void {
+    // Galaxy hover takes priority — tooltip already set by updateHover()
+    if (this.foldMode && this.hoveredGalaxyIdx >= 0) return;
     if (this.hoveredIdx < 0 || this.hoveredIdx >= this.graphNodes.length) { this.tooltipEl.classList.remove('visible'); return; }
     const node = this.graphNodes[this.hoveredIdx];
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
@@ -1116,9 +1118,10 @@ export class StarGraph {
 
   /** Highlight all nodes belonging to a file (match by location prefix). */
   highlightFile(filePath: string): void {
+    // Restore any previous highlight before applying new one
+    if (this._fileHighlight) this.clearFileHighlight();
+
     const normalized = filePath.replace(/\\/g, '/');
-    this._fileHighlightIndices.clear();
-    this._fileOpacityOriginal.clear();
 
     for (let i = 0; i < this.graphNodes.length; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
@@ -1136,6 +1139,9 @@ export class StarGraph {
 
   /** Highlight all nodes under a directory (recursive prefix match). */
   highlightFolder(folderPath: string): void {
+    // Restore any previous highlight before applying new one
+    if (this._fileHighlight) this.clearFileHighlight();
+
     const normalized = folderPath.replace(/\\/g, '/');
     const prefix = normalized.endsWith('/') ? normalized : normalized + '/';
     this._fileHighlightIndices.clear();

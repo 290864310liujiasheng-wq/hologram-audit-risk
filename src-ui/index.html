@@ -1091,6 +1091,29 @@
       color: rgba(105, 145, 205, 0.5);
     }
 
+    /* History banner */
+    .check-history-banner {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 10px; margin-bottom: 8px;
+      border: 1px solid rgba(140, 120, 60, 0.25);
+      border-radius: 3px;
+      background: rgba(40, 30, 10, 0.2);
+    }
+    .check-history-label {
+      font-family: var(--font-mono); font-size: 9px;
+      color: rgba(180, 155, 100, 0.7);
+    }
+    .check-history-back {
+      font-family: var(--font-mono); font-size: 9px;
+      color: rgba(100, 180, 220, 0.8);
+      background: rgba(30, 60, 100, 0.25);
+      border: 1px solid rgba(100, 180, 220, 0.2);
+      padding: 3px 8px; border-radius: 3px; cursor: pointer;
+    }
+    .check-history-back:hover {
+      background: rgba(40, 80, 130, 0.35);
+    }
+
     /* Section card */
     .check-section {
       border: 1px solid rgba(40, 60, 100, 0.15);
@@ -1356,6 +1379,13 @@
       transition: color var(--snap);
     }
     .tl-event-node-link:hover { color: var(--signal-bright); text-decoration: underline; }
+    .tl-event-clickable {
+      cursor: pointer; border-radius: 3px;
+      transition: background 0.15s;
+    }
+    .tl-event-clickable:hover {
+      background: rgba(40, 60, 100, 0.12);
+    }
 
     /* ═══════════════════════════════════════════════════════════════
        CONSTRAINTS PANEL — config, right edge

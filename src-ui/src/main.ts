@@ -266,6 +266,14 @@ async function init(): Promise<void> {
   // ── P4: Timeline panel ──
   timelinePanel = new TimelinePanel(document.body);
 
+  // Timeline → check: view historical briefing
+  bus.on('check:history', ({ checkData, timestamp }: { checkData: CheckResult; timestamp: string }) => {
+    // Close bottom siblings except check
+    if (TerminalPanel.get().isOpen()) TerminalPanel.get().toggle();
+    checkPanel.showHistory(checkData, timestamp);
+    updateTabs();
+  });
+
   // Navigate from check panel to star graph (P2: 简报 ↔ 星图链路)
   bus.on('navigate:node', (nodeName: string) => {
     starGraph.focusNode(nodeName);
@@ -371,9 +379,11 @@ async function init(): Promise<void> {
     } else {
       if (!currentPath) { statusText.textContent = '请先打开项目'; return; }
       try {
-        // Compare last snapshot with current graph
+        const beforePath = `${currentPath}/hologram_before.json`;
+        const afterPath = `${currentPath}/hologram_graph.json`;
         const diffJson = await invoke<string>('hologram_diff', {
-          beforePath: `${currentPath}/hologram_graph.json`,
+          beforePath,
+          afterPath,
         });
         const diff = JSON.parse(diffJson);
         if (diff.is_empty) {

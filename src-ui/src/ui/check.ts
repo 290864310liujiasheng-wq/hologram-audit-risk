@@ -46,6 +46,8 @@ export class CheckPanel {
   private headerStatus!: HTMLElement;
   private openState = false;
   private lastResult: CheckResult | null = null;
+  private viewingHistory = false;
+  private historyTimestamp = '';
 
   constructor(container: HTMLElement) {
     this.buildDOM(container);
@@ -55,11 +57,28 @@ export class CheckPanel {
 
   update(result: CheckResult): void {
     this.lastResult = result;
+    this.viewingHistory = false;
+    this.historyTimestamp = '';
     this.renderResult(result);
 
     // Auto-open on failure
     if (!result.passed && !this.openState) {
       this.open();
+    }
+  }
+
+  showHistory(data: CheckResult, timestamp: string): void {
+    this.viewingHistory = true;
+    this.historyTimestamp = timestamp;
+    this.renderResult(data, true);
+    if (!this.openState) this.open();
+  }
+
+  showCurrent(): void {
+    this.viewingHistory = false;
+    this.historyTimestamp = '';
+    if (this.lastResult) {
+      this.renderResult(this.lastResult);
     }
   }
 
@@ -129,7 +148,7 @@ export class CheckPanel {
 
   // ── Render ──
 
-  private renderResult(r: CheckResult): void {
+  private renderResult(r: CheckResult, isHistory = false): void {
     // Update tab status indicator
     this.headerStatus.className = r.passed ? 'check-tab-status check-pass' : 'check-tab-status check-fail';
 
@@ -137,6 +156,19 @@ export class CheckPanel {
                    r.l3_violations.length + r.l2_violations.length;
 
     this.content.innerHTML = '';
+
+    // ── History banner ──
+    if (isHistory) {
+      const banner = ce('div', 'check-history-banner');
+      const label = ce('span', 'check-history-label');
+      label.textContent = `历史简报 — ${fmtTime(this.historyTimestamp)}`;
+      banner.appendChild(label);
+      const backBtn = ce('button', 'check-history-back');
+      backBtn.textContent = '返回当前';
+      backBtn.addEventListener('click', () => this.showCurrent());
+      banner.appendChild(backBtn);
+      this.content.appendChild(banner);
+    }
 
     // ── Header ──
     const header = ce('div', 'check-header');

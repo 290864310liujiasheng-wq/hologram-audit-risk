@@ -217,6 +217,30 @@ export class TimelinePanel {
         }
       });
     });
+
+    // Wire up check events → open historical briefing
+    this.content.querySelectorAll('.tl-event').forEach(el => {
+      const eventId = parseInt((el as HTMLElement).dataset['eventId'] || '');
+      const ev = this.events.find(e => e.id === eventId);
+      if (!ev || !ev.properties) return;
+
+      // Check if this event has stored briefing data
+      const violations = ev.properties['violations'] as Record<string, unknown> | undefined;
+      if (!violations) return;
+
+      // Mark as clickable
+      el.classList.add('tl-event-clickable');
+      el.addEventListener('click', (e) => {
+        // Don't trigger on node/file link clicks
+        const target = e.target as HTMLElement;
+        if (target.closest('.tl-event-node-link') || target.closest('.tl-event-file')) return;
+        e.stopPropagation();
+        bus.emit('check:history', {
+          checkData: violations,
+          timestamp: ev.timestamp,
+        });
+      });
+    });
   }
 
   destroy(): void {

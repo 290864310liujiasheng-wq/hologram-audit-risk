@@ -472,10 +472,54 @@ def cmd_check(args) -> int:
     if communities:
         print(f"  Communities: {len(communities)}", file=sys.stderr)
 
+    # 备份旧图 → 供 diff 按钮做"变更前"基线
+    before_snapshot_path = os.path.join(root, "hologram_before.json")
+    if os.path.exists(graph_path):
+        try:
+            import shutil
+            shutil.copy2(graph_path, before_snapshot_path)
+        except Exception:
+            pass
+
     # 保存新图
     after_graph.to_json(graph_path)
     print(f"Graph saved: {graph_path} ({after_graph.node_count} nodes, "
           f"{after_graph.edge_count} edges)", file=sys.stderr)
+
+    # 首次扫描：无旧图 → 跳过变更检测，不生成简报
+    # 简报系统设计为增量变更场景，首次索引把所有文件当"变更"无意义
+    if before_graph is None:
+        import datetime
+        summary_dict = {
+            "passed": True,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "changed_files": [],
+            "total_changed_files": 0,
+            "l5_violations": [],
+            "l4_violations": [],
+            "l3_violations": [],
+            "l2_violations": [],
+            "passed_checks": [],
+            "blast_radius": 0,
+            "cross_community_edges": 0,
+            "new_cycles": 0,
+            "new_thread_conflicts": 0,
+            "api_signature_changes": 0,
+            "is_first_scan": True,
+        }
+        json_output = json.dumps(summary_dict, ensure_ascii=False)
+        if args.json:
+            _safe_print(json_output)
+        else:
+            _safe_print(f"首次索引完成 ({after_graph.node_count} 节点, {after_graph.edge_count} 边) — 增量简报将在下次变更时触发")
+        # 缓存结果
+        try:
+            os.makedirs(os.path.join(root, ".hologram"), exist_ok=True)
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                f.write(json_output)
+        except Exception:
+            pass
+        return 0
 
     # Step 3: 收集变更文件
     changed_files: List[str] = []
@@ -499,14 +543,6 @@ def cmd_check(args) -> int:
                 f = n.location.rsplit(":", 1)[0] if ":" in n.location else n.location
                 changed_file_set.add(f)
         changed_files = sorted(changed_file_set)
-    else:
-        # 无旧图：将所有已分析文件视为变更
-        all_files: set = set()
-        for node in after_graph.nodes.values():
-            if node.location:
-                f = node.location.rsplit(":", 1)[0] if ":" in node.location else node.location
-                all_files.add(f)
-        changed_files = sorted(all_files)
 
     if not changed_files:
         if args.json:
