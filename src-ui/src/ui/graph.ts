@@ -143,14 +143,53 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
 
   const att = 0.02, damp = 0.72, sp = 0.008;
   const maxIter = Math.min(60, 25 + Math.floor(n / 5));
+  // Spatial grid repulsion — O(n) via neighbor cells, prevents node clumping
+  const repForce = 300;
+  const cellSize = Math.max(30, shellRadius / 4);
+  const gridH = Math.ceil(shellRadius * 2 / cellSize);
   for (let iter = 0; iter < maxIter; iter++) {
-    // Edge springs only — no repulsion, zero divergence risk
+    // Edge springs
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
       const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
       const f = dist * att / Math.sqrt((1 + deg[s]) * (1 + deg[t]));
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
+    }
+    // Spatial grid repulsion — only check nodes in same/neighbor cells
+    const grid = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) {
+      const cx = Math.floor((pos[i * 3] + shellRadius) / cellSize);
+      const cy = Math.floor((pos[i * 3 + 1] + shellRadius) / cellSize);
+      const cz = Math.floor((pos[i * 3 + 2] + shellRadius) / cellSize);
+      const key = (cx * gridH + cy) * gridH + cz;
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key)!.push(i);
+    }
+    const offsets = [0, 1, -1];
+    for (const [key, members] of grid) {
+      const cx = Math.floor(key / (gridH * gridH));
+      const cy = Math.floor((key % (gridH * gridH)) / gridH);
+      const cz = key % gridH;
+      const neighbors: number[] = [];
+      for (const dx of offsets) for (const dy of offsets) for (const dz of offsets) {
+        const nk = ((cx + dx) * gridH + (cy + dy)) * gridH + (cz + dz);
+        const cell = grid.get(nk);
+        if (cell) for (const j of cell) neighbors.push(j);
+      }
+      for (let a = 0; a < members.length; a++) {
+        const i = members[a];
+        for (let b = 0; b < neighbors.length; b++) {
+          const j = neighbors[b];
+          if (j <= i) continue;
+          const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+          const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+          if (dist > cellSize * 2) continue; // skip far pairs
+          const f = repForce / (dist * dist + 4);
+          vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
+          vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
+        }
+      }
     }
     for (let i = 0; i < n; i++) { vel[i * 3] -= pos[i * 3] * 0.0004; vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004; vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004; }
     for (let i = 0; i < n * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
