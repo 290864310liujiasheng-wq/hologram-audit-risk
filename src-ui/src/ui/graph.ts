@@ -141,39 +141,43 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   const deg = new Uint16Array(n);
   for (const [s, t] of edgePairs) { deg[s]++; deg[t]++; }
 
-  const att = 0.02, damp = 0.72, sp = 0.008;
+  const att = 0.02, damp = 0.72, sp = 0.06;
   const maxIter = Math.min(60, 25 + Math.floor(n / 5));
-  // Spatial grid repulsion — O(n) via neighbor cells, prevents node clumping
-  const repForce = 300;
-  const cellSize = Math.max(30, shellRadius / 4);
-  const gridH = Math.ceil(shellRadius * 2 / cellSize);
+  // Spatial grid repulsion — O(n) via neighbor cells
+  const repForce = 800;
+  const cellSize = Math.max(20, shellRadius / 5);
+  const gridDim = Math.ceil(shellRadius * 2 / cellSize);
   for (let iter = 0; iter < maxIter; iter++) {
-    // Edge springs
+    // Edge springs — pull connected nodes together (degree-normalized)
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
-      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+      const dist = Math.max(0.5, Math.sqrt(dx * dx + dy * dy + dz * dz));
       const f = dist * att / Math.sqrt((1 + deg[s]) * (1 + deg[t]));
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
     }
-    // Spatial grid repulsion — only check nodes in same/neighbor cells
+    // Spatial grid repulsion — push all nearby nodes apart
     const grid = new Map<number, number[]>();
     for (let i = 0; i < n; i++) {
       const cx = Math.floor((pos[i * 3] + shellRadius) / cellSize);
       const cy = Math.floor((pos[i * 3 + 1] + shellRadius) / cellSize);
       const cz = Math.floor((pos[i * 3 + 2] + shellRadius) / cellSize);
-      const key = (cx * gridH + cy) * gridH + cz;
+      const key = (cx * gridDim + cy) * gridDim + cz;
       if (!grid.has(key)) grid.set(key, []);
       grid.get(key)!.push(i);
     }
     const offsets = [0, 1, -1];
-    for (const [key, members] of grid) {
-      const cx = Math.floor(key / (gridH * gridH));
-      const cy = Math.floor((key % (gridH * gridH)) / gridH);
-      const cz = key % gridH;
+    for (const [, members] of grid) {
+      // Gather all neighbors from this cell + 26 adjacent cells
       const neighbors: number[] = [];
+      const firstKey = (Math.floor((pos[members[0] * 3] + shellRadius) / cellSize) * gridDim
+                       + Math.floor((pos[members[0] * 3 + 1] + shellRadius) / cellSize)) * gridDim
+                       + Math.floor((pos[members[0] * 3 + 2] + shellRadius) / cellSize);
+      const cx = Math.floor(firstKey / (gridDim * gridDim));
+      const cy = Math.floor((firstKey % (gridDim * gridDim)) / gridDim);
+      const cz = firstKey % gridDim;
       for (const dx of offsets) for (const dy of offsets) for (const dz of offsets) {
-        const nk = ((cx + dx) * gridH + (cy + dy)) * gridH + (cz + dz);
+        const nk = ((cx + dx) * gridDim + (cy + dy)) * gridDim + (cz + dz);
         const cell = grid.get(nk);
         if (cell) for (const j of cell) neighbors.push(j);
       }
@@ -183,19 +187,28 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
           const j = neighbors[b];
           if (j <= i) continue;
           const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
-          const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
-          if (dist > cellSize * 2) continue; // skip far pairs
-          const f = repForce / (dist * dist + 4);
+          const distSq = dx * dx + dy * dy + dz * dz;
+          if (distSq < 0.25 || distSq > cellSize * cellSize * 4) continue;
+          const dist = Math.sqrt(distSq);
+          const f = repForce / (distSq + 9);
           vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
           vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
         }
       }
     }
-    for (let i = 0; i < n; i++) { vel[i * 3] -= pos[i * 3] * 0.0004; vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004; vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004; }
+    // NO centering force — centering pulls everything to origin, fights shell spread
+    // Velocity damping + position update
     for (let i = 0; i < n * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
+    // Strong shell constraint — push nodes back to Fibonacci sphere radius
     for (let i = 0; i < n; i++) {
-      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2], dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > 1) { const drift = (dist - shellRadius) * sp; pos[i * 3] -= (dx / dist) * drift; pos[i * 3 + 1] -= (dy / dist) * drift; pos[i * 3 + 2] -= (dz / dist) * drift; }
+      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2];
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > 0.5) {
+        const drift = (dist - shellRadius) * sp;
+        pos[i * 3] -= (dx / dist) * drift;
+        pos[i * 3 + 1] -= (dy / dist) * drift;
+        pos[i * 3 + 2] -= (dz / dist) * drift;
+      }
     }
   }
   return pos;
