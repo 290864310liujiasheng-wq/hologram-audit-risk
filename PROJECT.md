@@ -5,6 +5,26 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
+> **最后更新：2026-06-11 · 星图规模化升级 A1 阶段完成**
+
+---
+
+## 2026-06-11 星图规模化升级 — 阶段 A1 InstancedMesh ✅
+
+**目标**: 5000 节点场景 draw calls 从 ~10000 降到 <10，帧率 60 FPS。
+
+| 改动 | 说明 |
+|---|---|
+| `graph.ts` 核心球体 | N 个 `THREE.Mesh` → 1 个 `THREE.InstancedMesh` — 1 draw call |
+| 回退路径 | `?instanced=0` URL param → 用旧 `buildNodesLegacy()` |
+| hover/click | Three.js 原生 `instanceId` 替代 `mesh.indexOf()` |
+| 文件高亮 | `setColorAt` 近黑色替代 opacity |
+| Agent 高亮/路径/波及/折叠/焦点 | `_setCoreScale()` + `setColorAt()` 统一 IM API |
+| hover 缩放修正 | full mode 0.4x 一致性修复 + 放大系数 1.2→0.7 |
+
+**变更范围**: `graph.ts` ~30 处修改点，覆盖全部交互路径。Glow Sprites 不变。  
+**回滚点**: commit `2e94468`  
+**升级方案**: [STARGRAPH_SPEC.md](STARGRAPH_SPEC.md) — 四阶段规模化路线 (A/B/C/D)
 
 ---
 
