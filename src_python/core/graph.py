@@ -89,6 +89,7 @@ class Node:
     language: str
     kind: str                  # SymbolKind / MediumKind / TemporalKind 的值
     community_id: Optional[str] = None
+    position: Optional[List[float]] = None  # [x, y, z] 预计算布局坐标
     properties: Dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
@@ -98,7 +99,7 @@ class Node:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         # 兼容：type 可能已是字符串（从 JSON 反序列化后）
-        d["type"] = type_val(self.type)
+        d["type"] = self.type.value if isinstance(self.type, NodeType) else self.type
         return d
 
     def __hash__(self) -> int:
@@ -133,7 +134,7 @@ class Edge:
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         # 兼容：type 可能已是字符串（从 JSON 反序列化后）
-        d["type"] = type_val(self.type)
+        d["type"] = self.type.value if isinstance(self.type, EdgeType) else self.type
         return d
 
     def __hash__(self) -> int:
@@ -272,12 +273,10 @@ class Graph:
             if n.name == query:
                 return n
         # 3. Short name (last segment after .)
-        #    也处理用户输入带点的情况（如 "Class.method"）—
-        #    先精确匹配，再逐级后缀匹配
         for n in self.nodes.values():
             if n.name.split(".")[-1] == query:
                 return n
-        # 3b. 用户输入是点分格式 — 检查节点名是否以该后缀结尾
+        # 3b. 带点后缀匹配
         if "." in query:
             for n in self.nodes.values():
                 if n.name.endswith("." + query) or n.name.endswith(query):
@@ -355,11 +354,7 @@ class Graph:
 
     def impact_bfs(self, node_id: str, max_depth: int = 3) -> List[Dict[str, Any]]:
         """
-        BFS 波及分析：从 node_id 出发，追踪所有依赖它的节点（dependents）。
-        在依赖图中 A→B 表示 A 依赖 B，所以沿 target→source 反向追踪：
-        找所有 e.target == node_id 的 e.source（即依赖 node_id 的节点），
-        然后递归追踪这些 source 节点的 dependents。
-
+        BFS 波及分析：从 node_id 出发，按层扩散，返回每层的节点列表。
         结果格式：[{"depth": 0, "nodes": [...]}, {"depth": 1, "nodes": [...]}, ...]
         """
         if node_id not in self.nodes:
@@ -428,14 +423,14 @@ class Graph:
     def nodes_by_type(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
         for n in self.nodes.values():
-            t = type_val(n.type)
+            t = n.type.value if hasattr(n.type, 'value') else str(n.type)
             counts[t] = counts.get(t, 0) + 1
         return counts
 
     def edges_by_type(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
         for e in self.edges.values():
-            t = type_val(e.type)
+            t = e.type.value if hasattr(e.type, 'value') else str(e.type)
             counts[t] = counts.get(t, 0) + 1
         return counts
 
@@ -490,7 +485,7 @@ class Graph:
             json.dump(d, f, indent=2, ensure_ascii=False)
 
     def to_msgpack(self, file_path: str) -> None:
-        """A3: 写入 MessagePack 二进制文件，大项目（>10K 节点）加载快 10×。"""
+        """A3: 写入 MessagePack 二进制文件，大项目加载快 10×。"""
         import datetime
         import msgpack
         d = self.to_dict()
@@ -543,6 +538,15 @@ class Graph:
         return g
 
 
+def type_val(t) -> str:
+    """统一提取枚举值的字符串形式，兼容 enum 和原生 str。
+
+    项目内 NodeType/EdgeType 序列化后可能变成字符串，
+    此函数同时处理 enum.value 和已反序列化的 str。
+    """
+    return t.value if hasattr(t, 'value') else str(t)
+
+
 def file_from_location(loc: str) -> str:
     """从 "path:lineno" 格式的 location 中提取文件路径。
 
@@ -554,12 +558,3 @@ def file_from_location(loc: str) -> str:
     if len(parts) == 2 and parts[1].strip().isdigit():
         return parts[0]
     return loc
-
-
-def type_val(t) -> str:
-    """统一提取枚举值的字符串形式，兼容 enum 和原生 str。
-
-    项目内 NodeType/EdgeType 序列化后可能变成字符串，
-    此函数同时处理 enum.value 和已反序列化的 str。
-    """
-    return t.value if hasattr(t, 'value') else str(t)

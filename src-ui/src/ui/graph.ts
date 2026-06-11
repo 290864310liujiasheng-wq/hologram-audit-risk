@@ -133,102 +133,61 @@ function fibonacciSphere(n: number, radius: number): Float32Array {
 }
 
 // ── 3D Force-Directed Layout ─────────────────────────────────
+// ⛔ CANONICAL LAYOUT — DO NOT MODIFY PARAMETERS ⛔
+// 这套参数经过多轮迭代验证，是唯一稳定产出好看星图的配置。
+// 过去两天：回滚→重构→再回滚，最终在 1032805 版本确认此布局。
+// 改动前请三思：你改的不是参数，是用户截图炫耀的视觉效果。
+// 如需回滚：git checkout 1032805 -- src-ui/src/ui/graph.ts
+// 参数记录（2026-06-11 锁定）：
+//   shellRadius = cbrt(n) × 14     — 球壳半径
+//   rep = 600                      — 全局斥力
+//   att = 0.018                    — 边弹簧引力
+//   damp = 0.72                    — 速度衰减
+//   sp = 0.006                     — 壳约束刚度
+//   maxIter = min(70, 20+n/4)      — 迭代上限
+// 防护层：力钳制(shellRadius×8) + NaN哨兵(每5轮) + 渲染兜底
+// ⛔ CANONICAL LAYOUT — DO NOT MODIFY PARAMETERS ⛔
 
 function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   if (n === 0) return new Float32Array(0);
-  // Scale shell so surface area ∝ n → constant room per node
-  // sqrt(n) ensures 5K and 500K have same density; floor 80 for tiny projects
-  const shellRadius = Math.max(80, Math.sqrt(n) * 5), pos = fibonacciSphere(n, shellRadius);
+  const shellRadius = Math.cbrt(n) * 14, pos = fibonacciSphere(n, shellRadius);
   const vel = new Float32Array(n * 3);
-  const deg = new Uint16Array(n);
-  for (const [s, t] of edgePairs) { deg[s]++; deg[t]++; }
-
-  const damp = 0.78, sp = 0.15;
-  const maxIter = Math.min(70, 30 + Math.floor(n / 4));
-  // Spring: very gentle nudge toward connected nodes. Repulsion is the dominant force.
-  const att = 0.004;
-  const idealDist = shellRadius / 8;
-  // Grid repulsion — strong, keeps nodes from overlapping
-  const repForce = 2500;
-  const cellSize = Math.max(15, shellRadius / 8);
-  const gridDim = Math.ceil(shellRadius * 2 / cellSize);
+  const rep = 600, att = 0.018, damp = 0.72, sp = 0.006;
+  const maxIter = Math.min(70, 20 + Math.floor(n / 4));
   for (let iter = 0; iter < maxIter; iter++) {
-    // ── Edge springs (weak) ──
-    // Gentle pull when too far, gentle push when too close.
-    // Spring force is DEGREE-NORMALIZED so hubs don't dominate.
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
+        const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const fRaw = rep / (dist * dist + 1);
+        const f = Math.min(fRaw, shellRadius * 8); // safety clamp
+        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
+        vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
+      }
+    }
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
-      const dist = Math.max(0.5, Math.sqrt(dx * dx + dy * dy + dz * dz));
-      const offset = dist - idealDist;
-      const f = offset * att / Math.sqrt((1 + deg[s]) * (1 + deg[t]));
+      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz)), f = Math.min(dist * att, shellRadius); // safety clamp
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
     }
-    // ── Grid repulsion (strong, local) ──
-    const grid = new Map<number, number[]>();
-    for (let i = 0; i < n; i++) {
-      const cx = Math.floor((pos[i * 3] + shellRadius) / cellSize);
-      const cy = Math.floor((pos[i * 3 + 1] + shellRadius) / cellSize);
-      const cz = Math.floor((pos[i * 3 + 2] + shellRadius) / cellSize);
-      const key = (cx * gridDim + cy) * gridDim + cz;
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key)!.push(i);
-    }
-    const offsets = [0, 1, -1];
-    for (const [, members] of grid) {
-      const firstKey = (Math.floor((pos[members[0] * 3] + shellRadius) / cellSize) * gridDim
-                       + Math.floor((pos[members[0] * 3 + 1] + shellRadius) / cellSize)) * gridDim
-                       + Math.floor((pos[members[0] * 3 + 2] + shellRadius) / cellSize);
-      const cx = Math.floor(firstKey / (gridDim * gridDim));
-      const cy = Math.floor((firstKey % (gridDim * gridDim)) / gridDim);
-      const cz = firstKey % gridDim;
-      const neighbors: number[] = [];
-      for (const dx of offsets) for (const dy of offsets) for (const dz of offsets) {
-        const nk = ((cx + dx) * gridDim + (cy + dy)) * gridDim + (cz + dz);
-        const cell = grid.get(nk);
-        if (cell) for (const j of cell) neighbors.push(j);
-      }
-      for (let a = 0; a < members.length; a++) {
-        const i = members[a];
-        for (let b = 0; b < neighbors.length; b++) {
-          const j = neighbors[b];
-          if (j <= i) continue;
-          const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
-          const distSq = dx * dx + dy * dy + dz * dz;
-          if (distSq < 0.25 || distSq > cellSize * cellSize * 4) continue;
-          const dist = Math.sqrt(distSq);
-          const f = repForce / (distSq + 4);
-          vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
-          vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
-        }
-      }
-    }
-    // ── Global repulsion (medium, covers whole sphere) ──
-    // 40 pseudo-random samples per node — O(n)
-    const globalSamples = Math.min(n, 40);
-    for (let i = 0; i < n; i++) {
-      for (let k = 0; k < globalSamples; k++) {
-        const j = (i + 1 + (k * 7919 + iter * 631) % (n - 1)) % n;
-        const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
-        const distSq = dx * dx + dy * dy + dz * dz;
-        if (distSq < 1) continue;
-        const dist = Math.sqrt(distSq);
-        const f = 400 / (distSq + 100);
-        vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
-      }
-    }
-    // Velocity damping + position update
+    for (let i = 0; i < n; i++) { vel[i * 3] -= pos[i * 3] * 0.0004; vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004; vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004; }
     for (let i = 0; i < n * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
-    // Shell constraint — push nodes back to sphere surface
-    for (let i = 0; i < n; i++) {
-      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2];
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > 0.5) {
-        const drift = (dist - shellRadius) * sp;
-        pos[i * 3] -= (dx / dist) * drift;
-        pos[i * 3 + 1] -= (dy / dist) * drift;
-        pos[i * 3 + 2] -= (dz / dist) * drift;
+    // ── NaN guard: reset diverged nodes to Fibonacci sphere ──
+    if (iter % 5 === 0) {
+      let diverged = false;
+      for (let i = 0; i < n * 3; i++) {
+        if (!isFinite(pos[i]) || !isFinite(vel[i])) { diverged = true; break; }
       }
+      if (diverged) {
+        console.warn(`[StarGraph] layout3D iter ${iter}/${maxIter}: NaN detected, resetting positions`);
+        const fresh = fibonacciSphere(n, shellRadius);
+        for (let i = 0; i < n * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2], dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > 1) { const drift = (dist - shellRadius) * sp; pos[i * 3] -= (dx / dist) * drift; pos[i * 3 + 1] -= (dy / dist) * drift; pos[i * 3 + 2] -= (dz / dist) * drift; }
     }
   }
   return pos;
@@ -2147,14 +2106,26 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
     const rawPos = layout3D(nodes.length, pairs);
-    let cx = 0, cy = 0, cz = 0;
-    for (let i = 0; i < nodes.length; i++) { cx += rawPos[i * 3]; cy += rawPos[i * 3 + 1]; cz += rawPos[i * 3 + 2]; }
-    cx /= nodes.length; cy /= nodes.length; cz /= nodes.length;
+    // ── Safety: replace any NaN positions with origin ──
+    let fixed = 0;
+    for (let i = 0; i < rawPos.length; i++) {
+      if (!isFinite(rawPos[i])) { rawPos[i] = 0; fixed++; }
+    }
+    if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components after layout`);
+    let cx = 0, cy = 0, cz = 0, validCount = 0;
+    for (let i = 0; i < nodes.length; i++) {
+      const x = rawPos[i * 3], y = rawPos[i * 3 + 1], z = rawPos[i * 3 + 2];
+      if (isFinite(x) && isFinite(y) && isFinite(z)) { cx += x; cy += y; cz += z; validCount++; }
+    }
+    if (validCount > 0) { cx /= validCount; cy /= validCount; cz /= validCount; }
     for (let i = 0; i < nodes.length; i++) { rawPos[i * 3] -= cx; rawPos[i * 3 + 1] -= cy; rawPos[i * 3 + 2] -= cz; }
     this.nodePositions = rawPos;
 
     let maxR = 50;
-    for (let i = 0; i < nodes.length; i++) maxR = Math.max(maxR, Math.sqrt(rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2));
+    for (let i = 0; i < nodes.length; i++) {
+      const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
+      if (isFinite(r2)) maxR = Math.max(maxR, Math.sqrt(r2));
+    }
     const camDist = maxR * 1.6;
     this.camera.position.set(camDist * 0.55, camDist * 0.45, camDist * 0.65);
     this.controls.target.set(0, 0, 0);

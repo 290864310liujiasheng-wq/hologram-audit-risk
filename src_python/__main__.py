@@ -101,18 +101,21 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     registry.register(PythonAdapter())
     registry.register(TypeScriptAdapter())
 
+    print(f"  scanning {root}...", file=sys.stderr)
     runner = PipelineRunner(registry, cache)
-    graph, report = runner.run(root)
+    graph, report = runner.run(root, on_progress=lambda f, i, t: print(f"  [{i}/{t}] {f}", file=sys.stderr))
     cache.save_to_disk()
     print(f"[{report.elapsed_sec:.2f}s] {graph.node_count} nodes / {graph.edge_count} edges  (cached: {report.cached_files})", file=sys.stderr)
 
     # Cross-file resolution
+    print(f"  resolving cross-file references...", file=sys.stderr)
     resolver = CrossFileResolver()
     cross_added = resolver.resolve(graph)
     if cross_added:
         print(f"  cross-file edges: {cross_added}", file=sys.stderr)
 
     # Coupling depth analysis — classify every structural edge L1-L4
+    print(f"  coupling analysis...", file=sys.stderr)
     try:
         coupler = CouplingDepthAnalyzer()
         # Collect file sources for AST-based detection
@@ -132,6 +135,7 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
 
     # Community detection (graceful degradation)
+    print(f"  community detection...", file=sys.stderr)
     try:
         detector = CommunityDetector()
         communities = detector.detect(graph)
