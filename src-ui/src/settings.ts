@@ -17,7 +17,7 @@ export interface AgentSettings {
 }
 
 export interface DisplaySettings {
-  defaultViewMode: 'minimal' | 'standard' | 'full';
+  defaultViewMode: 'standard' | 'full' | 'files';
 }
 
 export interface AppSettings {

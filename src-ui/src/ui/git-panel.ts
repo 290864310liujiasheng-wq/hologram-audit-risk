@@ -41,6 +41,8 @@ export class GitPanel {
   private status: GitStatus | null = null;
   private commits: GitCommit[] = [];
   private loading = false;
+  private expandedCommits = new Set<string>();
+  private commitFiles = new Map<string, string[]>();
 
   private static instance: GitPanel | null = null;
 
@@ -159,10 +161,14 @@ export class GitPanel {
       html += '<div class="git-section-head">最近提交</div>';
       html += '<div class="git-commit-list">';
       for (const c of this.commits.slice(0, 10)) {
-        html += `<div class="git-commit-item" title="${escHtml(c.hash)}">
+        const isExpanded = this.expandedCommits.has(c.hash);
+        const cachedFiles = this.commitFiles.get(c.hash);
+        html += `<div class="git-commit-item${isExpanded ? ' expanded' : ''}" data-commit="${escAttr(c.hash)}" title="${escHtml(c.hash)}">
+          <span class="git-commit-chevron">▸</span>
           <span class="git-commit-short">${escHtml(c.short)}</span>
           <span class="git-commit-msg-text">${escHtml(c.message)}</span>
           <span class="git-commit-meta">${escHtml(c.author)} · ${escHtml(relativeTime(c.date))}</span>
+          <div class="git-commit-files">${cachedFiles ? cachedFiles.map(f => `<div class="git-commit-file">${escHtml(f)}</div>`).join('') : ''}</div>
         </div>`;
       }
       html += '</div></div>';
@@ -217,6 +223,14 @@ export class GitPanel {
     const pushBtn = this.content.querySelector('.git-push-btn');
     if (pullBtn) pullBtn.addEventListener('click', () => this.doPull());
     if (pushBtn) pushBtn.addEventListener('click', () => this.doPush());
+
+    // Commit items — expand/collapse to show changed files
+    this.content.querySelectorAll('.git-commit-item').forEach((item) => {
+      const el = item as HTMLElement;
+      const hash = el.dataset['commit'] || '';
+      if (!hash) return;
+      el.addEventListener('click', () => this.toggleCommit(hash));
+    });
   }
 
   private renderFileRow(f: GitFile, isStaged: boolean): string {
@@ -295,7 +309,7 @@ export class GitPanel {
       const diff = await invoke<string>(cmd, { path: this.projectPath, file: filePath });
       FileViewer.get().openDiff(filePath, diff);
     } catch (err: any) {
-      console.error('[git] 获取差异失败:', err);
+      this.showError(`获取差异失败: ${err}`);
     }
   }
 
@@ -305,7 +319,7 @@ export class GitPanel {
       await invoke(cmd, { path: this.projectPath, files: [filePath] });
       await this.refresh();
     } catch (err: any) {
-      console.error('[git] 暂存操作失败:', err);
+      this.showError(`暂存操作失败: ${err}`);
     }
   }
 
@@ -314,7 +328,7 @@ export class GitPanel {
       await invoke('git_stage_all', { path: this.projectPath });
       await this.refresh();
     } catch (err: any) {
-      console.error('[git] 暂存全部失败:', err);
+      this.showError(`暂存全部失败: ${err}`);
     }
   }
 
@@ -331,7 +345,7 @@ export class GitPanel {
       // Also refresh timeline
       bus.emit('git:committed', { message: message.trim(), output });
     } catch (err: any) {
-      console.error('[git] 提交失败:', err);
+      this.showError(`提交失败: ${err}`);
       this.loading = false;
       this.render();
     }
@@ -345,7 +359,7 @@ export class GitPanel {
       await this.refresh();
       bus.emit('git:pushed', { output });
     } catch (err: any) {
-      console.error('[git] 推送失败:', err);
+      this.showError(`推送失败: ${err}`);
       this.loading = false;
       this.render();
     }
@@ -359,10 +373,44 @@ export class GitPanel {
       await this.refresh();
       bus.emit('git:pulled', { output });
     } catch (err: any) {
-      console.error('[git] 拉取失败:', err);
+      this.showError(`拉取失败: ${err}`);
       this.loading = false;
       this.render();
     }
+  }
+
+  private async toggleCommit(hash: string): Promise<void> {
+    if (this.expandedCommits.has(hash)) {
+      // Collapse
+      this.expandedCommits.delete(hash);
+      this.render();
+      return;
+    }
+    // Expand — fetch files if not cached
+    if (!this.commitFiles.has(hash)) {
+      try {
+        const json = await invoke<string>('git_show', { path: this.projectPath, commit: hash });
+        this.commitFiles.set(hash, JSON.parse(json));
+      } catch {
+        this.commitFiles.set(hash, ['(获取失败)']);
+      }
+    }
+    this.expandedCommits.add(hash);
+    this.render();
+  }
+
+  private showError(message: string): void {
+    const el = document.createElement('div');
+    Object.assign(el.style, {
+      position: 'absolute', bottom: '8px', left: '12px', right: '12px', zIndex: '5',
+      padding: '8px 12px', borderRadius: '4px',
+      background: 'rgba(200, 40, 40, 0.15)',
+      border: '1px solid rgba(200, 40, 40, 0.3)',
+      color: 'var(--fail)', fontSize: '10px', fontFamily: 'var(--font-mono)',
+    });
+    el.textContent = message;
+    this.el.appendChild(el);
+    setTimeout(() => el.remove(), 5000);
   }
 }
 

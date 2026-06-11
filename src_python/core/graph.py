@@ -635,6 +635,61 @@ class Graph:
         conn.commit()
         conn.close()
 
+    def to_file_graph(self) -> "Graph":
+        """将符号级图聚合为文件级图。
+
+        每个文件一个节点，文件间一条边 = 其中任一个符号有跨文件调用。
+        大项目（Django 级别）符号级节点百万→文件级永远几千。
+        星图渲染文件级秒出，Agent 查询仍用符号级 SQLite。
+        """
+        import os as _os
+        g = Graph(source_root=self.source_root)
+
+        # --- 1) Build file→node mapping ---
+        file_nodes: dict[str, str] = {}  # file_path → node_id
+        for n in self.nodes.values():
+            loc = (n.location or "").strip()
+            if not loc:
+                continue
+            fp = loc.split(":")[0]  # strip line number
+            if fp not in file_nodes:
+                nid = f"file_{len(file_nodes)}"
+                g.add_node(Node(
+                    id=nid,
+                    type=NodeType.SYMBOL,
+                    name=_os.path.basename(fp) or fp,
+                    location=fp,
+                    language=n.language,
+                    kind="file",
+                    properties={"path": fp},
+                ))
+                file_nodes[fp] = nid
+
+        # --- 2) Aggregate edges across files ---
+        edge_keys: set[tuple[str, str]] = set()
+        for e in self.edges.values():
+            src_loc = (self.nodes.get(e.source) or None)
+            tgt_loc = (self.nodes.get(e.target) or None)
+            if not src_loc or not tgt_loc:
+                continue
+            sfp = (src_loc.location or "").split(":")[0]
+            tfp = (tgt_loc.location or "").split(":")[0]
+            if not sfp or not tfp or sfp == tfp:
+                continue
+            sid = file_nodes.get(sfp)
+            tid = file_nodes.get(tfp)
+            if sid and tid and (sid, tid) not in edge_keys:
+                edge_keys.add((sid, tid))
+                g.add_edge(Edge(
+                    id=f"fe_{len(g.edges)}",
+                    type=EdgeType.STRUCTURAL,
+                    direction="import",
+                    source=sid,
+                    target=tid,
+                ))
+
+        return g
+
     @classmethod
     def from_sqlite(cls, db_path: str) -> "Graph":
         """从 SQLite 数据库快速重建图（比 JSON 解析快 5-10×）。

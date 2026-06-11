@@ -30,7 +30,7 @@ interface GraphJSON {
 interface EdgeData { s: number; t: number; couplingDepth: number; edgeType: string; direction: string; }
 interface CommunityData { id: string; label: string; node_ids: string[]; }
 
-export type VisualMode = 'minimal' | 'standard' | 'full';
+export type VisualMode = 'standard' | 'full' | 'files';
 
 // ── Color Palette ────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ function edgeColorByType(edgeType: string, direction: string): THREE.Color {
   return new THREE.Color(0x6699cc);
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
-  const m = mode === 'full' ? 0.7 : mode === 'minimal' ? 0.6 : 1.0;
+  const m = mode === 'full' ? 0.7 : false ? 0.6 : 1.0;
   switch (depth) { case 1: return 0.08 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
 }
 
@@ -313,11 +313,11 @@ private selectedIdx = -1;
     this.container = container;
     this.mode = mode;
 
-    const bg = mode === 'minimal' ? 0x000005 : BG_COLOR;
+    const bg = false ? 0x000005 : BG_COLOR;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(bg);
-    if (mode !== 'minimal') this.scene.fog = new THREE.FogExp2(bg, 0.000012);
+    if (true) this.scene.fog = new THREE.FogExp2(bg, 0.000012);
 
     this.camera = new THREE.PerspectiveCamera(48, 2, 2, 10000);
 
@@ -349,11 +349,11 @@ private selectedIdx = -1;
     this.sphereGeo = new THREE.SphereGeometry(1, 24, 16);
 
     // starfield disabled
-    // if (mode !== 'minimal') this.buildStarfield();
+    // if (true) this.buildStarfield();
     // nebulaDust disabled
     // if (mode === 'full') this.buildNebulaDust();
 
-    if (mode !== 'minimal') this.buildHoloGrid();
+    if (true) this.buildHoloGrid();
 
     this.galaxyGroup.add(this.edgeGroup);
     this.galaxyGroup.add(this.highlightEdgeGroup);
@@ -369,7 +369,7 @@ private selectedIdx = -1;
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
     this.labelsContainer.id = 'graph-labels';
-    if (mode === 'minimal') this.labelsContainer.style.display = 'none';
+    if (false) this.labelsContainer.style.display = 'none';
     this.container.appendChild(this.labelsContainer);
 
     // Events — detect drag vs click on the canvas (OrbitControls captures pointer events here)
@@ -865,7 +865,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     // Restore normal appearance
     for (let i = 0; i < this.graphNodes.length; i++) {
       if (this.nodeGlows[i]) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
       }
       if (this._useIM) { this._setCoreScale(i, this._coreBaseScale[i]); }
@@ -1065,7 +1065,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     while (this.highlightEdgeGroup.children.length) this.highlightEdgeGroup.remove(this.highlightEdgeGroup.children[0]);
     for (let i = 0; i < this.nodeGlows.length; i++) {
       (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
-      (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+      (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
       const coreColor = this.mode === 'full' ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
       if (this._useIM) {
@@ -1261,7 +1261,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     for (const i of this._agentHighlightIndices) {
       if (this.nodeGlows[i]) {
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       }
       if (this._useIM) { this._setCoreScale(i, this._coreBaseScale[i]); }
       else if (this.nodeCores[i]) this.nodeCores[i].visible = true;
@@ -1269,7 +1269,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     // Restore non-highlighted dimmed nodes
     for (let i = 0; i < this.nodeGlows.length; i++) {
       if (!this._agentHighlightIndices.has(i)) {
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       }
     }
     // Restore edge opacities
@@ -1500,7 +1500,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       if (this.nodeGlows[i]) {
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor);
-        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this.mode === 'minimal' ? 0 : 0.55;
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       }
       const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
       if (this._useIM) {
@@ -2040,7 +2040,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   // ── Render ───────────────────────────────────────────────
 
-  render(graph: GraphJSON): void {
+  render(graph: GraphJSON, layoutPositions?: Float32Array): void {
     this.clearGraph();
     // Store project root for path normalization
     this._graphRoot = ((graph.meta?.source_root || graph.meta?.root || '') as string).replace(/\\/g, '/');
@@ -2105,7 +2105,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.l34Count = new Array(nodes.length).fill(0);
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
-    const rawPos = layout3D(nodes.length, pairs);
+    const rawPos = layoutPositions || layout3D(nodes.length, pairs);
     // ── Safety: replace any NaN positions with origin ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
@@ -2143,7 +2143,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.positionGrid(rawPos);
 
     // Edge particle flow — full mode dense, standard mode subtle, minimal none
-    if (this.mode !== 'minimal') {
+    if (true) {
       this.initEdgeParticles(rawPos, eData);
     }
     if (this.mode === 'full') {
@@ -2234,7 +2234,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const baseScale = 0.6 + (deg[i] / this.maxDeg) * 2.8;
-      const glowOpacity = this.mode === 'minimal' ? 0 : 0.55;
+      const glowOpacity = false ? 0 : 0.55;
       const glowScaleMul = isFull ? 9 : 5.5;
 
       if (isFull) {
@@ -2289,7 +2289,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const baseScale = 0.6 + (deg[i] / this.maxDeg) * 2.8;
       const coreScale = isFull ? baseScale * 0.4 : baseScale;
-      const glowOpacity = this.mode === 'minimal' ? 0 : 0.55;
+      const glowOpacity = false ? 0 : 0.55;
       const glowScaleMul = isFull ? 9 : 5.5;
 
       // Glow sprites (unchanged — Sprites don't benefit from InstancedMesh)
@@ -2384,7 +2384,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (data.length === 0) return;
 
     const isFull = this.mode === 'full';
-    const isMinimal = this.mode === 'minimal';
+    const isMinimal = false;
     if (isMinimal) return; // no particles in minimal mode
 
     // Many small subtle particles — ambient data flow, not flashy dots
@@ -2449,7 +2449,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   private animate(): void {
     this.animId = requestAnimationFrame(() => this.animate());
-    const isMinimal = this.mode === 'minimal';
+    const isMinimal = false;
     const isFull = this.mode === 'full';
     // Full mode: auto-rotate the entire galaxy (nodes + edges + highlights + particles)
     if (isFull) { this.galaxyGroup.rotation.y += 0.0008; this.galaxyGroup.rotation.x += 0.0002; }

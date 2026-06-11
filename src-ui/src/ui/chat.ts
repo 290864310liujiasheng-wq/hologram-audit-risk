@@ -196,6 +196,10 @@ export class ChatPanel {
     this.renderSessionTabs();
     this.restoreMessages();
     this.updateFooter();
+    // Persist deletion immediately
+    if (this.projectPath) {
+      this.saveAllSessions(this.projectPath).catch(() => {});
+    }
   }
 
   private async createNewSession(): Promise<void> {
@@ -246,7 +250,13 @@ export class ChatPanel {
         this.msgList.appendChild(el.cloneNode(true));
       }
     }
-    // Re-wire node-link click handlers
+    // Re-wire all interactive handlers lost by cloneNode
+    this._reWireHandlers();
+    this.scrollBottom();
+  }
+
+  private _reWireHandlers(): void {
+    // Node links
     this.msgList.querySelectorAll('.node-link').forEach((link) => {
       link.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -261,7 +271,31 @@ export class ChatPanel {
         }
       });
     });
-    this.scrollBottom();
+    // Tool card expand/collapse
+    this.msgList.querySelectorAll('.msg-tool-header').forEach((header) => {
+      header.addEventListener('click', () => {
+        header.parentElement?.classList.toggle('tool-expanded');
+      });
+    });
+    // Reasoning toggle
+    this.msgList.querySelectorAll('.msg-reasoning-toggle').forEach((toggle) => {
+      toggle.addEventListener('click', () => {
+        const reasoning = toggle.parentElement;
+        if (reasoning) reasoning.classList.toggle('reasoning-expanded');
+      });
+    });
+    // Copy buttons
+    this.msgList.querySelectorAll('.msg-action-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const bubble = btn.closest('.msg-bubble');
+        const txt = bubble?.querySelector('.msg-text')?.textContent || '';
+        navigator.clipboard.writeText(txt).then(() => {
+          btn.innerHTML = iconHtml('check-circle', 12);
+          setTimeout(() => { btn.innerHTML = iconHtml('copy', 12); }, 1500);
+        }).catch(() => {});
+      });
+    });
   }
 
   // ── Session persistence ──
@@ -313,7 +347,10 @@ export class ChatPanel {
     }
 
     let data: any;
-    try { data = JSON.parse(json); } catch { return; }
+    try { data = JSON.parse(json); } catch (e) {
+      this.addNotice(`会话文件解析失败: ${e}`, 'error');
+      return;
+    }
     if (!data.sessions || data.sessions.length === 0) return;
 
     // Rebuild sessions
@@ -362,6 +399,42 @@ export class ChatPanel {
 
     this.lastUsageText = '';
     this.updateFooter();
+  }
+
+  /** Load a single saved session from disk into a new tab. */
+  private async _loadSavedAsNewTab(saved: { id: number; label: string; messages: Message[] }): Promise<void> {
+    if (!this.agentFactory) {
+      this.addNotice('请先配置 API Key（设置 → Provider）', 'error');
+      return;
+    }
+    const agent = await this.agentFactory();
+    if (!agent) {
+      this.addNotice('无法创建 Agent 实例', 'error');
+      return;
+    }
+    const freshSystem = agent.getSession().filter((m) => m.role === 'system');
+    const savedConv = (saved.messages as Message[]).filter((m) => m.role !== 'system');
+    agent.setSession([...freshSystem, ...savedConv]);
+
+    const firstUserMsg = savedConv.find((m: Message) => m.role === 'user' && !m.content?.startsWith('<compacted-context>'));
+    const label = (saved.label && !saved.label.startsWith('会话 '))
+      ? saved.label
+      : firstUserMsg
+        ? firstUserMsg.content!.slice(0, 28) + (firstUserMsg.content!.length > 28 ? '…' : '')
+        : `会话 ${this.sessions.length + 1}`;
+
+    if (this.activeIdx >= 0) this.saveCurrentMessages();
+    this.flushReasoning();
+    this.flushText();
+    this.pendingToolCards.clear();
+
+    this.sessions.push({ id: saved.id, label, agent });
+    this.activeIdx = this.sessions.length - 1;
+    this.renderSessionTabs();
+    this.renderRestoredSession();
+    this.lastUsageText = '';
+    this.updateFooter();
+    this.addNotice(`已加载历史会话: ${label}`, 'info');
   }
 
   /** Walk through active agent's session array and build DOM bubbles. */
@@ -608,10 +681,13 @@ export class ChatPanel {
             const existing = this.sessions.findIndex(s => s.id === saved.id);
             if (existing >= 0) {
               this.switchSession(existing);
+              this.closeHistory();
             } else {
-              this.addNotice('此会话不在当前标签页中，已保存到磁盘', 'info');
+              this.closeHistory();
+              this._loadSavedAsNewTab(saved).catch((e) => {
+                this.addNotice(`加载会话失败: ${e}`, 'error');
+              });
             }
-            this.closeHistory();
           },
           false,
         );
@@ -1328,7 +1404,7 @@ export class ChatPanel {
       if (!popup.contains(e.target as Node) && e.target !== trigger) {
         popup.classList.remove('open');
       }
-    }, { once: true });
+    });
 
     // Popup items
     popup.querySelectorAll('.sp-item').forEach((item) => {

@@ -340,16 +340,6 @@ export class CheckPanel {
       askBtn.className = 'check-ask-btn';
       askBtn.innerHTML = iconHtml('agent', 11);
       askBtn.title = '问 Agent 关于这条违规';
-      Object.assign(askBtn.style, {
-        width: '20px', height: '20px', padding: '0', flexShrink: '0', marginLeft: 'auto',
-        background: 'none', border: '1px solid var(--panel-edge, rgba(48,60,80,0.3))',
-        color: 'var(--text-muted, #4a5568)', cursor: 'pointer', borderRadius: '3px',
-        fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        transition: 'color var(--snap, 0.12s), border-color var(--snap, 0.12s)',
-        opacity: '0.6',
-      });
-      askBtn.addEventListener('mouseenter', () => { askBtn.style.opacity = '1'; askBtn.style.color = 'var(--signal, #7eb8ff)'; askBtn.style.borderColor = 'var(--signal, #7eb8ff)'; });
-      askBtn.addEventListener('mouseleave', () => { askBtn.style.opacity = '0.6'; askBtn.style.color = 'var(--text-muted, #4a5568)'; askBtn.style.borderColor = 'var(--panel-edge, rgba(48,60,80,0.3))'; });
       const nodeList = (sig.affected_nodes || []).slice(0, 3).join(', ');
       askBtn.addEventListener('click', (e) => {
         e.stopPropagation();

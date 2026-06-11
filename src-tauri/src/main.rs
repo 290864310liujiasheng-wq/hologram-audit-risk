@@ -1332,8 +1332,10 @@ async fn analyze_and_load(path: String, app: tauri::AppHandle) -> Result<String,
         return Err(format!("分析完成但无输出。stderr:\n{}", stderr));
     }
 
-    // Persist to default graph path for next startup
-    let _ = std::fs::write(default_graph(), &stdout);
+    // Persist to default graph for next startup (skip if >20MB — startup freeze guard)
+    if stdout.len() < 20 * 1024 * 1024 {
+        let _ = std::fs::write(default_graph(), &stdout);
+    }
     // Also save the last project path to a simple config file
     let last_path_file = project_root().join(".last_project");
     let _ = std::fs::write(&last_path_file, &path);

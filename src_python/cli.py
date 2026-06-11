@@ -147,6 +147,14 @@ def cmd_analyze(args) -> int:
         print(f"SQLite saved: {db_path}")
     except Exception as exc:
         print(f"  sqlite skipped: {exc}", file=sys.stderr)
+    # A5: 文件级聚合图
+    files_path = output.replace('.json', '_files.json')
+    try:
+        fg = graph.to_file_graph()
+        fg.to_json(files_path)
+        print(f"File graph saved: {files_path}")
+    except Exception as exc:
+        print(f"  file-graph skipped: {exc}", file=sys.stderr)
     print(f"Graph saved: {output}")
     print(f"  Nodes: {graph.node_count}, Edges: {graph.edge_count}")
     print(f"  Communities: {graph.community_count}")

@@ -15,6 +15,7 @@ export class SettingsPanel {
   private overlay!: HTMLElement;
   private panel!: HTMLElement;
   private openState = false;
+  private dirty = false;
   private activeTab: Tab = 'provider';
   private originalSettings: AppSettings;
   private workingSettings: AppSettings;
@@ -58,6 +59,7 @@ export class SettingsPanel {
   }
 
   close(): void {
+    if (this.dirty && !confirm('有未保存的修改，确定关闭？')) return;
     this.openState = false;
     this.overlay.classList.remove('sp-open');
     this.panel.classList.remove('sp-open');
@@ -121,7 +123,14 @@ export class SettingsPanel {
         <button class="sp-btn sp-btn-save">${iconHtml('save', 11)} 保存</button>
       </div>`;
 
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.panel.appendChild(brackets);
+
     // Wire events
+    this.dirty = false;
     this.wireEvents();
   }
 
@@ -222,7 +231,7 @@ export class SettingsPanel {
 
   private renderDisplayTab(viewMode: string): string {
     const modes: Array<{ id: string; label: string; desc: string }> = [
-      { id: 'minimal', label: '极简骨架', desc: '仅显示核心依赖边' },
+      { id: 'files', label: '文件视图', desc: '文件级聚合（大项目防崩）' },
       { id: 'standard', label: '标准星图', desc: '完整依赖图 + 社区星系' },
       { id: 'full', label: '观赏模式', desc: '全量渲染，所有边可见' },
     ];
@@ -250,6 +259,12 @@ export class SettingsPanel {
   // ── Events ──
 
   private wireEvents(): void {
+    // Mark dirty on any input change
+    this.panel.querySelectorAll('input, select, textarea').forEach((el) => {
+      el.addEventListener('input', () => { this.dirty = true; });
+      el.addEventListener('change', () => { this.dirty = true; });
+    });
+
     // Tab switching
     this.panel.querySelectorAll('.sp-tab').forEach((tab) => {
       tab.addEventListener('click', () => {
@@ -343,12 +358,13 @@ export class SettingsPanel {
     // Read display form values
     const viewModeEl = this.panel.querySelector('input[name="viewMode"]:checked') as HTMLInputElement;
     if (viewModeEl) {
-      s.display.defaultViewMode = viewModeEl.value as 'minimal' | 'standard' | 'full';
+      s.display.defaultViewMode = viewModeEl.value as 'standard' | 'full' | 'files';
     }
 
     // Save to localStorage
     saveSettings(s);
     this.originalSettings = JSON.parse(JSON.stringify(s));
+    this.dirty = false;
 
     // Flash save button
     const btn = this.panel.querySelector('.sp-btn-save') as HTMLElement;

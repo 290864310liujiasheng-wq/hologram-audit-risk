@@ -79,7 +79,7 @@ export class FileViewer {
     this.el.id = 'file-viewer';
     this.el.className = 'file-viewer';
     Object.assign(this.el.style, {
-      position: 'absolute', zIndex: '30', display: 'none',
+      position: 'absolute', zIndex: '30',
       width: `${this.state.width}px`, height: `${this.state.height}px`,
       left: `${this.state.x}px`, top: `${this.state.y}px`,
       background: 'var(--panel-bg, rgba(6, 12, 24, 0.97))',
@@ -306,7 +306,7 @@ export class FileViewer {
       this.activeIdx = existingIdx;
       this.renderTabs();
       this.editor.setModel(this.tabs[existingIdx].model);
-      this.el.style.display = 'flex';
+      this.el.classList.add('fv-open');
       this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
       this.centerOnScreen();
       this.editor.layout();
@@ -323,7 +323,7 @@ export class FileViewer {
 
     this.state.open = true;
     this.centerOnScreen();
-    this.el.style.display = 'flex';
+    this.el.classList.add('fv-open');
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
 
     try {
@@ -406,7 +406,7 @@ export class FileViewer {
     this.activeIdx = this.tabs.length - 1;
     this.editor.setModel(model);
     this.renderTabs();
-    this.el.style.display = 'flex';
+    this.el.classList.add('fv-open');
     this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
     this.centerOnScreen();
     this.editor.layout();
@@ -420,7 +420,7 @@ export class FileViewer {
     this.tabs = [];
     this.activeIdx = -1;
     this.tabBar.innerHTML = '';
-    this.el.style.display = 'none';
+    this.el.classList.remove('fv-open');
   }
 
   close(): void {

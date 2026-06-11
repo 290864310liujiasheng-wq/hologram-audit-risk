@@ -58,7 +58,7 @@ export class TerminalPanel {
       borderTop: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.5))',
       display: 'flex', flexDirection: 'column',
       transform: 'translateY(100%)',
-      transition: 'transform var(--glide, 0.25s cubic-bezier(0.4, 0, 0.2, 1))',
+      transition: 'transform var(--glide, 0.28s cubic-bezier(0.23, 1, 0.32, 1)), height var(--glide, 0.28s cubic-bezier(0.23, 1, 0.32, 1))',
     });
 
     // Corner brackets
@@ -384,8 +384,8 @@ export class TerminalPanel {
   collapse(): void {
     if (!this.openState) return;
     this.collapsed = true;
+    this.panel.style.height = '36px'; // tab bar height, fixed so transition works
     this.body.style.display = 'none';
-    this.panel.style.height = 'auto';
     this.panel.style.transform = 'translateY(0)'; // stays visible
     this.renderTabs();
   }

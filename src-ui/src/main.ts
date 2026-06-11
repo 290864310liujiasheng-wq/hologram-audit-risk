@@ -27,6 +27,52 @@ import { iconSvg } from './ui/icons';
 import { visualizeAgentTool } from './ui/agent-visualizer';
 import { dbg } from './ui/debug';
 
+// ── Worker layout helper ──
+// Computes layout3D in a Web Worker to keep the main thread responsive.
+// Falls back to synchronous computation if Worker fails or times out (5s).
+
+function buildEdgePairs(graph: any): Array<[number, number]> {
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes || {});
+  const nodeIdx = new Map<string, number>();
+  nodes.forEach((n: any, i: number) => nodeIdx.set(n.id, i));
+  const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges || {});
+  const pairs: Array<[number, number]> = [];
+  for (const e of edges) {
+    const s = nodeIdx.get(e.source), t = nodeIdx.get(e.target);
+    if (s !== undefined && t !== undefined) pairs.push([s, t]);
+  }
+  return pairs;
+}
+
+function layoutViaWorker(
+  nodeCount: number,
+  pairs: Array<[number, number]>,
+): Promise<Float32Array> {
+  return new Promise((resolve) => {
+    try {
+      const worker = new Worker(new URL('./ui/layout.worker.ts', import.meta.url), { type: 'module' });
+      const timeout = setTimeout(() => {
+        worker.terminate();
+        // Fallback: import sync layout3D
+        import('./ui/graph').then(() => resolve(new Float32Array(0)));
+      }, 5000);
+      worker.onmessage = (e: MessageEvent) => {
+        clearTimeout(timeout);
+        worker.terminate();
+        resolve(e.data.pos as Float32Array);
+      };
+      worker.onerror = () => {
+        clearTimeout(timeout);
+        worker.terminate();
+        resolve(new Float32Array(0));
+      };
+      worker.postMessage({ nodes: nodeCount, pairs });
+    } catch {
+      resolve(new Float32Array(0));
+    }
+  });
+}
+
 // ── UI ──
 const welcome = document.getElementById('welcome')!;
 const graphEl = document.getElementById('graph')!;
@@ -48,6 +94,7 @@ const btnTerminal = document.getElementById('btn-terminal') as HTMLButtonElement
 // ── State ──
 let currentPath: string | null = null;
 let currentGraphData: any = null;
+let currentFileGraphData: any = null;
 let currentMode: VisualMode = 'standard';
 let starGraph: StarGraph = new StarGraph(graphEl, currentMode);
 
@@ -66,8 +113,10 @@ function setupModeSwitch(): void {
 
   // Restore saved view mode on startup
   const savedMode = loadSettings().display?.defaultViewMode || 'standard';
-  if (savedMode !== 'standard') {
-    currentMode = savedMode;
+  const validModes: VisualMode[] = ['standard', 'full', 'files'];
+  const mode = validModes.includes(savedMode as VisualMode) ? (savedMode as VisualMode) : 'standard';
+  if (mode !== 'standard') {
+    currentMode = mode;
     buttons.forEach(b => {
       b.classList.toggle('active', (b as HTMLElement).dataset['mode'] === savedMode);
     });
@@ -90,7 +139,9 @@ function setupModeSwitch(): void {
       starGraph.destroy();
       starGraph = new StarGraph(graphEl, currentMode);
       chatPanel.setStarGraph(starGraph);
-      if (currentGraphData) starGraph.render(currentGraphData);
+      const graphForMode = (currentMode === 'files' && currentFileGraphData)
+        ? currentFileGraphData : currentGraphData;
+      if (graphForMode) starGraph.render(graphForMode);
 
       // Re-wire search (new instance)
       if (searchInput.value.trim()) {
@@ -126,20 +177,48 @@ async function openProject(path?: string): Promise<void> {
 
   setLoading(true, folder);
   try {
-    // A3: try MessagePack binary first, fall back to JSON
+    // Load graph: MsgPack first, fall back to Python analysis
     let graph: any;
     try {
       const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
       const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
       graph = decode(bytes) as any;
     } catch {
-      // Fallback: run analysis or load cached JSON
       const json = await invoke<string>('analyze_and_load', { path: folder });
       graph = JSON.parse(json);
     }
     currentGraphData = graph;
-    starGraph.render(graph);
-    showGraphView(folder);
+    const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
+    // Auto-load file-level graph for large projects
+    try {
+      const filesPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
+      currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
+    } catch { currentFileGraphData = null; }
+
+    if (nodeCount > 50000) {
+      if (currentFileGraphData) {
+        currentMode = 'files';
+        starGraph.destroy();
+        starGraph = new StarGraph(graphEl, 'files');
+        chatPanel.setStarGraph(starGraph);
+        starGraph.render(currentFileGraphData);
+        statusText.textContent = `⚠️ ${nodeCount} 节点 — 已切换文件视图`;
+        showGraphView(folder);
+      } else {
+        statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
+      }
+    } else {
+      // Layout via Worker for responsiveness on large graphs
+      if (nodeCount > 2000) {
+        const pairs = buildEdgePairs(graph);
+        const pos = await layoutViaWorker(nodeCount, pairs);
+        if (pos.length > 0) starGraph.render(graph, pos);
+        else starGraph.render(graph);
+      } else {
+        starGraph.render(graph);
+      }
+      showGraphView(folder);
+    }
     setLoading(false); // 图已就绪，不等 Agent
     // Agent 初始化（异步，不阻塞图的显示）
     try { await setupAgent(); } catch (e) { console.error('[openProject] setupAgent failed:', e); }
@@ -929,14 +1008,17 @@ async function init(): Promise<void> {
       const nodeCount = Array.isArray(graph.nodes) ? graph.nodes.length : Object.keys(graph.nodes || {}).length;
       if (nodeCount > 0) {
         currentGraphData = graph;
-        starGraph.render(graph);
-        // Clear diff on update
+        if (nodeCount > 50000) {
+          statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
+        } else {
+          starGraph.render(graph);
+          statusText.textContent = `已更新 (${nodeCount} 节点)`;
+          setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
+        }
         if (diffActive) { starGraph.clearDiff(); diffActive = false; btnDiff.innerHTML = `${iconSvg('diff')} 变更`; }
         setupAgent().catch(() => {});
         runCheck();
         timelinePanel.setProjectPath(currentPath);
-        statusText.textContent = `已更新 (${nodeCount} 节点)`;
-        setTimeout(() => { if (statusText.textContent?.startsWith('已更新')) statusText.textContent = '就绪'; }, 3000);
       }
     } catch { /* ignore */ }
   });

@@ -114,6 +114,13 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     if cross_added:
         print(f"  cross-file edges: {cross_added}", file=sys.stderr)
 
+    # ── Phase 1 complete — nodes + edges ready, write early so next open is instant ──
+    save_path = output_path or os.path.join(root, "hologram_graph.json")
+    try:
+        graph.to_json(save_path)
+    except Exception:
+        pass
+
     # Coupling depth analysis — classify every structural edge L1-L4
     print(f"  coupling analysis...", file=sys.stderr)
     try:
@@ -160,6 +167,14 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
         graph.to_sqlite(db_path)
     except Exception as exc:
         print(f"  sqlite skipped: {exc}", file=sys.stderr)
+
+    # A5: 文件级聚合图 — 大项目兜底渲染
+    files_path = save_path.replace('.json', '_files.json')
+    try:
+        fg = graph.to_file_graph()
+        fg.to_json(files_path)
+    except Exception as exc:
+        print(f"  file-graph skipped: {exc}", file=sys.stderr)
 
     if output_json:
         # JSON to stdout

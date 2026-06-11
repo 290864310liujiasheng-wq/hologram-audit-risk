@@ -41,18 +41,18 @@ export class FileTreePanel {
       backdropFilter: 'var(--blur, blur(12px))',
       WebkitBackdropFilter: 'var(--blur, blur(12px))',
       transform: 'translateX(-100%)',
-      transition: 'transform 0.18s ease',
+      transition: 'transform var(--glide, 0.28s cubic-bezier(0.23, 1, 0.32, 1))',
     });
+
+    // Corner brackets
+    const brackets = document.createElement('div');
+    brackets.className = 'corner-brackets';
+    brackets.innerHTML = '<span class="cb-bottom left"></span><span class="cb-bottom right"></span>';
+    this.el.appendChild(brackets);
 
     // Header
     this.headerEl = document.createElement('div');
-    Object.assign(this.headerEl.style, {
-      display: 'flex', alignItems: 'center', gap: '8px',
-      padding: '8px 12px', flexShrink: '0',
-      borderBottom: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
-      fontSize: '11px', fontFamily: 'var(--font-mono, monospace)',
-      color: 'var(--text-muted)',
-    });
+    this.headerEl.className = 'ft-header';
 
     // Close button
     const closeBtn = document.createElement('button');
@@ -80,10 +80,7 @@ export class FileTreePanel {
 
     // Tree container
     this.treeEl = document.createElement('div');
-    Object.assign(this.treeEl.style, {
-      flex: '1', overflow: 'auto', padding: '4px 0',
-      fontFamily: 'var(--font-mono, monospace)', fontSize: '12px',
-    });
+    this.treeEl.className = 'ft-tree';
     this.el.appendChild(this.treeEl);
 
     document.body.appendChild(this.el);
@@ -120,7 +117,7 @@ export class FileTreePanel {
   close(): void {
     this.open = false;
     this.el.style.transform = 'translateX(-100%)';
-    setTimeout(() => { if (!this.open) this.el.style.display = 'none'; }, 200);
+    setTimeout(() => { if (!this.open) this.el.style.display = 'none'; }, 280);
     bus.emit('panel:toggle');
   }
 
@@ -201,44 +198,26 @@ export class FileTreePanel {
 
   private buildRow(entry: DirEntry, basePath: string, depth: number): HTMLElement {
     const row = document.createElement('div');
-    const indent = 12 + depth * 16;
-
-    Object.assign(row.style, {
-      display: 'flex', alignItems: 'center', gap: '4px',
-      padding: `3px 8px 3px ${indent}px`,
-      cursor: 'pointer', userSelect: 'none',
-      transition: 'background 0.1s',
-      borderLeft: '2px solid transparent',
-    });
+    row.className = 'ft-row';
+    row.style.setProperty('--indent', `${12 + depth * 16}px`);
     row.dataset['filePath'] = entry.path;
-
-    row.addEventListener('mouseenter', () => {
-      row.style.background = 'rgba(30, 55, 100, 0.3)';
-      row.style.borderLeftColor = 'rgba(60, 100, 170, 0.4)';
-    });
-    row.addEventListener('mouseleave', () => {
-      row.style.background = '';
-      row.style.borderLeftColor = 'transparent';
-    });
 
     // Arrow / spacer
     const arrow = document.createElement('span');
     arrow.className = 'ft-arrow';
-    arrow.style.cssText = 'width:12px;text-align:center;flex-shrink:0;font-size:9px;color:var(--text-muted)';
     arrow.textContent = entry.is_dir ? '▸' : '';
     row.appendChild(arrow);
 
     // Icon
     const icon = document.createElement('span');
-    icon.style.cssText = 'width:14px;text-align:center;flex-shrink:0;opacity:0.7';
+    icon.className = 'ft-icon';
     icon.innerHTML = entry.is_dir ? iconSvg('folder-closed', 12) : fileIcon(entry.name);
     row.appendChild(icon);
 
     // Name
     const name = document.createElement('span');
-    name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
+    name.className = entry.is_dir ? 'ft-name ft-name-dir' : 'ft-name ft-name-file';
     name.textContent = entry.name;
-    name.style.color = entry.is_dir ? 'var(--starlight, #e6edf3)' : 'var(--text-muted)';
     row.appendChild(name);
 
     // "Ask Agent" icon — appears on hover for files
@@ -246,15 +225,11 @@ export class FileTreePanel {
       const askIcon = document.createElement('span');
       askIcon.innerHTML = iconSvg('agent', 11);
       askIcon.title = '问 Agent 分析这个文件';
-      askIcon.style.cssText = 'width:16px;height:16px;flex-shrink:0;opacity:0;cursor:pointer;transition:opacity 0.15s;display:flex;align-items:center;justify-content:center;';
+      askIcon.className = 'ft-ask-btn';
       askIcon.addEventListener('click', (e) => {
         e.stopPropagation();
         askAgent(`分析文件 "${entry.path}"。它在依赖图中的位置是什么？和其他模块的耦合关系如何？修改它会影响什么？`);
       });
-      askIcon.addEventListener('mouseenter', () => { askIcon.style.opacity = '1'; });
-      askIcon.addEventListener('mouseleave', () => { if (!row.matches(':hover')) askIcon.style.opacity = '0'; });
-      row.addEventListener('mouseenter', () => { askIcon.style.opacity = '0.7'; });
-      row.addEventListener('mouseleave', () => { askIcon.style.opacity = '0'; });
       row.appendChild(askIcon);
     }
 

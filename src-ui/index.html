@@ -555,6 +555,7 @@
       background: var(--panel-bg);
       backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
       border: 1px solid rgba(60, 100, 180, 0.3);
+      border-radius: 6px;
       padding: 12px 14px; width: 210px; font-size: 9px;
       line-height: 1.5; opacity: 0;
       transform: translateY(4px) scale(0.97);
@@ -1454,6 +1455,18 @@
       font-size: 9px; color: rgba(105, 145, 200, 0.38);
       padding: 2px 8px; font-style: italic;
     }
+    .check-ask-btn {
+      width: 20px; height: 20px; padding: 0; flex-shrink: 0; margin-left: auto;
+      background: none; border: 1px solid var(--panel-edge, rgba(48,60,80,0.3));
+      color: var(--text-muted, #4a5568); cursor: pointer; border-radius: 3px;
+      font-size: 12px; display: flex; align-items: center; justify-content: center;
+      transition: color var(--snap), border-color var(--snap), opacity var(--snap);
+      opacity: 0.6;
+    }
+    .check-ask-btn:hover {
+      opacity: 1; color: var(--signal, #7eb8ff);
+      border-color: var(--signal, #7eb8ff);
+    }
 
     /* Stats grid */
     .check-stats-grid {
@@ -1486,7 +1499,7 @@
       background: rgba(2, 6, 14, 0.98);
       border-top: 1px solid rgba(40, 60, 100, 0.3);
       transform: translateY(calc(100% + 28px));
-      transition: transform var(--glide);
+      transition: transform var(--glide), height var(--glide);
       display: flex; flex-direction: column;
     }
     #terminal-panel .term-container { flex: 1; overflow: hidden; padding: 4px 6px 0 6px; }
@@ -1818,11 +1831,28 @@
 
     .git-commit-list { display: flex; flex-direction: column; }
     .git-commit-item {
-      display: flex; align-items: center; gap: 8px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
       padding: 3px 12px; font-family: var(--font-mono); font-size: 9px;
       transition: background var(--snap);
+      cursor: pointer; user-select: none;
     }
     .git-commit-item:hover { background: rgba(30,50,80,0.12); }
+    .git-commit-item.expanded { background: rgba(30,50,80,0.08); }
+    .git-commit-item .git-commit-chevron {
+      width: 10px; flex-shrink: 0; font-size: 8px; color: var(--text-muted);
+      transition: transform var(--snap);
+    }
+    .git-commit-item.expanded .git-commit-chevron { transform: rotate(90deg); }
+    .git-commit-files {
+      flex-basis: 100%; display: none;
+      margin-top: 2px; padding: 2px 0 2px 18px;
+      border-top: 1px solid rgba(30,50,80,0.1);
+      font-size: 8px; color: rgba(145,180,225,0.5);
+    }
+    .git-commit-item.expanded .git-commit-files { display: block; }
+    .git-commit-file {
+      padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .git-commit-short {
       color: var(--signal); font-weight: 600; flex-shrink: 0;
     }
@@ -1978,7 +2008,7 @@
        ═══════════════════════════════════════════════════════════════ */
     #file-viewer, .file-viewer {
       position: fixed; z-index: 80;
-      display: none; flex-direction: column;
+      display: flex; flex-direction: column;
       background: var(--panel-bg);
       backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
       border: 1px solid rgba(50, 80, 140, 0.3);
@@ -1987,6 +2017,12 @@
       min-width: 260px; min-height: 150px;
       box-shadow: 0 0 0 1px rgba(60, 100, 180, 0.05),
                   0 16px 48px rgba(0, 0, 0, 0.55);
+      opacity: 0; transform: scale(0.95);
+      transition: opacity var(--glide), transform var(--glide);
+      pointer-events: none;
+    }
+    #file-viewer.fv-open {
+      opacity: 1; transform: scale(1); pointer-events: auto;
     }
 
     #file-viewer ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -2058,6 +2094,48 @@
     #file-tree-panel::-webkit-scrollbar-thumb {
       background: rgba(48, 60, 80, 0.4); border-radius: 2px;
     }
+    .ft-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px; flex-shrink: 0;
+      border-bottom: 1px solid var(--panel-edge, rgba(48, 60, 80, 0.3));
+      font-size: 11px; font-family: var(--font-mono, monospace);
+      color: var(--text-muted);
+    }
+    .ft-tree {
+      flex: 1; overflow: auto; padding: 4px 0;
+      font-family: var(--font-mono, monospace); font-size: 12px;
+    }
+    .ft-row {
+      display: flex; align-items: center; gap: 4px;
+      padding: 3px 8px 3px var(--indent, 12px);
+      cursor: pointer; user-select: none;
+      transition: background var(--snap), border-left-color var(--snap);
+      border-left: 2px solid transparent;
+    }
+    .ft-row:hover {
+      background: rgba(30, 55, 100, 0.3);
+      border-left-color: rgba(60, 100, 170, 0.4);
+    }
+    .ft-arrow {
+      width: 12px; text-align: center; flex-shrink: 0;
+      font-size: 9px; color: var(--text-muted);
+    }
+    .ft-icon {
+      width: 14px; text-align: center; flex-shrink: 0; opacity: 0.7;
+    }
+    .ft-name {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+    }
+    .ft-name-dir { color: var(--starlight, #e6edf3); }
+    .ft-name-file { color: var(--text-muted); }
+    .ft-ask-btn {
+      width: 16px; height: 16px; flex-shrink: 0;
+      opacity: 0; cursor: pointer;
+      transition: opacity var(--snap);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ft-row:hover .ft-ask-btn { opacity: 0.7; }
+    .ft-ask-btn:hover { opacity: 1; }
 
     /* ═══════════════════════════════════════════════════════════════
        ICONS
@@ -2099,16 +2177,6 @@
     #settings-panel.sp-open { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
 
     /* Corner brackets */
-    #settings-panel::before,
-    #settings-panel::after {
-      content: ''; position: absolute; z-index: 1; pointer-events: none;
-      width: 12px; height: 12px;
-      border-color: var(--panel-edge);
-      border-style: solid;
-    }
-    #settings-panel::before { top: 0; left: 0; border-width: 1px 0 0 1px; }
-    #settings-panel::after  { top: 0; right: 0; border-width: 1px 1px 0 0; }
-
     /* Header */
     .sp-header {
       display: flex; align-items: center; justify-content: space-between;
@@ -2341,7 +2409,7 @@
        ═══════════════════════════════════════════════════════════════ -->
   <div id="toolbar">
     <div id="mode-switch">
-      <button class="mode-btn" data-mode="minimal" data-icon="mode-minimal" title="极简骨架"></button>
+      <button class="mode-btn" data-mode="files" data-icon="mode-minimal" title="文件视图"></button>
       <button class="mode-btn active" data-mode="standard" data-icon="mode-standard" title="标准星图"></button>
       <button class="mode-btn" data-mode="full" data-icon="mode-full" title="观赏模式"></button>
     </div>
