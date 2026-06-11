@@ -136,7 +136,9 @@ function fibonacciSphere(n: number, radius: number): Float32Array {
 
 function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   if (n === 0) return new Float32Array(0);
-  const shellRadius = Math.cbrt(n) * 14, pos = fibonacciSphere(n, shellRadius);
+  // Scale shell so surface area ∝ n → constant room per node
+  // sqrt(n) ensures 5K and 500K have same density; floor 80 for tiny projects
+  const shellRadius = Math.max(80, Math.sqrt(n) * 5), pos = fibonacciSphere(n, shellRadius);
   const vel = new Float32Array(n * 3);
   const deg = new Uint16Array(n);
   for (const [s, t] of edgePairs) { deg[s]++; deg[t]++; }
