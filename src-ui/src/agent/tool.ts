@@ -123,7 +123,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_fragile',
       description: () =>
-        'Find the most fragile modules in the codebase — those with the highest coupling depth (L4 = encapsulation violations), most incoming dependencies (high fan-in), and most data flow cycles. Returns a ranked list.',
+        'Rank modules by coupling depth (L1 same-module through L4 cross-boundary), fan-in count, and cycle participation. Returns a ranked list. High rank means high interconnection — well-designed hubs (auth, config, main entry points) are expected to rank high by design.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -168,7 +168,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_blindspots',
       description: () =>
-        'Find boundary blindspots — nodes that bridge module/package boundaries without explicit imports, dynamic dispatch patterns, and other runtime coupling the static analyzer might miss.',
+        'Find cross-boundary edges — nodes connected across module/package boundaries through runtime mechanisms (dynamic dispatch, reflection, late binding) rather than static imports. Note: plugin systems and dependency injection frameworks produce these edges by design; they are not necessarily defects.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -275,7 +275,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_run_check',
       description: () =>
-        'Run full constraint validation (V3) on the current project. Re-analyzes the codebase, generates L5-L1 signals, checks against constraints, and returns a change summary with violations grouped by severity level. Use this when the user asks "检查一下" or "有没有问题" or "跑一遍约束".',
+        'Run full constraint validation (V3) on the current project. Re-analyzes the codebase, checks against constraints, and returns results — including any violations found AND confirmation of rules that pass. Use when the user asks for a thorough project audit ("全面检查" or "跑一遍约束"). Do NOT run this for casual "check" questions; use lighter tools first.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -314,7 +314,7 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'hologram_run_health',
       description: () =>
-        'Project health report (V3): aggregates timeline change history and coupling depth snapshot to compute a health score (0-100), trends (coupling/cycles/change frequency), top changed files, and most fragile modules. Use when the user asks "项目健康吗？" or "最近的趋势怎么样？"',
+        'Project coupling overview (V3): aggregates timeline change history and coupling depth snapshot to compute a coupling density score (0-100), trends, top changed files, and most interconnected modules. Use when the user asks "项目最近怎么样？" or "最近的趋势怎么样？". Note: the score reflects coupling density, not code quality — different project stages have different normal ranges.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -415,6 +415,596 @@ export function createHologramTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => true,
       execute: (args) => exec('hologram_changes', {}),
+    },
+    {
+      name: () => 'hologram_search',
+      description: () =>
+        'Fuzzy search for nodes by name or ID. Returns matching symbols with their IDs, types, and locations. Use this as the FIRST step when looking for a function/class/module but don\'t know its exact name or ID. Once you have the node ID, use hologram_neighbors for its dependencies.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Partial name or ID to search for (e.g. "auth", "parse", "Config")',
+          },
+          limit: {
+            type: 'integer',
+            description: 'Maximum results to return (default: 20)',
+            default: 20,
+          },
+        },
+        required: ['query'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('hologram_search', args),
+    },
+  ];
+}
+
+// ═══════════════════════════════════════════════════════
+// Coding Tools — 文件 / Shell / 搜索 / Git / Web
+// ═══════════════════════════════════════════════════════
+
+export function createCodingTools(exec: ToolExecutor): Tool[] {
+  return [
+    // ── User Interaction ──
+    {
+      name: () => 'ask_user',
+      description: () =>
+        'Ask the user a question when you need clarification or confirmation before proceeding. Use when the request is ambiguous, you need to choose between approaches, or you need approval for a destructive action. Returns the user\'s answer.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          question: {
+            type: 'string',
+            description: 'The question to ask the user. Be specific about what you need to know.',
+          },
+          header: {
+            type: 'string',
+            description: 'Short label (max 12 chars) shown as a tag, e.g. "Confirm", "Approach", "File"',
+          },
+          options: {
+            type: 'array',
+            description: '2-4 predefined choices the user can pick from. Each option has a label and optional description.',
+            items: {
+              type: 'object',
+              properties: {
+                label: { type: 'string', description: 'Display text (1-5 words)' },
+                description: { type: 'string', description: 'Explanation of what this option means' },
+              },
+              required: ['label', 'description'],
+            },
+          },
+          multiSelect: {
+            type: 'boolean',
+            description: 'Set to true to allow selecting multiple options (default: false)',
+            default: false,
+          },
+        },
+        required: ['question', 'header', 'options'],
+      }),
+      readOnly: () => true,
+      execute: async (args) => {
+        const question = args.question as string;
+        const header = args.header as string;
+        const options = (args.options || []) as { label: string; description: string }[];
+        const multiSelect = args.multiSelect === true;
+        // Use a Promise to wait for user interaction
+        return new Promise((resolve) => {
+          const overlay = document.createElement('div');
+          Object.assign(overlay.style, {
+            position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
+            background: 'rgba(0,0,0,0.6)', zIndex: '9999',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          });
+          const dialog = document.createElement('div');
+          Object.assign(dialog.style, {
+            background: 'var(--panel-bg, rgba(6,12,24,0.97))',
+            border: '1px solid var(--panel-edge, rgba(54,82,128,0.35))',
+            borderRadius: '12px', padding: '24px', maxWidth: '520px', minWidth: '320px',
+            color: 'var(--starlight, #e2edff)', fontFamily: 'var(--font-mono, monospace)',
+            boxShadow: '0 16px 64px rgba(0,0,0,0.5)',
+          });
+          const hdr = document.createElement('div');
+          hdr.textContent = header;
+          Object.assign(hdr.style, {
+            fontSize: '11px', color: 'var(--signal, #68a8ff)', marginBottom: '8px',
+            textTransform: 'uppercase', letterSpacing: '1px', fontWeight: '600',
+          });
+          const q = document.createElement('div');
+          q.textContent = question;
+          Object.assign(q.style, { fontSize: '14px', marginBottom: '16px', lineHeight: '1.5' });
+          dialog.appendChild(hdr); dialog.appendChild(q);
+          const btnContainer = document.createElement('div');
+          Object.assign(btnContainer.style, {
+            display: 'flex', flexDirection: 'column', gap: '6px',
+          });
+          const selected = new Set<number>();
+          const done = () => {
+            overlay.remove();
+            if (multiSelect) {
+              const chosen = options.filter((_, i) => selected.has(i)).map(o => o.label);
+              resolve(JSON.stringify({ answers: chosen }));
+            }
+          };
+          options.forEach((opt, idx) => {
+            const btn = document.createElement('button');
+            btn.textContent = opt.label;
+            Object.assign(btn.style, {
+              display: 'block', width: '100%', padding: '8px 14px', textAlign: 'left',
+              fontSize: '13px', background: selected.has(idx) ? 'rgba(80,140,240,0.15)' : 'rgba(255,255,255,0.04)',
+              border: selected.has(idx) ? '1px solid var(--signal, #68a8ff)' : '1px solid rgba(255,255,255,0.08)',
+              borderRadius: '6px', color: 'var(--starlight-dim, #c9d1d9)', cursor: 'pointer',
+            });
+            if (opt.description) {
+              btn.title = opt.description;
+              const desc = document.createElement('div');
+              desc.textContent = opt.description;
+              Object.assign(desc.style, { fontSize: '10px', color: 'var(--text-muted, #6b7d90)', marginTop: '2px' });
+              btn.appendChild(desc);
+            }
+            btn.addEventListener('click', () => {
+              if (multiSelect) {
+                if (selected.has(idx)) { selected.delete(idx); } else { selected.add(idx); }
+                btn.style.background = selected.has(idx) ? 'rgba(80,140,240,0.15)' : 'rgba(255,255,255,0.04)';
+                btn.style.border = selected.has(idx) ? '1px solid var(--signal, #68a8ff)' : '1px solid rgba(255,255,255,0.08)';
+                // Show a "Confirm" button if any selected
+                const existing = btnContainer.querySelector('.ask-confirm');
+                if (selected.size > 0 && !existing) {
+                  const confirmBtn = document.createElement('button');
+                  confirmBtn.className = 'ask-confirm';
+                  confirmBtn.textContent = '确认选择';
+                  Object.assign(confirmBtn.style, {
+                    display: 'block', width: '100%', padding: '8px', marginTop: '6px',
+                    fontSize: '13px', fontWeight: '600',
+                    background: 'var(--signal, #68a8ff)', color: '#fff',
+                    border: 'none', borderRadius: '6px', cursor: 'pointer',
+                  });
+                  confirmBtn.addEventListener('click', done);
+                  btnContainer.appendChild(confirmBtn);
+                } else if (selected.size === 0 && existing) {
+                  existing.remove();
+                }
+              } else {
+                resolve(JSON.stringify({ answer: opt.label }));
+                overlay.remove();
+              }
+            });
+            btnContainer.appendChild(btn);
+          });
+          dialog.appendChild(btnContainer);
+          overlay.appendChild(dialog);
+          // Close on Escape or clicking outside
+          overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) { resolve(JSON.stringify({ answer: null })); overlay.remove(); }
+          });
+          document.addEventListener('keydown', function escHandler(e) {
+            if (e.key === 'Escape') { resolve(JSON.stringify({ answer: null })); overlay.remove(); document.removeEventListener('keydown', escHandler); }
+          });
+          document.body.appendChild(overlay);
+        });
+      },
+    },
+
+    // ── File Operations ──
+    {
+      name: () => 'write_file',
+      description: () =>
+        'Create or overwrite a file with the given content. Creates parent directories if needed. Use to write new files or modify existing ones.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Absolute path to the file to create or overwrite',
+          },
+          content: {
+            type: 'string',
+            description: 'Full file content to write',
+          },
+        },
+        required: ['filePath', 'content'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('write_file_content', args),
+    },
+    {
+      name: () => 'edit_file',
+      description: () =>
+        'Perform exact string replacement in a file. The old_string must match exactly (including indentation and whitespace) and must be unique in the file (unless replace_all is true). This is the preferred way to modify code — safer and cheaper than rewriting the entire file.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Absolute path to the file to modify',
+          },
+          oldString: {
+            type: 'string',
+            description: 'The exact text to find and replace (must match the file exactly, including whitespace)',
+          },
+          newString: {
+            type: 'string',
+            description: 'The text to replace it with (must be different from oldString)',
+          },
+          replaceAll: {
+            type: 'boolean',
+            description: 'Replace all occurrences instead of just the first (default: false). Use when the old_string appears multiple times.',
+            default: false,
+          },
+        },
+        required: ['filePath', 'oldString', 'newString'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('edit_file', {
+        filePath: args.filePath,
+        oldString: args.oldString,
+        newString: args.newString,
+        replaceAll: args.replaceAll,
+      }),
+    },
+    {
+      name: () => 'list_directory',
+      description: () =>
+        'List files and subdirectories in a directory (recursive up to 4 levels deep). Returns name, path, type (file/dir), and size for each entry.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the directory to list',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('list_directory', args),
+    },
+
+    // ── Code Search ──
+    {
+      name: () => 'search_code',
+      description: () =>
+        'Search for a pattern across all source files in a directory. Returns matching files with line numbers and content. Supports both literal substring (default, case-insensitive) and regex (set useRegex: true). Skips binary files, hidden dirs, and build artifacts.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: 'Absolute path to the directory to search in',
+          },
+          pattern: {
+            type: 'string',
+            description: 'Text or regex pattern to search for (case-insensitive)',
+          },
+          fileTypes: {
+            type: 'string',
+            description: 'Optional comma-separated file extensions to filter (e.g. ".ts,.py,.rs")',
+          },
+          maxResults: {
+            type: 'integer',
+            description: 'Maximum number of results to return (default: 50, max: 200)',
+            default: 50,
+          },
+          useRegex: {
+            type: 'boolean',
+            description: 'Set to true to interpret pattern as a regex (e.g. "function\\s+\\w+"). Default: false (literal substring)',
+            default: false,
+          },
+        },
+        required: ['directory', 'pattern'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('search_code', args),
+    },
+
+    // ── Shell ──
+    {
+      name: () => 'run_shell',
+      description: () =>
+        'Execute a shell command and return stdout + stderr. Default timeout 2 min. For long-running commands (builds, servers, watch modes), set runInBackground: true and use bash_output to check progress and bash_kill to stop. Commands run in the project directory by default.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: 'The shell command to run (e.g. "npm test", "cargo build", "pytest -x")',
+          },
+          cwd: {
+            type: 'string',
+            description: 'Optional working directory for the command. Defaults to the HoloGram project root.',
+          },
+          timeoutMs: {
+            type: 'integer',
+            description: 'Timeout in milliseconds (default: 120000 = 2 min, max: 600000 = 10 min)',
+            default: 120000,
+          },
+          runInBackground: {
+            type: 'boolean',
+            description: 'Set to true to run in background (returns job ID immediately). Use bash_output(id) to check progress, bash_kill(id) to stop.',
+            default: false,
+          },
+        },
+        required: ['command'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('exec_command', args),
+    },
+
+    // ── Shell: Background job management ──
+    {
+      name: () => 'bash_output',
+      description: () =>
+        'Check the output of a background shell job. Returns accumulated stdout/stderr and whether the job is still running or has completed.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          jobId: {
+            type: 'integer',
+            description: 'The job ID returned by run_shell with runInBackground: true',
+          },
+        },
+        required: ['jobId'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('bash_output', { jobId: args.jobId }),
+    },
+    {
+      name: () => 'bash_kill',
+      description: () =>
+        'Kill a running background shell job and return any accumulated output.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          jobId: {
+            type: 'integer',
+            description: 'The job ID returned by run_shell with runInBackground: true',
+          },
+        },
+        required: ['jobId'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('bash_kill', { jobId: args.jobId }),
+    },
+
+    // ── Git ──
+    {
+      name: () => 'git_status',
+      description: () =>
+        'Get the current git status — branch name, ahead/behind count, and list of changed files with their status (modified, added, deleted, untracked).',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('git_status', args),
+    },
+    {
+      name: () => 'git_diff',
+      description: () =>
+        'Show the git diff for changed files. Returns unified diff output. Use to review changes before committing.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+          file: {
+            type: 'string',
+            description: 'Optional: specific file to diff. If omitted, shows all unstaged changes.',
+            default: '.',
+          },
+          staged: {
+            type: 'boolean',
+            description: 'Set to true to show staged changes instead of unstaged',
+            default: false,
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => true,
+      execute: async (args) => {
+        const staged = args.staged === true;
+        return exec(staged ? 'git_diff_staged' : 'git_diff_unstaged', {
+          path: args.path,
+          file: args.file || '.',
+        });
+      },
+    },
+    {
+      name: () => 'git_log',
+      description: () =>
+        'Show recent git commit history. Returns structured JSON with commit hash, message, author, and date for each commit.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+          count: {
+            type: 'integer',
+            description: 'Number of recent commits to show (default: 10)',
+            default: 10,
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('git_log', { path: args.path, count: args.count || 10 }),
+    },
+    {
+      name: () => 'git_stage',
+      description: () =>
+        'Stage files for commit. Use before git_commit to add changes to the staging area.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+          files: {
+            type: 'string',
+            description: 'File path(s) to stage, separated by commas. Use "." to stage all.',
+          },
+        },
+        required: ['path', 'files'],
+      }),
+      readOnly: () => false,
+      execute: async (args) => {
+        const files = (args.files as string).trim();
+        if (files === '.' || files === 'all') {
+          return exec('git_stage_all', { path: args.path });
+        }
+        // Stage individual files
+        const fileList = files.split(',').map(f => f.trim());
+        const results: string[] = [];
+        for (const f of fileList) {
+          const r = await exec('git_stage', { path: args.path, file: f });
+          results.push(r);
+        }
+        return results.join('\n');
+      },
+    },
+    {
+      name: () => 'git_commit',
+      description: () =>
+        'Commit staged changes with a message. Files must be staged first with git_stage. Returns the commit hash.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+          message: {
+            type: 'string',
+            description: 'Commit message (conventional commits format recommended)',
+          },
+        },
+        required: ['path', 'message'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_commit', { path: args.path, message: args.message }),
+    },
+    {
+      name: () => 'git_push',
+      description: () =>
+        'Push committed changes to the remote repository.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_push', { path: args.path }),
+    },
+    {
+      name: () => 'git_pull',
+      description: () =>
+        'Pull latest changes from the remote repository (fast-forward only, no merge conflicts).',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Absolute path to the git repository root',
+          },
+        },
+        required: ['path'],
+      }),
+      readOnly: () => false,
+      execute: (args) => exec('git_pull', { path: args.path }),
+    },
+
+    // ── Web Search ──
+    {
+      name: () => 'web_search',
+      description: () =>
+        'Search the web for documentation, solutions, or references. Returns page titles, URLs, and snippets. Use to look up library docs, error messages, or API references.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query',
+          },
+        },
+        required: ['query'],
+      }),
+      readOnly: () => true,
+      execute: async (args) => {
+        const query = encodeURIComponent(args.query as string);
+        try {
+          const resp = await fetch(
+            `https://html.duckduckgo.com/html/?q=${query}`,
+            { headers: { 'User-Agent': 'HoloGram/1.0' } },
+          );
+          const html = await resp.text();
+          // Extract result links and snippets from DuckDuckGo HTML
+          const results: { title: string; url: string; snippet: string }[] = [];
+          const linkRe = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi;
+          const snippetRe = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+          let linkMatch;
+          const links: { title: string; url: string }[] = [];
+          while ((linkMatch = linkRe.exec(html)) !== null && links.length < 15) {
+            links.push({ url: linkMatch[1], title: linkMatch[2].replace(/<[^>]*>/g, '').trim() });
+          }
+          let snippetIdx = 0;
+          let snippetMatch;
+          while ((snippetMatch = snippetRe.exec(html)) !== null && snippetIdx < links.length) {
+            const snippet = snippetMatch[1].replace(/<[^>]*>/g, '').trim();
+            results.push({ ...links[snippetIdx], snippet });
+            snippetIdx++;
+          }
+          // If no structured results, return raw link extraction fallback
+          if (results.length === 0) {
+            const fallbackRe = /<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+            let m;
+            while ((m = fallbackRe.exec(html)) !== null && results.length < 10) {
+              const title = m[2].replace(/<[^>]*>/g, '').trim();
+              if (title.length > 5) {
+                results.push({ title, url: m[1], snippet: '' });
+              }
+            }
+          }
+          return JSON.stringify({ query: args.query, results: results.slice(0, 10) });
+        } catch (e: any) {
+          return JSON.stringify({ error: `web_search failed: ${e.message || e}` });
+        }
+      },
+    },
+
+    // ── Web Fetch ──
+    {
+      name: () => 'web_fetch',
+      description: () =>
+        'Fetch a URL and return its text content. HTML pages are reduced to readable text (scripts, styles, tags stripped). JSON / plain text / markdown pass through verbatim. Use to read documentation, API responses, or source files hosted on the web. 15s timeout, 1 MiB max.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to fetch (HTTPS or HTTP only)',
+          },
+        },
+        required: ['url'],
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('web_fetch', args),
     },
   ];
 }

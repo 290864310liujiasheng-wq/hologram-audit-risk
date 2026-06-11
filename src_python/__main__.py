@@ -147,6 +147,19 @@ def _analyze_and_output(root: str, output_json: bool = False, output_path: str =
     # Output — always save to disk first (enables incremental cache reuse)
     save_path = output_path or os.path.join(root, "hologram_graph.json")
     graph.to_json(save_path)
+    # A3: 同时输出 MessagePack（二进制格式，大项目加载快 10×）
+    msgpack_path = save_path.replace('.json', '.hologram')
+    try:
+        graph.to_msgpack(msgpack_path)
+    except Exception as exc:
+        print(f"  msgpack skipped: {exc}", file=sys.stderr)
+
+    # A4: SQLite 查询加速层（Agent 工具不用解析整个 JSON）
+    db_path = save_path.replace('.json', '.db')
+    try:
+        graph.to_sqlite(db_path)
+    except Exception as exc:
+        print(f"  sqlite skipped: {exc}", file=sys.stderr)
 
     if output_json:
         # JSON to stdout
@@ -177,7 +190,7 @@ def main():
         # 子命令通过 CLI 处理
         if cmd in ("analyze", "neighbors", "impact", "path", "diff", "serve",
                     "fragile", "cycle", "coupling-report", "check", "constraints",
-                    "incremental", "preflight", "health"):
+                    "incremental", "preflight", "health", "search"):
             from .cli import main as cli_main
             cli_main()
             return

@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
@@ -19,6 +20,99 @@ use std::os::windows::process::CommandExt;
 /// CREATE_NO_WINDOW — suppress console popup on Windows
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x08000000;
+
+// ═══════════════════════════════════════════════════════
+// Background job system — timeout + background + output + kill
+// ═══════════════════════════════════════════════════════
+
+struct BgJob {
+    child: std::process::Child,
+    stdout_buf: Vec<u8>,
+    stderr_buf: Vec<u8>,
+    start_time: std::time::Instant,
+}
+
+static BG_JOBS: std::sync::LazyLock<Arc<Mutex<HashMap<u32, BgJob>>>> =
+    std::sync::LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+static NEXT_JOB_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+fn spawn_bg(cmd: &str, cwd: &str) -> Result<u32, String> {
+    let (program, arg) = if cfg!(target_os = "windows") {
+        ("cmd", format!("/c {}", cmd))
+    } else {
+        ("sh", format!("-c {}", cmd))
+    };
+    let child = silent_command(program)
+        .arg(&arg)
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法启动后台命令: {e}"))?;
+    let id = NEXT_JOB_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let job = BgJob {
+        child,
+        stdout_buf: Vec::new(),
+        stderr_buf: Vec::new(),
+        start_time: std::time::Instant::now(),
+    };
+    BG_JOBS.lock().unwrap().insert(id, job);
+    Ok(id)
+}
+
+fn read_bg_output(id: u32) -> Result<String, String> {
+    let mut jobs = BG_JOBS.lock().unwrap();
+    let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
+    // Drain what's available without blocking
+    if let Some(stdout) = &mut job.child.stdout {
+        let mut buf = [0u8; 4096];
+        loop {
+            use std::io::Read;
+            match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => job.stdout_buf.extend_from_slice(&buf[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+    }
+    if let Some(stderr) = &mut job.child.stderr {
+        let mut buf = [0u8; 4096];
+        loop {
+            use std::io::Read;
+            match stderr.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => job.stderr_buf.extend_from_slice(&buf[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+    }
+    let elapsed = job.start_time.elapsed().as_secs();
+    let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
+    let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
+    // Check if process has exited
+    let status = job.child.try_wait().map_err(|e| format!("检查进程状态失败: {e}"))?;
+    let info = if let Some(ec) = status {
+        let msg = format!("[任务已完成, exit code: {}, 耗时: {}s]\n", ec, elapsed);
+        jobs.remove(&id); // Clean up
+        msg
+    } else {
+        format!("[任务运行中, 已运行: {}s]\n", elapsed)
+    };
+    Ok(format!("{info}{stdout}{stderr}"))
+}
+
+fn kill_bg(id: u32) -> Result<String, String> {
+    let mut jobs = BG_JOBS.lock().unwrap();
+    let job = jobs.get_mut(&id).ok_or("后台任务不存在或已完成")?;
+    job.child.kill().map_err(|e| format!("无法终止任务: {e}"))?;
+    let stdout = String::from_utf8_lossy(&job.stdout_buf).to_string();
+    let stderr = String::from_utf8_lossy(&job.stderr_buf).to_string();
+    jobs.remove(&id);
+    Ok(format!("[任务已终止]\n{stdout}{stderr}"))
+}
 
 /// Build a Command that won't flash a console window on Windows
 /// and forces UTF-8 output from Python subprocesses.
@@ -262,6 +356,12 @@ async fn hologram_fragile(limit: Option<i32>) -> Result<String, String> {
 async fn hologram_cycle(mode: Option<String>) -> Result<String, String> {
     let m = mode.unwrap_or_else(|| "all".into());
     run_hologram(&["cycle", "-m", &m, "-g", &default_graph()])
+}
+
+#[tauri::command]
+async fn hologram_search(query: String, limit: Option<i32>) -> Result<String, String> {
+    let l = limit.unwrap_or(20);
+    run_hologram(&["search", &query, "-g", &default_graph(), "-l", &l.to_string()])
 }
 
 #[tauri::command]
@@ -624,30 +724,87 @@ else:
 // ═══════════════════════════════════════════════════════
 
 #[tauri::command]
-async fn exec_command(command: String, cwd: Option<String>) -> Result<String, String> {
+async fn exec_command(
+    command: String,
+    cwd: Option<String>,
+    timeout_ms: Option<u64>,
+    run_in_background: Option<bool>,
+) -> Result<String, String> {
     let dir = cwd.unwrap_or_else(|| project_root().to_string_lossy().to_string());
-    let output = if cfg!(target_os = "windows") {
-        silent_command("cmd")
-            .args(["/c", &command])
-            .current_dir(&dir)
-            .output()
-            .map_err(|e| format!("无法执行命令: {e}"))?
-    } else {
-        silent_command("sh")
-            .args(["-c", &command])
-            .current_dir(&dir)
-            .output()
-            .map_err(|e| format!("无法执行命令: {e}"))?
-    };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if stdout.is_empty() && stderr.is_empty() {
-        return Ok("(无输出)".into());
+    if run_in_background.unwrap_or(false) {
+        let id = spawn_bg(&command, &dir)?;
+        return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_kill({}) 终止任务", id, id, id));
     }
 
-    Ok(format!("{}{}", stdout, stderr))
+    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(120_000)); // default 2 min
+    let (program, arg) = if cfg!(target_os = "windows") {
+        ("cmd", format!("/c {}", command))
+    } else {
+        ("sh", format!("-c {}", command))
+    };
+
+    let mut child = silent_command(program)
+        .arg(&arg)
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法执行命令: {e}"))?;
+
+    // Manual timeout polling (compatible with older Rust)
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = if let Some(mut p) = child.stdout.take() {
+                    let mut v = Vec::new();
+                    p.read_to_end(&mut v).ok();
+                    String::from_utf8_lossy(&v).to_string()
+                } else { String::new() };
+                let stderr = if let Some(mut p) = child.stderr.take() {
+                    let mut v = Vec::new();
+                    p.read_to_end(&mut v).ok();
+                    String::from_utf8_lossy(&v).to_string()
+                } else { String::new() };
+
+                if !status.success() {
+                    return Err(format!(
+                        "命令失败 (exit code: {}):\n{}{}",
+                        status.code().unwrap_or(-1),
+                        stderr,
+                        if stdout.len() > 500 { format!("{}...", &stdout[..500]) } else { stdout }
+                    ));
+                }
+
+                if stdout.is_empty() && stderr.is_empty() {
+                    return Ok("(无输出)".into());
+                }
+                return Ok(format!("{}{}", stdout, stderr));
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    child.kill().ok();
+                    return Err(format!("命令超时 ({}ms)，已强制终止", timeout_ms.unwrap_or(120_000)));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                child.kill().ok();
+                return Err(format!("命令执行异常: {e}"));
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn bash_output(job_id: u32) -> Result<String, String> {
+    read_bg_output(job_id)
+}
+
+#[tauri::command]
+async fn bash_kill(job_id: u32) -> Result<String, String> {
+    kill_bg(job_id)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -742,6 +899,252 @@ async fn write_file_content(file_path: String, content: String) -> Result<(), St
 }
 
 // ═══════════════════════════════════════════════════════
+// Coding Agent: search_code — grep over project files
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn search_code(
+    directory: String,
+    pattern: String,
+    file_types: Option<String>,
+    max_results: Option<usize>,
+    use_regex: Option<bool>,
+) -> Result<String, String> {
+    let root = std::path::PathBuf::from(&directory);
+    let is_regex = use_regex.unwrap_or(false);
+    let regex = if is_regex {
+        Some(regex::RegexBuilder::new(&pattern)
+            .case_insensitive(true)
+            .multi_line(true)
+            .build()
+            .map_err(|e| format!("正则表达式无效: {}", e))?)
+    } else {
+        None
+    };
+    let pattern_lower = if is_regex { String::new() } else { pattern.to_lowercase() };
+    let extensions: Vec<String> = file_types
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().trim_start_matches('.').to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let max = max_results.unwrap_or(50).min(200);
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    let skip_dirs: Vec<&str> = vec![
+        ".git", "node_modules", ".venv", "venv", "__pycache__",
+        "target", "dist", ".next", ".nuxt", "build", ".cache",
+        ".hologram", ".idea", ".vscode",
+    ];
+
+    let skip_extensions: Vec<&str> = vec![
+        "exe", "dll", "so", "dylib", "bin", "o", "a",
+        "png", "jpg", "jpeg", "gif", "ico", "svg",
+        "woff", "woff2", "ttf", "eot",
+        "zip", "tar", "gz", "bz2", "7z", "rar",
+        "mp3", "mp4", "avi", "mov", "wav",
+        "pdf", "doc", "docx", "xls", "xlsx",
+        "pyc", "pyo", "class", "wasm",
+        "lock", "map", "min.js", "min.css",
+    ];
+
+    for entry in walkdir::WalkDir::new(&root)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !skip_dirs.iter().any(|d| name == *d)
+        })
+    {
+        let entry = entry.map_err(|e| format!("读取文件失败: {}", e))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let fp = entry.path();
+        let ext = fp.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let name = fp.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        if skip_extensions.iter().any(|skip| ext == *skip || name.ends_with(skip)) {
+            continue;
+        }
+        if !extensions.is_empty() && !extensions.iter().any(|e| ext == *e) {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(fp) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        for (line_no, line) in content.lines().enumerate() {
+            let matched = if let Some(ref re) = regex {
+                re.is_match(line)
+            } else {
+                line.to_lowercase().contains(&pattern_lower)
+            };
+            if matched {
+                results.push(serde_json::json!({
+                    "file": fp.to_string_lossy(),
+                    "line": line_no + 1,
+                    "content": line.trim(),
+                }));
+                if results.len() >= max {
+                    break;
+                }
+            }
+        }
+        if results.len() >= max {
+            break;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "pattern": pattern,
+        "count": results.len(),
+        "truncated": results.len() >= max,
+        "results": results,
+    }).to_string())
+}
+
+// ═══════════════════════════════════════════════════════
+// Coding Agent: edit_file — exact string replacement (Claude Code style)
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn edit_file(
+    file_path: String,
+    old_string: String,
+    new_string: String,
+    replace_all: Option<bool>,
+) -> Result<String, String> {
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("无法读取文件 {}: {}", file_path, e))?;
+
+    let replace_all = replace_all.unwrap_or(false);
+    let count = if replace_all {
+        content.matches(&old_string).count()
+    } else {
+        if old_string.is_empty() {
+            return Err("old_string 不能为空".to_string());
+        }
+        let c = content.matches(&old_string).count();
+        if c == 0 {
+            return Err(format!("文件中未找到指定的文本片段。请确认 old_string 与文件内容完全一致（包括缩进和换行）。"));
+        }
+        if c > 1 {
+            return Err(format!(
+                "old_string 在文件中出现了 {} 次，不是唯一的。请添加更多上下文使其唯一，或设置 replace_all: true。",
+                c
+            ));
+        }
+        c
+    };
+
+    let new_content = if replace_all {
+        content.replace(&old_string, &new_string)
+    } else {
+        content.replacen(&old_string, &new_string, 1)
+    };
+
+    std::fs::write(&file_path, &new_content)
+        .map_err(|e| format!("无法写入文件 {}: {}", file_path, e))?;
+
+    Ok(if replace_all {
+        format!("已替换 {} 处匹配", count)
+    } else {
+        "已替换 1 处匹配".to_string()
+    })
+}
+
+// ═══════════════════════════════════════════════════════
+// Coding Agent: web_fetch — fetch a URL and extract readable text
+// ═══════════════════════════════════════════════════════
+
+fn is_private_ip(host: &str) -> bool {
+    use std::net::IpAddr;
+    let ip: IpAddr = match host.parse() {
+        Ok(ip) => ip,
+        Err(_) => return false,
+    };
+    if ip.is_loopback() || ip.is_unspecified() { return true; }
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private() || v4.is_link_local()
+        }
+        IpAddr::V6(v6) => {
+            // Check for link-local (fe80::/10)
+            let segs = v6.segments();
+            segs[0] & 0xffc0 == 0xfe80
+        }
+    }
+}
+
+#[tauri::command]
+async fn web_fetch(url: String) -> Result<String, String> {
+    let parsed = url::Url::parse(&url).map_err(|e| format!("无效 URL: {}", e))?;
+    let scheme = parsed.scheme();
+    if scheme != "https" && scheme != "http" {
+        return Err(format!("不支持的协议: {}", scheme));
+    }
+    let host = parsed.host_str().unwrap_or("");
+    if host.is_empty() || is_private_ip(host) {
+        return Err("SSRF 防护: 不允许访问内网地址".to_string());
+    }
+
+    let resp = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(10))
+        .build()
+        .get(url.as_str())
+        .set("User-Agent", "HoloGram/1.0")
+        .set("Accept", "text/html, text/plain, application/json, text/markdown, */*")
+        .call()
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let content_type = resp.header("content-type").unwrap_or("").to_lowercase();
+    let max_size: usize = 1 << 20; // 1 MiB
+    let mut body = String::new();
+    let reader = resp.into_reader();
+    let mut limited = reader.take(max_size as u64);
+    limited.read_to_string(&mut body)
+        .map_err(|e| format!("读取失败: {}", e))?;
+
+    let text = body.clone();
+    let truncated = body.len() >= max_size;
+
+    // HTML → plain text (simple tag stripping)
+    let result = if content_type.contains("html") {
+        let mut s = text;
+        // Remove scripts, styles, comments
+        s = regex::Regex::new(r"(?si)<script[^>]*>.*?</script>").unwrap().replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?si)<style[^>]*>.*?</style>").unwrap().replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"(?s)<!--.*?-->").unwrap().replace_all(&s, " ").to_string();
+        // Remove all remaining tags
+        s = regex::Regex::new(r"<[^>]*>").unwrap().replace_all(&s, " ").to_string();
+        // Decode common entities
+        s = s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+             .replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'")
+             .replace("&#x27;", "'").replace("&nbsp;", " ");
+        // Collapse whitespace
+        s = regex::Regex::new(r"[ \t]+").unwrap().replace_all(&s, " ").to_string();
+        s = regex::Regex::new(r"\n{3,}").unwrap().replace_all(&s, "\n\n").to_string();
+        s.trim().to_string()
+    } else {
+        text
+    };
+
+    let mut info = String::new();
+    if truncated {
+        info.push_str("[内容已截断至 1 MiB]\n\n");
+    }
+    Ok(format!("{info}{result}"))
+}
+
+// ═══════════════════════════════════════════════════════
 // P4: Constraints UI — read/write hologram.constraints.yaml
 // ═══════════════════════════════════════════════════════
 
@@ -818,7 +1221,7 @@ async fn load_binary_graph(path: Option<String>) -> Result<Vec<u8>, String> {
     }
 
     // 2) default .hologram
-    let def = project_root().join("hologram_full.hologram");
+    let def = project_root().join("hologram_graph.hologram");
     if let Ok(bytes) = std::fs::read(&def) {
         if !bytes.is_empty() {
             return Ok(bytes);
@@ -1217,6 +1620,7 @@ fn main() {
             hologram_path,
             hologram_diff,
             hologram_fragile,
+            hologram_search,
             hologram_cycle,
             hologram_coupling_report,
             hologram_blindspots,
@@ -1242,6 +1646,8 @@ fn main() {
             read_constraints,
             write_constraints,
             exec_command,
+            bash_output,
+            bash_kill,
             // Git commands
             git_status,
             git_diff_unstaged,
@@ -1254,6 +1660,9 @@ fn main() {
             git_pull,
             git_log,
             git_init,
+            search_code,
+            web_fetch,
+            edit_file,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");

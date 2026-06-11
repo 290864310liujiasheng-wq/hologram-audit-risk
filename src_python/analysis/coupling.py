@@ -328,7 +328,7 @@ class CouplingDepthAnalyzer:
             level = self._classify_edge(edge, graph)
             edge_classifications[edge.id] = level
             # 写入边属性
-            edge.properties["coupling_depth"] = level
+            edge.coupling_depth = level
 
             # 按源文件聚合报告
             src_node = graph.get_node(edge.source)

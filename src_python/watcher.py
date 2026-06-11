@@ -131,6 +131,12 @@ class FileWatcher:
                            len(diff.added_edges) + len(diff.removed_edges))
                 print(f"  Incremental update: {len(diff.added_nodes)} added nodes, "
                       f"{len(diff.removed_nodes)} removed, {changes} total changes", file=sys.stderr)
+                # A4: 增量后同步刷新 SQLite
+                db_path = os.path.join(self.root, "hologram_graph.db")
+                try:
+                    graph_ref.to_sqlite(db_path)
+                except Exception:
+                    pass
                 for cb in callbacks:
                     try:
                         cb(graph_ref)

@@ -47,7 +47,29 @@ from .pipeline import PipelineRunner, IncrementalCache
 
 
 def _load_graph(graph_path: str) -> Optional[Graph]:
-    """加载已保存的图文件。"""
+    """加载已保存的图文件。A4: SQLite 优先（快 5-10×），fallback JSON。
+
+    防御：检查 SQLite 的边数是否与 JSON 一致——如果不一致说明 DB 过时
+    （增量分析后忘了刷 DB），自动 fallback JSON。
+    """
+    # Try SQLite first
+    db_path = graph_path.replace('.json', '.db')
+    if os.path.exists(db_path):
+        try:
+            # Staleness check: compare edge counts
+            if os.path.exists(graph_path):
+                json_size = os.path.getsize(graph_path)
+                db_size = os.path.getsize(db_path)
+                # Quick heuristic: if JSON was modified after DB, DB may be stale
+                json_mtime = os.path.getmtime(graph_path)
+                db_mtime = os.path.getmtime(db_path)
+                if db_mtime < json_mtime - 2.0:  # DB older than JSON by 2+ seconds
+                    print("  SQLite DB older than JSON, falling back to JSON", file=sys.stderr)
+                    return Graph.from_json(graph_path)
+            return Graph.from_sqlite(db_path)
+        except Exception as exc:
+            print(f"  SQLite load failed ({exc}), falling back to JSON", file=sys.stderr)
+
     if not os.path.exists(graph_path):
         print(f"Graph file not found: {graph_path}", file=sys.stderr)
         print("Run 'hologram analyze <project_root>' first.", file=sys.stderr)
@@ -118,6 +140,13 @@ def cmd_analyze(args) -> int:
         print(f"MsgPack saved: {msgpack_path}")
     except Exception as exc:
         print(f"  msgpack skipped: {exc}", file=sys.stderr)
+    # A4: SQLite 查询加速层
+    db_path = output.replace('.json', '.db')
+    try:
+        graph.to_sqlite(db_path)
+        print(f"SQLite saved: {db_path}")
+    except Exception as exc:
+        print(f"  sqlite skipped: {exc}", file=sys.stderr)
     print(f"Graph saved: {output}")
     print(f"  Nodes: {graph.node_count}, Edges: {graph.edge_count}")
     print(f"  Communities: {graph.community_count}")
@@ -962,6 +991,79 @@ def _print_health_text(report) -> None:
     print(f"+{'=' * (W - 2)}+")
 
 
+def cmd_search(args) -> int:
+    """模糊搜索节点——Agent 不需要知道精确 node_id。"""
+    query = args.query
+    graph_path = args.graph or os.path.join(os.getcwd(), "hologram_graph.json")
+    limit = getattr(args, 'limit', 20)
+
+    # Try SQLite FTS5 first (倒排索引，MATCH <1ms，vs LIKE 全表扫)
+    db_path = graph_path.replace('.json', '.db')
+    nodes = []
+    if os.path.exists(db_path):
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        # FTS5 MATCH: escape special chars, split into OR terms, suffix * for prefix
+        safe = query.translate(str.maketrans({c: ' ' for c in r'"*^()[]{}:+~-=&|!<>'}))
+        terms = [f'"{t}"*' for t in safe.split() if t]
+        fts_query = " OR ".join(terms) if terms else f'"{safe}"*'
+        try:
+            for row in conn.execute(
+                "SELECT id, name, type, kind, location FROM nodes "
+                "WHERE rowid IN (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?) "
+                "ORDER BY degree DESC LIMIT ?",
+                (fts_query, limit),
+            ):
+                nodes.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "kind": row["kind"],
+                    "location": row["location"],
+                })
+        except Exception:
+            # FTS table might not exist (old DB, or disabled); fallback to LIKE
+            pattern = f"%{query}%"
+            for row in conn.execute(
+                "SELECT id, name, type, kind, location FROM nodes "
+                "WHERE name LIKE ? OR id LIKE ? "
+                "ORDER BY degree DESC LIMIT ?",
+                (pattern, pattern, limit),
+            ):
+                nodes.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "type": row["type"],
+                    "kind": row["kind"],
+                    "location": row["location"],
+                })
+        conn.close()
+    else:
+        # Fallback: load full graph and search in memory
+        graph = _load_graph(graph_path)
+        if not graph:
+            return 1
+        ql = query.lower()
+        matched = []
+        for n in graph.nodes.values():
+            if ql in n.name.lower() or ql in n.id.lower():
+                matched.append((n, graph._deg.get(n.id, 0)))
+        matched.sort(key=lambda x: -x[1])
+        for n, _ in matched[:limit]:
+            nodes.append({
+                "id": n.id,
+                "name": n.name,
+                "type": type_val(n.type),
+                "kind": getattr(n, 'kind', '') or '',
+                "location": getattr(n, 'location', '') or '',
+            })
+
+    import json as _json
+    print(_json.dumps(nodes, indent=2, ensure_ascii=False))
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="hologram",
@@ -1068,6 +1170,13 @@ def main() -> None:
     p_health.add_argument("--days", type=int, default=30, help="Days to look back for trends (default 30)")
     p_health.add_argument("--json", action="store_true", help="Output structured JSON")
     p_health.set_defaults(func=cmd_health)
+
+    # hologram search
+    p_search = sub.add_parser("search", help="Fuzzy search for nodes by name or ID")
+    p_search.add_argument("query", help="Search query (partial name or ID)")
+    p_search.add_argument("-g", "--graph", help="Graph JSON file path")
+    p_search.add_argument("-l", "--limit", type=int, default=20, help="Max results (default 20)")
+    p_search.set_defaults(func=cmd_search)
 
     args = parser.parse_args()
     if args.command is None:

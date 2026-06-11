@@ -16,7 +16,8 @@ import { GitPanel } from './ui/git-panel';
 import { TerminalPanel } from './ui/terminal';
 import { bus } from './ui/events';
 import { Agent } from './agent/agent';
-import { ToolRegistry, createHologramTools, type ToolExecutor } from './agent/tool';
+import { ToolRegistry, createHologramTools, createCodingTools, type ToolExecutor } from './agent/tool';
+import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/permission';
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
@@ -128,7 +129,7 @@ async function openProject(path?: string): Promise<void> {
     // A3: try MessagePack binary first, fall back to JSON
     let graph: any;
     try {
-      const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_full.hologram';
+      const holoPath = folder.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph.hologram';
       const bytes = await invoke<Uint8Array>('load_binary_graph', { path: holoPath });
       graph = decode(bytes) as any;
     } catch {
@@ -216,18 +217,26 @@ async function setupAgent(): Promise<void> {
         });
 
   const registry = new ToolRegistry();
+
+  // Shared executor — used by hologram tools and coding tools
+  const exec: ToolExecutor = async (name, args) => {
+    const result = await invoke<string>(name, args);
+    // 触发星图可视化（解析失败不影响对话）
+    try {
+      if (currentGraphData) visualizeAgentTool(name, args, result, starGraph);
+    } catch { /* 可视化失败静默跳过 */ }
+    return result;
+  };
+
   if (currentGraphData) {
-    const exec: ToolExecutor = async (name, args) => {
-      const result = await invoke<string>(name, args);
-      // 触发星图可视化（解析失败不影响对话）
-      try {
-        visualizeAgentTool(name, args, result, starGraph);
-      } catch { /* 可视化失败静默跳过 */ }
-      return result;
-    };
     for (const tool of createHologramTools(exec)) {
       registry.register(tool);
     }
+  }
+
+  // Register coding tools (file I/O, shell, search, git, web) — always available
+  for (const tool of createCodingTools(exec)) {
+    registry.register(tool);
   }
 
   // Register memory tools
@@ -240,11 +249,31 @@ async function setupAgent(): Promise<void> {
   const pricing = defaultPricing(active.kind, active.model);
   const systemPrompt = buildSystemPrompt(memorySection);
   const agentOpts = settings.agent || {};
+
+  // ── Permission gate ──
+  const perm = new PermissionPolicy('ask');
+  if (settings.permissions) {
+    perm.importRules(settings.permissions);
+  }
+  const gate = new PermissionGate(perm, (toolName, desc, args) =>
+    showApprovalDialog(toolName, desc, args),
+  );
+  gate.onRemember = (rule: string) => {
+    // Persist remembered allow rule
+    const s = loadSettings();
+    const rules = s.permissions || { allow: [], deny: [] };
+    if (!rules.allow) rules.allow = [];
+    if (!rules.allow.includes(rule)) rules.allow.push(rule);
+    s.permissions = rules;
+    saveSettings(s);
+  };
+
   agent = new Agent(prov, registry, systemPrompt, {
     pricing,
     temperature: agentOpts.temperature,
     maxSteps: agentOpts.maxSteps,
     contextWindow: agentOpts.contextWindow,
+    gate,
   }, chatPanel.sink);
   chatPanel.setAgent(agent);
 
@@ -259,14 +288,16 @@ async function setupAgent(): Promise<void> {
         ? createAnthropicProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model, thinking: act.thinking || undefined })
         : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
     const r = new ToolRegistry();
+    const exec2: ToolExecutor = async (name, args) => {
+      const result = await invoke<string>(name, args);
+      try { if (currentGraphData) visualizeAgentTool(name, args, result, starGraph); } catch {}
+      return result;
+    };
     if (currentGraphData) {
-      const exec: ToolExecutor = async (name, args) => {
-        const result = await invoke<string>(name, args);
-        try { visualizeAgentTool(name, args, result, starGraph); } catch {}
-        return result;
-      };
-      for (const tool of createHologramTools(exec)) r.register(tool);
+      for (const tool of createHologramTools(exec2)) r.register(tool);
     }
+    // Coding tools always available
+    for (const tool of createCodingTools(exec2)) r.register(tool);
     // Memory tools for new sessions too
     if (mm) {
       for (const tool of createMemoryTools(mm)) r.register(tool);
@@ -278,11 +309,17 @@ async function setupAgent(): Promise<void> {
     if (mm) {
       try { memSection = await mm.loadPromptSection(); } catch { /* ignore */ }
     }
+    // Permission gate for new session (shares policy with main agent)
+    const gate2 = new PermissionGate(perm, (toolName, desc, args) =>
+      showApprovalDialog(toolName, desc, args),
+    );
+    gate2.onRemember = gate.onRemember;
     return new Agent(p, r, buildSystemPrompt(memSection), {
       pricing: pr,
       temperature: aOpts.temperature,
       maxSteps: aOpts.maxSteps,
       contextWindow: aOpts.contextWindow,
+      gate: gate2,
     }, chatPanel.sink);
   });
 }
@@ -317,17 +354,21 @@ function buildSystemPrompt(memorySection = ''): string {
 - 你看到的图已被分析引擎预处理——节点代表函数/类/模块/文件，边代表调用/继承/导入/时序关系
 
 ## 核心规则
-1. **诚实**：工具返回空结果就说"未找到"，不要编造节点名或关系。
+1. **诚实**：工具返回空结果就说"未找到"。数据正常就说"无异常"。不要编造节点名或关系，也不要为了显得"有发现"而夸大正常数据。
 2. **精确**：引用节点名时用图表中的准确名称。不确定就用工具查。
 3. **结构化**：用分点、表格、小结组织回答。先说结论再讲细节。
 4. **中文**：始终用中文回复。代码标识符和文件名用反引号标记。
 5. **先查后说**：任何涉及代码库的问题都必须调工具，不要凭"常识"猜测。
+6. **正常即正常**：工具数据不显示问题时，直接说"无异常"或"改动安全"。不要为了填充模板把低风险数据夸大为问题。遇到排名类工具（fragile/cycle），排名靠前不等于"坏了"——高耦合模块可能是设计中的枢纽。
+7. **能动手就别只建议**：你有写文件、跑命令、Git 操作的工具。用户说"修"就直接修，不要只说"建议修改"。修完后跑相关测试确认没炸。
+8. **不确定就问**：需求模糊、两个方案选不定、或即将执行危险操作时，用 \`ask_user\` 工具反问用户。不要猜。
 
 ## 工具地图 — 什么问题用什么工具
 
 ### 日常查询
 | 用户问 | 用这个工具 |
 |--------|----------|
+| 找 "auth" / "parse" / "config" 相关的东西 | \`hologram_search\` — 模糊搜索节点（不用知道精确 ID） |
 | "XXX 是什么？连了哪些东西？" | \`hologram_neighbors\` 查邻居 |
 | "改 XXX 会炸吗？" | \`hologram_impact\` 追踪波及范围 |
 | "从 A 到 B 怎么走？" | \`hologram_path\` 找依赖路径 |
@@ -336,16 +377,16 @@ function buildSystemPrompt(memorySection = ''): string {
 | "XXX 在哪个社区？" | \`hologram_community\` 看社区归属 |
 | "最近的变更？" | \`hologram_changes\` 看变更摘要 |
 
-### 架构健康诊断
+### 架构分析
 | 用户问 | 用这个工具 |
 |--------|----------|
-| "最脆弱的模块？" | \`hologram_fragile\` — 找出依赖多、影响大的模块 |
-| "有循环依赖吗？" | \`hologram_cycle\` — 检测环 |
-| "有哪些耦合问题？" | \`hologram_coupling_report\` — 某个模块的耦合面 |
-| "盲点在哪？" | \`hologram_blindspots\` — 测试覆盖不到的依赖 |
-| "线程安全问题？" | \`hologram_thread_conflicts\` — 线程/协程冲突 |
+| "哪些模块依赖最多/耦合最深？" | \`hologram_fragile\` — 按耦合深度和扇入排名（高排名≠坏了，核心枢纽天然排名高） |
+| "有循环依赖吗？" | \`hologram_cycle\` — 检测环（小环常见于 UI 回调，不一定需要修） |
+| "耦合面怎么样？" | \`hologram_coupling_report\` — 某个模块的耦合深度分布 |
+| "跨边界边/动态分发？" | \`hologram_blindspots\` — 运行时耦合模式（插件系统/DI 的动态边是正常的） |
+| "线程/协程冲突？" | \`hologram_thread_conflicts\` — 线程安全检测 |
 | "延迟/时序边？" | \`hologram_delayed\` — 实时/周期性依赖 |
-| "项目健康趋势？" | \`hologram_run_health\` — 多日趋势分析 |
+| "项目最近怎么样？" | \`hologram_run_health\` — 耦合密度趋势分析 |
 
 ### 变更风险评估
 | 用户问 | 用这个工具 |
@@ -354,11 +395,26 @@ function buildSystemPrompt(memorySection = ''): string {
 | "变更前置检查？" | \`hologram_run_preflight\` — 指定文件列表，模拟影响 |
 | "完整检查？" | \`hologram_run_check\` — 跑约束校验 + 信号分析 |
 
-### 文件与约束
+### 文件与搜索
 | 用户问 | 用这个工具 |
 |--------|----------|
 | "看看这个文件" | \`read_file_content\` — 读取源文件内容 |
+| "XX 函数在哪定义的？" | \`search_code\` — 全项目搜索文本或符号 |
+| "项目目录结构？" | \`list_directory\` — 列出目录内容 |
 | "约束规则是啥？" | \`read_constraints\` — 查看项目的 hologram.constraints.yaml |
+
+### 编码操作
+| 用户问 | 用这个工具 |
+|--------|----------|
+| "帮我写个新文件" | \`write_file\` — 创建或覆盖整个文件 |
+| "帮我改 XX 文件的某处" | \`edit_file\` — 精确字符串替换（推荐：安全、省 token） |
+| "跑一下测试/build/安装依赖" | \`run_shell\` — 执行 shell 命令（支持超时 + 后台运行） |
+| "后台任务怎么样了/停了它" | \`bash_output\` / \`bash_kill\` — 查看/终止后台任务 |
+| "Git 状态/提交/推送/拉取" | \`git_status\` / \`git_commit\` / \`git_push\` / \`git_pull\` |
+| "看看改了什么/提交记录" | \`git_diff\` / \`git_log\` |
+| "查一下 XXX 怎么用" | \`web_search\` — 搜索文档/参考 |
+| "打开这个网页/文档" | \`web_fetch\` — 抓取 URL 全文（HTML→纯文本） |
+| 需要用户确认/选择 | \`ask_user\` — 弹出对话框反问用户 |
 
 ### 社区分析
 | 用户问 | 用这个工具 |
@@ -368,28 +424,38 @@ function buildSystemPrompt(memorySection = ''): string {
 
 ## 工具组合模式
 
-1. **全面体检**：\`graph_summary\` → \`fragile\` → \`cycle\` → \`blindspots\` → 汇总风险结论
-2. **变更评估**：\`diff\` 看改动 → \`impact\` 追波及 → \`check\` 跑规则 → 总结风险等级
-3. **模块深挖**：\`neighbors\` 看邻居 → \`coupling_report\` 看耦合 → \`community\` 看上下文 → 给出重构建议
-4. **路径分析**：\`path\` 找依赖链 → \`impact\` 看链上各节点的波及面 → 判断链路脆弱点
+1. **全面体检**：\`graph_summary\` → \`fragile\` → \`cycle\` → \`blindspots\` → 汇总发现（正常就说正常，不要无问题硬找问题）
+2. **变更评估**：\`diff\` 看改动 → \`impact\` 追波及 → \`check\` 跑规则 → 总结影响面（风险低就说低，不要夸大）
+3. **模块深挖**：\`neighbors\` 看邻居 → \`coupling_report\` 看耦合 → \`community\` 看上下文 → 分析结构特点（设计合理就说合理，不要硬建议重构）
+4. **路径分析**：\`path\` 找依赖链 → \`impact\` 看链上各节点的波及面 → 描述依赖链特征
+5. **快速确认**：\`neighbors\` / \`graph_summary\` → 确认"没问题"或"改动安全"（最常见的查询，不是每次都要做全套体检）
 
 ## 输出格式
 
 回复遵循这个结构：
 1. **一句话结论**（加粗，放在最前面）
-2. **关键发现**（3-5 条要点）
+2. **关键发现**（列出实际值得注意的点；正常的就说正常，数量不拘）
 3. **数据支撑**（工具返回的具体数字/节点名）
-4. **建议**（如果有的话）
+4. **建议**（如果确实需要操作；不需要就说"无需操作"）
 
-示例：
-> **结论：\`auth_service\` 是当前最脆弱的模块，修改它有高风险波及 18 个下游节点。**
+示例（正常情况）：
+> **结论：\`parse_config\` 依赖关系简单清晰，改动安全。**
 >
-> - 脆弱度 0.87，排名第 1
-> - 18 个下游依赖，其中 3 个是 L4 穿透
+> - 仅 2 个下游依赖，都在同模块内
+> - 无循环依赖，无 L3/L4 穿透
+> - 无需操作
+>
+> 详细数据：hologram_neighbors 返回 downstream_count=2, max_depth=1…
+
+示例（发现问题时）：
+> **结论：\`auth_service\` 耦合深度偏高，修改它有波及 18 个下游节点的风险。**
+>
+> - 耦合深度排名第 1
+> - 18 个下游依赖，其中 3 个跨模块边界
 > - 同时参与 2 个循环依赖
 > - 建议：优先解耦 \`auth_service → token_cache\` 这条强依赖边
 >
-> 详细数据：hologram_fragile 返回 auth_service 评分 0.87，L4 层 edge_count=5…
+> 详细数据：hologram_fragile 返回 auth_service 评分 0.87…
 
 ## 项目上下文
 - 路径: \`${currentPath || '未知'}\`
@@ -731,7 +797,12 @@ async function init(): Promise<void> {
 
   // ── Settings button ──
   const settingsPanel = SettingsPanel.get();
-  settingsPanel.setOnSave(() => { setupAgent().catch(() => {}); });
+  settingsPanel.setOnSave(async () => {
+    await setupAgent().catch(() => {});
+    if (currentPath && agent) {
+      chatPanel.loadAllSessions(currentPath).catch(e => console.error('[settings] loadAllSessions failed:', e));
+    }
+  });
   chatPanel.setOnOpenSettings(() => settingsPanel.open());
   const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement;
   btnSettings.addEventListener('click', () => {

@@ -26,6 +26,7 @@ export interface AppSettings {
   projectPath: string;
   agent: AgentSettings;
   display: DisplaySettings;
+  permissions?: { allow?: string[]; deny?: string[] };
 }
 
 const STORAGE_KEY = 'hologram_settings';

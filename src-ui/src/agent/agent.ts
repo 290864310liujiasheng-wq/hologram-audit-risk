@@ -9,6 +9,7 @@ import type {
 } from '../provider/types';
 import { ChunkType, sanitizeToolPairing } from '../provider/types';
 import type { Tool, ToolRegistry } from './tool';
+import type { PermissionGate } from './permission';
 
 // ---- Event types ----
 
@@ -77,6 +78,8 @@ export interface AgentOptions {
   compactRatio?: number;
   /** Minimum recent messages kept verbatim */
   recentKeep?: number;
+  /** Permission gate for tool execution (nil = allow all) */
+  gate?: PermissionGate;
 }
 
 const DEFAULT_MAX_STEPS = 10;
@@ -98,6 +101,9 @@ export class Agent {
   private compactRatio: number;
   private recentKeep: number;
   private compactStuck = false;
+
+  // Permission gate (optional — nil means allow all)
+  private gate: PermissionGate | null = null;
 
   // Storm breaker — detect repetitive failing tool calls
   private stormSig = '';
@@ -128,6 +134,7 @@ export class Agent {
     this.contextWindow = opts.contextWindow ?? 0;
     this.compactRatio = opts.compactRatio ?? 0.7;
     this.recentKeep = opts.recentKeep ?? 4;
+    this.gate = opts.gate || null;
     this.sink = sink;
 
     this.session = [];
@@ -408,6 +415,19 @@ export class Agent {
     let result: string;
     let errMsg = '';
     try {
+      // ── Permission gate ──
+      if (this.gate) {
+        const check = await this.gate.check(call.name, t.description(), args, t.readOnly());
+        if (!check.allow) {
+          return {
+            output: check.reason || 'permission denied',
+            errMsg: check.reason,
+            blocked: true,
+            truncated: false,
+          };
+        }
+      }
+
       if (signal.aborted) throw new Error('aborted');
       result = await t.execute(args);
       // Re-check after execution — the tool may have been slow
