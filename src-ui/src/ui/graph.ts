@@ -143,17 +143,19 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   const deg = new Uint16Array(n);
   for (const [s, t] of edgePairs) { deg[s]++; deg[t]++; }
 
-  const att = 0.025, damp = 0.72, sp = 0.08;
-  const maxIter = Math.min(60, 25 + Math.floor(n / 5));
-  // Target edge length — springs have a rest length, not infinite pull
-  const idealDist = shellRadius / 6;
-  // Grid repulsion
-  const repForce = 1200;
-  const cellSize = Math.max(18, shellRadius / 6);
+  const damp = 0.78, sp = 0.15;
+  const maxIter = Math.min(70, 30 + Math.floor(n / 4));
+  // Spring: very gentle nudge toward connected nodes. Repulsion is the dominant force.
+  const att = 0.004;
+  const idealDist = shellRadius / 8;
+  // Grid repulsion — strong, keeps nodes from overlapping
+  const repForce = 2500;
+  const cellSize = Math.max(15, shellRadius / 8);
   const gridDim = Math.ceil(shellRadius * 2 / cellSize);
   for (let iter = 0; iter < maxIter; iter++) {
-    // ── Edge springs WITH rest length ──
-    // f ∝ (dist - idealDist): pull when too far, PUSH when too close
+    // ── Edge springs (weak) ──
+    // Gentle pull when too far, gentle push when too close.
+    // Spring force is DEGREE-NORMALIZED so hubs don't dominate.
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
       const dist = Math.max(0.5, Math.sqrt(dx * dx + dy * dy + dz * dz));
@@ -162,7 +164,7 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
     }
-    // ── Grid repulsion (nearby nodes) ──
+    // ── Grid repulsion (strong, local) ──
     const grid = new Map<number, number[]>();
     for (let i = 0; i < n; i++) {
       const cx = Math.floor((pos[i * 3] + shellRadius) / cellSize);
@@ -201,17 +203,17 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
         }
       }
     }
-    // ── Random global repulsion (prevents overall collapse) ──
-    // Lightweight: each node repels ~20 random others — O(n)
-    const globalSamples = Math.min(n, 20);
+    // ── Global repulsion (medium, covers whole sphere) ──
+    // 40 pseudo-random samples per node — O(n)
+    const globalSamples = Math.min(n, 40);
     for (let i = 0; i < n; i++) {
       for (let k = 0; k < globalSamples; k++) {
-        const j = (i + 1 + (k * 7919 + iter * 631) % (n - 1)) % n; // deterministic pseudo-random
+        const j = (i + 1 + (k * 7919 + iter * 631) % (n - 1)) % n;
         const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
         const distSq = dx * dx + dy * dy + dz * dz;
         if (distSq < 1) continue;
         const dist = Math.sqrt(distSq);
-        const f = 60 / (distSq + 25);
+        const f = 400 / (distSq + 100);
         vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
       }
     }
