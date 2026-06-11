@@ -32,6 +32,7 @@ const statusText = document.getElementById('status-text')!;
 const tbPath = document.getElementById('tb-path')!;
 const btnExplorer = document.getElementById('btn-explorer') as HTMLButtonElement;
 const btnOpen = document.getElementById('btn-open') as HTMLButtonElement;
+const btnReanalyze = document.getElementById('btn-reanalyze') as HTMLButtonElement;
 const btnWelcomeOpen = document.getElementById('btn-welcome-open') as HTMLButtonElement;
 const searchInput = document.getElementById('search-input') as HTMLInputElement;
 const searchBtn = document.getElementById('search-btn') as HTMLButtonElement;
@@ -784,6 +785,23 @@ async function init(): Promise<void> {
   const open = () => openProject();
   btnOpen.addEventListener('click', open);
   btnWelcomeOpen.addEventListener('click', open);
+
+  // Re-analyze current project (A2: regenerates layout positions)
+  btnReanalyze.addEventListener('click', async () => {
+    if (!currentPath) { statusText.textContent = '请先打开项目'; return; }
+    btnReanalyze.disabled = true;
+    btnReanalyze.textContent = '分析中…';
+    statusText.textContent = '重新分析中…';
+    try {
+      await invoke('stop_watching');
+      await openProject(currentPath);
+    } catch (e: any) {
+      statusText.textContent = `重分析失败: ${e}`;
+    } finally {
+      btnReanalyze.disabled = false;
+      btnReanalyze.textContent = '重分析';
+    }
+  });
 
   // File explorer toggle — mutual exclusion with timeline + git (all left-edge)
   btnExplorer.addEventListener('click', () => {
