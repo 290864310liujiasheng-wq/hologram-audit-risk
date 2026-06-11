@@ -1012,41 +1012,43 @@ def cmd_search(args) -> int:
         import sqlite3
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        # FTS5 MATCH: escape special chars, split into OR terms, suffix * for prefix
-        safe = query.translate(str.maketrans({c: ' ' for c in r'"*^()[]{}:+~-=&|!<>'}))
-        terms = [f'"{t}"*' for t in safe.split() if t]
-        fts_query = " OR ".join(terms) if terms else f'"{safe}"*'
         try:
-            for row in conn.execute(
-                "SELECT id, name, type, kind, location FROM nodes "
-                "WHERE rowid IN (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?) "
-                "ORDER BY degree DESC LIMIT ?",
-                (fts_query, limit),
-            ):
-                nodes.append({
-                    "id": row["id"],
-                    "name": row["name"],
-                    "type": row["type"],
-                    "kind": row["kind"],
-                    "location": row["location"],
-                })
-        except Exception:
-            # FTS table might not exist (old DB, or disabled); fallback to LIKE
-            pattern = f"%{query}%"
-            for row in conn.execute(
-                "SELECT id, name, type, kind, location FROM nodes "
-                "WHERE name LIKE ? OR id LIKE ? "
-                "ORDER BY degree DESC LIMIT ?",
-                (pattern, pattern, limit),
-            ):
-                nodes.append({
-                    "id": row["id"],
-                    "name": row["name"],
-                    "type": row["type"],
-                    "kind": row["kind"],
-                    "location": row["location"],
-                })
-        conn.close()
+            # FTS5 MATCH: escape special chars, split into OR terms, suffix * for prefix
+            safe = query.translate(str.maketrans({c: ' ' for c in r'"*^()[]{}:+~-=&|!<>'}))
+            terms = [f'"{t}"*' for t in safe.split() if t]
+            fts_query = " OR ".join(terms) if terms else f'"{safe}"*'
+            try:
+                for row in conn.execute(
+                    "SELECT id, name, type, kind, location FROM nodes "
+                    "WHERE rowid IN (SELECT rowid FROM nodes_fts WHERE nodes_fts MATCH ?) "
+                    "ORDER BY degree DESC LIMIT ?",
+                    (fts_query, limit),
+                ):
+                    nodes.append({
+                        "id": row["id"],
+                        "name": row["name"],
+                        "type": row["type"],
+                        "kind": row["kind"],
+                        "location": row["location"],
+                    })
+            except Exception:
+                # FTS table might not exist; fallback to LIKE
+                pattern = f"%{query}%"
+                for row in conn.execute(
+                    "SELECT id, name, type, kind, location FROM nodes "
+                    "WHERE name LIKE ? OR id LIKE ? "
+                    "ORDER BY degree DESC LIMIT ?",
+                    (pattern, pattern, limit),
+                ):
+                    nodes.append({
+                        "id": row["id"],
+                        "name": row["name"],
+                        "type": row["type"],
+                        "kind": row["kind"],
+                        "location": row["location"],
+                    })
+        finally:
+            conn.close()
     else:
         # Fallback: load full graph and search in memory
         graph = _load_graph(graph_path)

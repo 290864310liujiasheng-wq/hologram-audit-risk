@@ -140,7 +140,11 @@ class SignalGenerator:
     # ════════════════════════════════════════════════════════
 
     def _detect_l5_migration(self, file_changes: Dict[str, FileChange]) -> List[Signal]:
-        """L5: 数据库 migration 文件新增/变更。"""
+        """L5: 数据库 migration 文件新增/变更。
+
+        注意：当前仅按文件名模式匹配，不对比文件内容。
+        touch 一个 migration 文件也会触发此信号。
+        """
         signals = []
         for file_path in file_changes:
             if self.matcher.is_migration_file(file_path):
@@ -151,7 +155,7 @@ class SignalGenerator:
                     description=f"Migration 文件变更: {os.path.basename(file_path)}。"
                                 f"数据库 schema 变更不可通过 git reset 回滚。",
                     file_path=file_path,
-                    confidence="确定",
+                    confidence="高",
                 ))
         return signals
 

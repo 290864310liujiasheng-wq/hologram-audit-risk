@@ -130,13 +130,19 @@ class TimelineStore:
         self.store_dir = os.path.join(self.project_root, self.DEFAULT_DIR)
         self.db_path = os.path.join(self.store_dir, self.DEFAULT_DB)
         os.makedirs(self.store_dir, exist_ok=True)
+        self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._init_db()
+        try:
+            self._init_db()
+        except Exception:
+            self._conn.close()
+            raise
 
     def _init_db(self) -> None:
-        self._conn.executescript(SCHEMA_SQL)
-        self._conn.commit()
+        with self._lock:
+            self._conn.executescript(SCHEMA_SQL)
+            self._conn.commit()
 
     # ── 写入 ──
 
@@ -152,7 +158,8 @@ class TimelineStore:
     ) -> int:
         """记录一条事件到时间轴。返回事件 ID。"""
         now = datetime.datetime.now().isoformat()
-        self._conn.execute(
+        with self._lock:
+            self._conn.execute(
             """INSERT INTO events (timestamp, event_type, file, changed_by,
                related_nodes, summary, data_file_diff, properties)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",

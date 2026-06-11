@@ -156,10 +156,8 @@ RHYTHM_VARIABLE_PATTERNS: List[str] = [
     r".*\bsleep.*duration.*",
 ]
 
-DENYLIST_KEYWORDS: List[str] = [
-    "password", "secret", "token", "api_key",
-    "private_key", "credential", "authorization",
-]
+# DENYLIST_KEYWORDS moved to constraints.py (single source of truth)
+# Import via: from .constraints import DEFAULT_CONSTRAINTS
 
 SHARED_DATA_STRUCTURE_NAMES: List[str] = [
     # Python
@@ -189,7 +187,10 @@ class PatternMatcher:
         self._compiled_llm_prompt = [re.compile(p) for p in LLM_PROMPT_VARIABLE_PATTERNS]
         self._compiled_sort_filter = [re.compile(p) for p in SORT_FILTER_FUNCTION_PATTERNS]
         self._compiled_rhythm = [re.compile(p) for p in RHYTHM_VARIABLE_PATTERNS]
-        self._compiled_denylist = [re.compile(p, re.IGNORECASE) for p in DENYLIST_KEYWORDS]
+        self._compiled_denylist = [re.compile(p, re.IGNORECASE) for p in [
+            "password", "secret", "token", "api_key",
+            "private_key", "credential", "authorization",
+        ]]
 
     # ── 文件名匹配 ──
 

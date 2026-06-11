@@ -503,7 +503,8 @@ class Graph:
         import sqlite3
 
         conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript("""
             DROP TABLE IF EXISTS nodes;
@@ -632,8 +633,9 @@ class Graph:
             ("version", "0.1.0"),
         ])
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
     def to_file_graph(self) -> "Graph":
         """将符号级图聚合为文件级图。

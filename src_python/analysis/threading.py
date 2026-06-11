@@ -217,7 +217,7 @@ class _ThreadResourceVisitor(ast.NodeVisitor):
 TS_THREAD_PATTERNS = [
     (r'new\s+Worker\s*\(', "web_worker", Confidence.CERTAIN),
     (r'setInterval\s*\(', "timer", Confidence.CERTAIN),
-    (r'setTimeout\s*\([^)]*,\s*\d+\s*\)\s*;\s*\}', "recursive_timeout", Confidence.LOW),
+    (r'setTimeout\s*\([^)]*,\s*\d+\s*\)', "timeout", Confidence.LOW),
 ]
 
 TS_LOCK_PATTERNS = [

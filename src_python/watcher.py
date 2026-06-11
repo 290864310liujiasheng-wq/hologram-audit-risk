@@ -197,22 +197,6 @@ class FileWatcher:
                     last_mtimes = current_mtimes
                     print(f"Polling: {len(changed_files)} changed file(s)", file=sys.stderr)
                     for fp in changed_files:
-                        self._on_change(fp)  # 全部加入 pending，触发 debounce
-                    # 直接增量更新
-                    with self._lock:
-                        graph_ref = self._graph
-                        callbacks = list(self._callbacks)
-                    if graph_ref is not None and graph_ref.node_count > 0:
-                        try:
-                            self._runner.run_incremental(self.root, changed_files, graph_ref)
-                            for cb in callbacks:
-                                try:
-                                    cb(graph_ref)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            self._full_rebuild()
-                    else:
-                        self._full_rebuild()
+                        self._on_change(fp)  # 全部加入 pending，debounce timer 触发 _process_pending
         except KeyboardInterrupt:
             pass

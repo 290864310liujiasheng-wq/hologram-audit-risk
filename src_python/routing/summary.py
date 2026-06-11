@@ -394,11 +394,9 @@ class ChangeSummaryGenerator:
             return {"available": False, "note": "V2 数据流环检测未运行"}
 
         cycles = cycle_result.get("cycles", [])
-        # 查找涉及变更文件的环
+        # 收集所有检测到的环（当前不过滤变更文件——全量展示）
         relevant_cycles = []
         for c in cycles:
-            node_names = c.get("node_names", [])
-            # 简单匹配：环中节点是否包含变更文件中的符号
             relevant_cycles.append(c)
 
         return {
