@@ -65,7 +65,7 @@ function edgeColorByType(edgeType: string, direction: string): THREE.Color {
   return new THREE.Color(0x6699cc);
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
-  const m = mode === 'full' ? 0.7 : false ? 0.6 : 1.0;
+  const m = mode === 'full' ? 0.7 : 1.0;
   switch (depth) { case 1: return 0.04 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
 }
 
