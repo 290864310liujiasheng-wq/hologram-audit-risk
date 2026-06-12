@@ -9,7 +9,6 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { iconHtml } from './icons';
-import { dbg } from './debug';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -66,7 +65,7 @@ function edgeColorByType(edgeType: string, direction: string): THREE.Color {
 }
 function edgeOpacityByDepth(depth: number, mode?: VisualMode): number {
   const m = mode === 'full' ? 0.7 : false ? 0.6 : 1.0;
-  switch (depth) { case 1: return 0.08 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
+  switch (depth) { case 1: return 0.04 * m; case 2: return 0.28 * m; case 3: return 0.42 * m; case 4: return 0.54 * m; default: return 0.20 * m; }
 }
 
 const BG_COLOR = 0x030812;
@@ -133,20 +132,6 @@ function fibonacciSphere(n: number, radius: number): Float32Array {
 }
 
 // ── 3D Force-Directed Layout ─────────────────────────────────
-// ⛔ CANONICAL LAYOUT — DO NOT MODIFY PARAMETERS ⛔
-// 这套参数经过多轮迭代验证，是唯一稳定产出好看星图的配置。
-// 过去两天：回滚→重构→再回滚，最终在 1032805 版本确认此布局。
-// 改动前请三思：你改的不是参数，是用户截图炫耀的视觉效果。
-// 如需回滚：git checkout 1032805 -- src-ui/src/ui/graph.ts
-// 参数记录（2026-06-11 锁定）：
-//   shellRadius = cbrt(n) × 14     — 球壳半径
-//   rep = 600                      — 全局斥力
-//   att = 0.018                    — 边弹簧引力
-//   damp = 0.72                    — 速度衰减
-//   sp = 0.006                     — 壳约束刚度
-//   maxIter = min(70, 20+n/4)      — 迭代上限
-// 防护层：力钳制(shellRadius×8) + NaN哨兵(每5轮) + 渲染兜底
-// ⛔ CANONICAL LAYOUT — DO NOT MODIFY PARAMETERS ⛔
 
 function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
   if (n === 0) return new Float32Array(0);
@@ -159,28 +144,26 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
       for (let j = i + 1; j < n; j++) {
         const dx = pos[i * 3] - pos[j * 3], dy = pos[i * 3 + 1] - pos[j * 3 + 1], dz = pos[i * 3 + 2] - pos[j * 3 + 2];
         const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz));
-        const fRaw = rep / (dist * dist + 1);
-        const f = Math.min(fRaw, shellRadius * 8); // safety clamp
+        const f = rep / (dist * dist + 1);
         vel[i * 3] += (dx / dist) * f; vel[i * 3 + 1] += (dy / dist) * f; vel[i * 3 + 2] += (dz / dist) * f;
         vel[j * 3] -= (dx / dist) * f; vel[j * 3 + 1] -= (dy / dist) * f; vel[j * 3 + 2] -= (dz / dist) * f;
       }
     }
     for (const [s, t] of edgePairs) {
       const dx = pos[s * 3] - pos[t * 3], dy = pos[s * 3 + 1] - pos[t * 3 + 1], dz = pos[s * 3 + 2] - pos[t * 3 + 2];
-      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz)), f = Math.min(dist * att, shellRadius); // safety clamp
+      const dist = Math.max(0.3, Math.sqrt(dx * dx + dy * dy + dz * dz)), f = dist * att;
       vel[s * 3] -= (dx / dist) * f; vel[s * 3 + 1] -= (dy / dist) * f; vel[s * 3 + 2] -= (dz / dist) * f;
       vel[t * 3] += (dx / dist) * f; vel[t * 3 + 1] += (dy / dist) * f; vel[t * 3 + 2] += (dz / dist) * f;
     }
     for (let i = 0; i < n; i++) { vel[i * 3] -= pos[i * 3] * 0.0004; vel[i * 3 + 1] -= pos[i * 3 + 1] * 0.0004; vel[i * 3 + 2] -= pos[i * 3 + 2] * 0.0004; }
     for (let i = 0; i < n * 3; i++) { vel[i] *= damp; pos[i] += vel[i]; }
-    // ── NaN guard: reset diverged nodes to Fibonacci sphere ──
     if (iter % 5 === 0) {
       let diverged = false;
-      for (let i = 0; i < n * 3; i++) {
-        if (!isFinite(pos[i]) || !isFinite(vel[i])) { diverged = true; break; }
+      for (let i = 0; i < n * 3 && !diverged; i++) {
+        if (!isFinite(pos[i]) || !isFinite(vel[i])) diverged = true;
       }
       if (diverged) {
-        console.warn(`[StarGraph] layout3D iter ${iter}/${maxIter}: NaN detected, resetting positions`);
+        console.warn(`[StarGraph] layout3D iter ${iter}/${maxIter}: NaN detected, resetting`);
         const fresh = fibonacciSphere(n, shellRadius);
         for (let i = 0; i < n * 3; i++) { pos[i] = fresh[i]; vel[i] = 0; }
       }
@@ -188,12 +171,6 @@ function layout3D(n: number, edgePairs: [number, number][]): Float32Array {
     for (let i = 0; i < n; i++) {
       const dx = pos[i * 3], dy = pos[i * 3 + 1], dz = pos[i * 3 + 2], dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > 1) { const drift = (dist - shellRadius) * sp; pos[i * 3] -= (dx / dist) * drift; pos[i * 3 + 1] -= (dy / dist) * drift; pos[i * 3 + 2] -= (dz / dist) * drift; }
-      // ── Escape clamp: high-degree hubs can escape shell, force back ──
-      if (dist > shellRadius * 3) {
-        const scale = shellRadius * 0.95 / dist;
-        pos[i * 3] *= scale; pos[i * 3 + 1] *= scale; pos[i * 3 + 2] *= scale;
-        vel[i * 3] = 0; vel[i * 3 + 1] = 0; vel[i * 3 + 2] = 0;
-      }
     }
   }
   return pos;
@@ -231,12 +208,6 @@ export class StarGraph {
   private l34Count: number[] = [];
 
   // Meshes
-  // InstancedMesh path (A1): single draw call for all core spheres
-  private nodeCoresIM!: THREE.InstancedMesh;
-  private _coreScale!: Float32Array;       // current scale per node (for visibility: 0 = hidden)
-  private _coreBaseScale!: Float32Array;   // original scale (for restore after hover/focus)
-  private _useIM = false;                  // false → fallback to legacy Mesh[] path
-  // Legacy Mesh[] path (fallback via ?instanced=0)
   private nodeCores: THREE.Mesh[] = [];
   private nodeGlows: THREE.Sprite[] = [];
   private nodeGlowColors: number[] = [];
@@ -270,7 +241,9 @@ export class StarGraph {
   // Tooltip & Detail card & Pie menu
   private tooltipEl!: HTMLDivElement;
   private detailCard!: HTMLDivElement;
-private selectedIdx = -1;
+  private pieMenu!: HTMLDivElement;
+  private pieNodeIdx = -1;
+  private selectedIdx = -1;
 
   // Focus
   private focusTarget = new THREE.Vector3();
@@ -284,11 +257,8 @@ private selectedIdx = -1;
   // File highlight (from file tree)
   private _fileHighlight = false;
   private _fileHighlightIndices = new Set<number>();
-  // Store both glow opacity AND core opacity for proper restore
-  private _fileOpacityOriginal = new Map<number, [number, number]>();
+  private _fileOpacityOriginal = new Map<number, number>();
   private _agentHighlightIndices = new Set<number>();
-  // Project source root (for normalizing file paths)
-  private _graphRoot = '';
 
   // Blast
   private blastMode = false;
@@ -348,8 +318,8 @@ private selectedIdx = -1;
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.06;
-    this.controls.minDistance = 5;
-    this.controls.maxDistance = 20000;
+    this.controls.minDistance = 15;
+    this.controls.maxDistance = 4000;
 
     this.glowTex = mode === 'full' ? createSpikeTexture() : createGlowTexture();
     this.sphereGeo = new THREE.SphereGeometry(1, 24, 16);
@@ -371,6 +341,7 @@ private selectedIdx = -1;
     this.setupHover();
     this.setupTooltip();
     this.setupDetailCard();
+    this.setupPieMenu();
 
     // Labels container (not in minimal mode — but always create, hide via CSS)
     this.labelsContainer = document.createElement('div');
@@ -393,13 +364,19 @@ private selectedIdx = -1;
     });
     canvas.addEventListener('pointerup', (e: PointerEvent) => {
       if (pointerDragged) return;
-      this.onClick(e);
+      // Ctrl+click or right-click → pie menu
+      if (e.ctrlKey || e.button === 2) {
+        this.onContextMenu(e);
+      } else {
+        this.onClick(e);
+      }
     });
     // Prevent browser context menu on canvas
     canvas.addEventListener('contextmenu', (e: Event) => e.preventDefault());
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
+        if (this.pieMenu?.classList.contains('visible')) { this.hidePieMenu(); e.stopImmediatePropagation(); return; }
+        if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); return; }
         if (this.blastMode) { this.exitBlastMode(); return; }
       }
       if (e.key === 'b' || e.key === 'B') {
@@ -667,7 +644,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
   }
 
   private onClick(e: MouseEvent): void {
-    if (this._useIM ? !this.nodeCoresIM : this.nodeCores.length === 0) return;
+    if (this.nodeCores.length === 0) return;
     const rect = this.container.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -684,18 +661,10 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       }
       return;
     }
-    // Intersect cores — IM uses instanceId, legacy uses object reference
-    let idx = -1;
-    if (this._useIM) {
-      const hits = this.raycaster.intersectObjects([this.nodeCoresIM]);
-      idx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
-      // Filter hidden instances (scale → 0)
-      if (idx >= 0 && this._coreScale[idx] < 0.001) idx = -1;
-    } else {
-      const visibleCores = this.nodeCores.filter(c => c.visible);
-      const hits = this.raycaster.intersectObjects(visibleCores);
-      idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
-    }
+    // Only intersect visible nodes
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
+    const idx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
     if (idx >= 0 && idx !== this.selectedIdx) this.showDetail(idx);
     else if (idx < 0) this.hideDetail();
   }
@@ -708,7 +677,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const filePath = node.location.indexOf(':') >= 0
         ? node.location.substring(0, node.location.lastIndexOf(':'))
         : node.location;
-      dbg('StarGraph.showDetail', `emitting graph:node-selected filePath="${filePath}"`);
       window.dispatchEvent(new CustomEvent('graph:node-selected', { detail: filePath }));
     }
     const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
@@ -750,6 +718,87 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.detailCard.style.left = `${left}px`; this.detailCard.style.top = `${top}px`;
   }
 
+  // ── Pie Menu ──────────────────────────────────────────────
+
+  private setupPieMenu(): void {
+    this.pieMenu = document.createElement('div');
+    this.pieMenu.id = 'pie-menu';
+    this.pieMenu.innerHTML = `
+      <div class="pie-item" data-action="blast"><span class="pie-icon">${iconHtml('blast', 14)}</span><span>波及</span></div>
+      <div class="pie-item" data-action="focus"><span class="pie-icon">${iconHtml('focus', 14)}</span><span>聚焦</span></div>
+      <div class="pie-item" data-action="path"><span class="pie-icon">${iconHtml('link', 14)}</span><span>路径</span></div>
+      <div class="pie-item" data-action="info"><span class="pie-icon">${iconHtml('info', 14)}</span><span>信息</span></div>`;
+    this.pieMenu.style.cssText =
+      'position:absolute;z-index:20;pointer-events:auto;display:none;' +
+      'background:var(--panel-bg,rgba(6,12,24,0.95));border:1px solid var(--panel-edge,rgba(88,120,180,0.3));' +
+      'border-radius:8px;padding:4px;box-shadow:0 8px 32px rgba(0,0,0,0.5);' +
+      'flex-direction:column;gap:2px;min-width:80px;';
+    // Pie item hover style
+    const style = document.createElement('style');
+    style.textContent = `
+      #pie-menu .pie-item {
+        display:flex;align-items:center;gap:8px;padding:6px 12px;
+        font-size:13px;color:var(--starlight-dim,#c9d1d9);border-radius:5px;cursor:pointer;
+        transition:background 0.1s;white-space:nowrap;
+      }
+      #pie-menu .pie-item:hover { background:rgba(80,140,240,0.25);color:var(--starlight,#e6edf3); }
+      #pie-menu .pie-icon { font-size:14px;width:20px;text-align:center; }
+    `;
+    this.pieMenu.appendChild(style);
+    this.container.appendChild(this.pieMenu);
+    // Click handlers on pie items
+    this.pieMenu.querySelectorAll('.pie-item').forEach(item => {
+      item.addEventListener('pointerdown', (e) => {
+        e.stopPropagation(); e.preventDefault();
+        const action = (item as HTMLElement).dataset['action'];
+        const idx = this.pieNodeIdx;
+        this.hidePieMenu();
+        this.handlePieAction(action, idx);
+      });
+    });
+  }
+
+  private onContextMenu(e: PointerEvent | MouseEvent): void {
+    if (this.foldMode && !this.enteredGalaxyId) return;
+    const rect = this.container.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const my = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(new THREE.Vector2(mx, my), this.camera);
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
+    if (hits.length === 0) return;
+    const idx = (hits[0].object as THREE.Mesh).userData['nodeIndex'] as number;
+    if (idx === undefined || idx < 0) return;
+    this.pieNodeIdx = idx;
+    this.showPieMenu(e.clientX, e.clientY);
+  }
+
+  private showPieMenu(x: number, y: number): void {
+    this.pieMenu.style.left = `${x}px`;
+    this.pieMenu.style.top = `${y}px`;
+    this.pieMenu.classList.add('visible');
+  }
+
+  private hidePieMenu(): void {
+    this.pieMenu.classList.remove('visible');
+    this.pieNodeIdx = -1;
+  }
+
+  private handlePieAction(action: string | undefined, idx: number): void {
+    if (idx < 0 || idx >= this.graphNodes.length) return;
+    switch (action) {
+      case 'blast': this.startBlastMode(idx); break;
+      case 'focus': this.flyToNode(idx); break;
+      case 'path':
+        if (this._pathSource < 0) {
+          this.setPathSource(idx);
+        } else if (idx !== this._pathSource) {
+          this.setPathTarget(idx);
+        }
+        break;
+      case 'info': this.showDetail(idx); break;
+    }
+  }
 
   // ── Path finding ─────────────────────────────────────────
 
@@ -830,9 +879,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
             i === src ? 0x44ffdd : i === this._pathTarget ? 0xff8844 : 0x44ddff);
         }
       }
-      if (this._useIM) {
-        this._setCoreScale(i, (onPath || this._pathNodes.size === 0) ? this._coreBaseScale[i] : 0);
-      } else if (this.nodeCores[i]) {
+      if (this.nodeCores[i]) {
         this.nodeCores[i].visible = onPath || this._pathNodes.size === 0;
       }
     }
@@ -874,8 +921,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
       }
-      if (this._useIM) { this._setCoreScale(i, this._coreBaseScale[i]); }
-      else if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
     }
     for (const lines of this.edgeLineGroups) {
       (lines.material as THREE.LineBasicMaterial).opacity =
@@ -898,7 +944,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
   }
 
   private updateHover(): void {
-    if (this._useIM ? !this.nodeCoresIM : this.nodeCores.length === 0) return;
+    if (this.nodeCores.length === 0) return;
     // In universe fold view: hover galaxies to show tooltip + highlight
     if (this.foldMode && !this.enteredGalaxyId) {
       if (this.hoveredIdx >= 0) { this.hoveredIdx = -1; this.targetHoverScale = 0; this.rebuildHighlightEdges(-1); }
@@ -933,27 +979,15 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       return;
     }
     this.raycaster.setFromCamera(this.mouse, this.camera);
-    // Intersect cores — IM uses instanceId, legacy uses object reference
-    let newIdx = -1;
-    if (this._useIM) {
-      const hits = this.raycaster.intersectObjects([this.nodeCoresIM]);
-      newIdx = hits.length > 0 ? (hits[0].instanceId ?? -1) : -1;
-      if (newIdx >= 0 && this._coreScale[newIdx] < 0.001) newIdx = -1;
-    } else {
-      const visibleCores = this.nodeCores.filter(c => c.visible);
-      const hits = this.raycaster.intersectObjects(visibleCores);
-      newIdx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
-    }
+    // Only intersect visible nodes
+    const visibleCores = this.nodeCores.filter(c => c.visible);
+    const hits = this.raycaster.intersectObjects(visibleCores);
+    const newIdx = hits.length > 0 ? this.nodeCores.indexOf(hits[0].object as THREE.Mesh) : -1;
     if (newIdx !== this.hoveredIdx) {
       // Restore previous hovered node
-      if (this.hoveredIdx >= 0 && this.hoveredIdx < (this._useIM ? this._coreScale.length : this.nodeCores.length)) {
+      if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
         const prevBase = 0.6 + (this.deg[this.hoveredIdx] / this.maxDeg) * 2.8;
-        const prevScale = this.mode === 'full' ? prevBase * 0.4 : prevBase;
-        if (this._useIM) {
-          this._setCoreScale(this.hoveredIdx, prevScale);
-        } else {
-          this.nodeCores[this.hoveredIdx].scale.setScalar(prevScale);
-        }
+        this.nodeCores[this.hoveredIdx].scale.setScalar(this.mode === 'full' ? prevBase * 0.4 : prevBase);
         if (this.nodeGlows[this.hoveredIdx]) {
           this.nodeGlows[this.hoveredIdx].scale.setScalar(prevBase * (this.mode === 'full' ? 9 : 5.5));
           (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55;
@@ -1073,18 +1107,9 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
       (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
-      const coreColor = this.mode === 'full' ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-      if (this._useIM) {
-        this.nodeCoresIM.setColorAt(i, new THREE.Color(coreColor));
-        this._setCoreScale(i, this._coreBaseScale[i]);
-      } else {
-        (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor);
-      }
-    }
-    // Restore edge opacities
-    for (const lines of this.edgeLineGroups) {
-      (lines.material as THREE.LineBasicMaterial).opacity =
-        edgeOpacityByDepth((lines.userData['edgeDepth'] as number) ?? 0, this.mode);
+      (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(
+        this.mode === 'full' ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff)
+      );
     }
     const st = document.getElementById('status-text');
     if (st && st.innerHTML?.includes('blast')) st.innerHTML = '就绪';
@@ -1100,16 +1125,11 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   focusNode(query: string): boolean {
     const q = query.trim().toLowerCase();
-    dbg('StarGraph.focusNode', `query="${q}" total=${this.graphNodes.length}`);
     if (!q || this.graphNodes.length === 0) return false;
     let idx = this.graphNodes.findIndex(n => n.name.toLowerCase() === q);
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().startsWith(q));
     if (idx < 0) idx = this.graphNodes.findIndex(n => n.name.toLowerCase().includes(q));
-    if (idx < 0) {
-      dbg('StarGraph.focusNode', `"${q}" NOT FOUND`);
-      return false;
-    }
-    dbg('StarGraph.focusNode', `found at idx=${idx} name="${this.graphNodes[idx].name}"`);
+    if (idx < 0) return false;
     // If fold mode is on, enter that galaxy instead of flying to node
     if (this.foldMode) {
       const cid = this.nodeCommMap.get(idx);
@@ -1128,29 +1148,15 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (this._fileHighlight) this.clearFileHighlight();
 
     const normalized = filePath.replace(/\\/g, '/');
-    dbg('StarGraph.highlightFile', `input="${normalized}" root="${this._graphRoot}"`);
-
-    // Build a set of possible path forms to try:
-    // 1. As-is (absolute or relative)
-    // 2. Strip root prefix (absolute → relative)
-    // 3. Strip leading drive letter (C:/path → /path for Windows)
-    const tryPaths = [normalized];
-    if (this._graphRoot && normalized.toLowerCase().startsWith(this._graphRoot.toLowerCase())) {
-      tryPaths.push(normalized.substring(this._graphRoot.length).replace(/^\//, ''));
-    }
-    // Also try just the filename (last segment) as a fallback
-    const baseName = normalized.split('/').pop() || '';
 
     for (let i = 0; i < this.graphNodes.length; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
       const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
-      if (tryPaths.some(p => f === p || f.endsWith('/' + p) || p.endsWith('/' + f))
-          || (baseName && f.endsWith('/' + baseName))) {
+      if (f === normalized) {
         this._fileHighlightIndices.add(i);
       }
     }
 
-    dbg('StarGraph.highlightFile', `found ${this._fileHighlightIndices.size} nodes`);
     if (this._fileHighlightIndices.size === 0) return;
 
     this._fileHighlight = true;
@@ -1164,26 +1170,17 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     const normalized = folderPath.replace(/\\/g, '/');
     const prefix = normalized.endsWith('/') ? normalized : normalized + '/';
-    dbg('StarGraph.highlightFolder', `prefix="${prefix}" root="${this._graphRoot}"`);
     this._fileHighlightIndices.clear();
     this._fileOpacityOriginal.clear();
-
-    // Build try prefixes: as-is + stripped root
-    const tryPrefixes = [prefix];
-    if (this._graphRoot && normalized.toLowerCase().startsWith(this._graphRoot.toLowerCase())) {
-      const relPrefix = normalized.substring(this._graphRoot.length).replace(/^\//, '');
-      tryPrefixes.push(relPrefix.endsWith('/') ? relPrefix : relPrefix + '/');
-    }
 
     for (let i = 0; i < this.graphNodes.length; i++) {
       const loc = (this.graphNodes[i].location || '').replace(/\\/g, '/');
       const f = loc.indexOf(':') >= 0 ? loc.substring(0, loc.lastIndexOf(':')) : loc;
-      if (tryPrefixes.some(p => f.startsWith(p))) {
+      if (f.startsWith(prefix)) {
         this._fileHighlightIndices.add(i);
       }
     }
 
-    dbg('StarGraph.highlightFolder', `found ${this._fileHighlightIndices.size} nodes`);
     if (this._fileHighlightIndices.size === 0) return;
 
     this._fileHighlight = true;
@@ -1191,7 +1188,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
   }
 
   clearFileHighlight(): void {
-    dbg('StarGraph.clearFileHighlight', `indices=${this._fileHighlightIndices.size} opacityBackup=${this._fileOpacityOriginal.size}`);
     this._fileHighlight = false;
     this._fileHighlightIndices.clear();
     this._applyFileHighlight();
@@ -1225,12 +1221,10 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       if (this._agentHighlightIndices.has(i)) {
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(color);
         (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.88;
-        if (this._useIM) { this._setCoreScale(i, this._coreBaseScale[i]); }
-        else if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+        if (this.nodeCores[i]) this.nodeCores[i].visible = true;
       } else {
         (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.025;
-        if (this._useIM) { this._setCoreScale(i, 0); }
-        else if (this.mode !== 'full' && this.nodeCores[i]) this.nodeCores[i].visible = false;
+        if (this.mode !== 'full' && this.nodeCores[i]) this.nodeCores[i].visible = false;
       }
     }
     // Dim non-path edges
@@ -1269,8 +1263,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(this.nodeGlowColors[i]);
         (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       }
-      if (this._useIM) { this._setCoreScale(i, this._coreBaseScale[i]); }
-      else if (this.nodeCores[i]) this.nodeCores[i].visible = true;
+      if (this.nodeCores[i]) this.nodeCores[i].visible = true;
     }
     // Restore non-highlighted dimmed nodes
     for (let i = 0; i < this.nodeGlows.length; i++) {
@@ -1320,52 +1313,16 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     // Nodes: dim non-highlighted
     for (let i = 0; i < this.nodeGlows.length; i++) {
-      // Skip nodes already modified by agent highlight — don't touch them
-      if (this._agentHighlightIndices.size > 0 && this._agentHighlightIndices.has(i)) continue;
-
       const visible = !hl || idxs.has(i);
-      const glowMat = this.nodeGlows[i]?.material as THREE.SpriteMaterial;
-      if (!glowMat) continue;
-
-      if (hl && !visible) {
-        // Save glow opacity before dimming
-        if (!this._fileOpacityOriginal.has(i)) {
-          this._fileOpacityOriginal.set(i, [glowMat.opacity, 0]); // [glowOp, _unused]
-        }
-        glowMat.opacity = 0.03;
-        // IM: dim via near-black color; legacy: dim via opacity
-        if (this._useIM) { this.nodeCoresIM.setColorAt(i, new THREE.Color(0x010101)); }
-        else { const cm = this.nodeCores[i]?.material as THREE.MeshBasicMaterial; if (cm) cm.opacity = 0.03; }
+      if (hl && !visible && this.nodeGlows[i].visible) {
+        this._fileOpacityOriginal.set(i, (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity);
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.03;
+        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = 0.03;
       } else if (!hl && this._fileOpacityOriginal.has(i)) {
-        const [glowOp] = this._fileOpacityOriginal.get(i)!;
-        glowMat.opacity = glowOp;
-        // Restore core color
-        if (this._useIM) {
-          const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
-          const c = this.mode === 'full' ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-          this.nodeCoresIM.setColorAt(i, new THREE.Color(c));
-        } else {
-          const cm = this.nodeCores[i]?.material as THREE.MeshBasicMaterial; if (cm) cm.opacity = 0.55;
-        }
+        (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)!;
+        (this.nodeCores[i].material as THREE.SpriteMaterial).opacity = this._fileOpacityOriginal.get(i)! * 0.6;
         this._fileOpacityOriginal.delete(i);
       }
-    }
-
-    // Also restore any nodes that were missed (only when clearing)
-    if (!hl) {
-      for (const [i, [glowOp]] of this._fileOpacityOriginal) {
-        if (this.nodeGlows[i]) {
-          (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = glowOp;
-          if (this._useIM) {
-            const kind = ((this.graphNodes[i]?.type || this.graphNodes[i]?.kind || 'symbol') as string).toLowerCase();
-            const c = this.mode === 'full' ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-            this.nodeCoresIM.setColorAt(i, new THREE.Color(c));
-          } else if (this.nodeCores[i]) {
-            (this.nodeCores[i].material as THREE.MeshBasicMaterial).opacity = 0.55;
-          }
-        }
-      }
-      this._fileOpacityOriginal.clear();
     }
 
     // Edges: dim all when highlighting
@@ -1482,12 +1439,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
     // Pulse effect on diff nodes: slightly increase scale
     for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this.diffAddedIds.has(this.graphNodes[i].id)) {
-        if (this._useIM) {
-          this._setCoreScale(i, this._coreScale[i] * 1.3);
-        } else if (this.nodeCores[i]) {
-          this.nodeCores[i].scale.setScalar((this.nodeCores[i].scale.x || 1) * 1.3);
-        }
+      if (this.diffAddedIds.has(this.graphNodes[i].id) && this.nodeCores[i]) {
+        this.nodeCores[i].scale.setScalar((this.nodeCores[i].scale.x || 1) * 1.3);
       }
     }
   }
@@ -1508,11 +1461,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor);
         (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = false ? 0 : 0.55;
       }
-      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-      if (this._useIM) {
-        this.nodeCoresIM.setColorAt(i, new THREE.Color(coreColor));
-        this._setCoreScale(i, this._coreBaseScale[i]);
-      } else if (this.nodeCores[i]) {
+      if (this.nodeCores[i]) {
+        const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
         (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor);
         const baseScale = 0.6 + (this.deg[i] / this.maxDeg) * 2.8;
         this.nodeCores[i].scale.setScalar(isFull ? baseScale * 0.4 : baseScale);
@@ -1535,8 +1485,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
   private applyFoldOverlay(): void {
     // Hide all nodes
     for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this._useIM) { this._setCoreScale(i, 0); }
-      else if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
       if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
     }
@@ -1562,13 +1511,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const kind = ((this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol') as string).toLowerCase();
       const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
-      if (this._useIM) {
-        this._setCoreScale(i, this._coreBaseScale[i]);
-        this.nodeCoresIM.setColorAt(i, new THREE.Color(coreColor));
-      } else if (this.nodeCores[i]) {
-        this.nodeCores[i].visible = true;
-        (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor);
-      }
+      if (this.nodeCores[i]) { this.nodeCores[i].visible = true; (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(coreColor); }
       if (this.nodeGlows[i]) { this.nodeGlows[i].visible = true; (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(glowColor); }
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = true;
     }
@@ -1589,10 +1532,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     const isFull = this.mode === 'full';
     const cc = new THREE.Color(StarGraph.CONSTELLATION_COLOR);
     for (const mi of gm.memberIndices) {
-      if (this._useIM) {
-        this._setCoreScale(mi, this._coreBaseScale[mi]);
-        this.nodeCoresIM.setColorAt(mi, new THREE.Color(isFull ? 0xffffff : StarGraph.CONSTELLATION_COLOR));
-      } else if (this.nodeCores[mi]) {
+      if (this.nodeCores[mi]) {
         this.nodeCores[mi].visible = true;
         (this.nodeCores[mi].material as THREE.MeshBasicMaterial).color.set(isFull ? 0xffffff : StarGraph.CONSTELLATION_COLOR);
       }
@@ -1628,10 +1568,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
   enterGalaxy(galaxyId: string): void {
     if (!this.foldMode || this.enteredGalaxyId === galaxyId) return;
     this.enteredGalaxyId = galaxyId;
-    // Dismiss galaxy hover tooltip and cursor
-    this.tooltipEl.classList.remove('visible');
-    this.hoveredGalaxyIdx = -1;
-    this.container.style.cursor = '';
     // Clear fold group (clouds), re-apply for constellation view
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     this.galaxyClouds = []; this.galaxyGlows = [];
@@ -1715,17 +1651,14 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (!this.foldMode || !this.enteredGalaxyId) return;
     this.enteredGalaxyId = null;
     this.hideGalaxyTitle();
-    this.tooltipEl.classList.remove('visible');
-    this.hoveredGalaxyIdx = -1;
     // Restore free controls
     this.controls.enablePan = true;
-    this.controls.minDistance = 5;
-    this.controls.maxDistance = 20000;
+    this.controls.minDistance = 15;
+    this.controls.maxDistance = 4000;
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     // Re-hide all nodes
     for (let i = 0; i < this.graphNodes.length; i++) {
-      if (this._useIM) { this._setCoreScale(i, 0); }
-      else if (this.nodeCores[i]) this.nodeCores[i].visible = false;
+      if (this.nodeCores[i]) this.nodeCores[i].visible = false;
       if (this.nodeGlows[i]) this.nodeGlows[i].visible = false;
       if (this.nodeGlows2[i]) this.nodeGlows2[i].visible = false;
     }
@@ -1784,7 +1717,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       coreGeo.setAttribute('color', new THREE.BufferAttribute(coreCol, 3));
       this.commFoldGroup.add(new THREE.Points(coreGeo, new THREE.PointsMaterial({
         size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.35,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.55,
       })));
       // ── Sparse outer halo particles with spiral arm structure ──
       const haloN = Math.min(1500, 150 + gm.memberIndices.length * 15);
@@ -1827,7 +1760,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       haloGeo.setAttribute('color', new THREE.BufferAttribute(haloCol, 3));
       const haloCloud = new THREE.Points(haloGeo, new THREE.PointsMaterial({
         size: 2.5, map: this.glowTex, blending: THREE.AdditiveBlending,
-        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.28,
+        depthWrite: false, vertexColors: true, transparent: true, opacity: 0.40,
       }));
       this.commFoldGroup.add(haloCloud); this.galaxyClouds.push(haloCloud);
       // Tag halo particles with galaxy index for potential future use
@@ -1835,7 +1768,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       // ── Soft ambient glow sprite (ACES tone mapping prevents washout) ──
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: tint, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.12,
+        depthWrite: false, transparent: true, opacity: 0.20,
       }));
       glow.position.copy(gm.centroid);
       glow.scale.setScalar(r * 4.5);
@@ -1844,7 +1777,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       // ── Bright central core (additive — the focal point of each galaxy) ──
       const coreSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: bright, blending: THREE.AdditiveBlending,
-        depthWrite: false, transparent: true, opacity: 0.45,
+        depthWrite: false, transparent: true, opacity: 0.75,
       }));
       coreSprite.position.copy(gm.centroid);
       coreSprite.scale.setScalar(r * 0.7);
@@ -1894,24 +1827,15 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         gs ? gs.centroid.x : pos[d.s * 3], gs ? gs.centroid.y : pos[d.s * 3 + 1], gs ? gs.centroid.z : pos[d.s * 3 + 2],
         gt ? gt.centroid.x : pos[d.t * 3], gt ? gt.centroid.y : pos[d.t * 3 + 1], gt ? gt.centroid.z : pos[d.t * 3 + 2]);
       const c = edgeColorByType(d.edgeType, d.direction);
-      // Brighter color multiplier for visibility on dark background
-      colors.push(c.r * 2.2, c.g * 2.2, c.b * 2.2, c.r * 2.2, c.g * 2.2, c.b * 2.2);
+      colors.push(c.r * 1.6, c.g * 1.6, c.b * 1.6, c.r * 1.6, c.g * 1.6, c.b * 1.6);
     }
     if (verts.length === 0) return;
-    // Glow layer: slightly wider, additive-blended glow behind the solid line
-    const glowGeo = new THREE.BufferGeometry();
-    glowGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts.slice(), 3));
-    this.commFoldGroup.add(new THREE.LineSegments(glowGeo, new THREE.LineBasicMaterial({
-      color: 0x335577, transparent: true, opacity: 0.20, linewidth: 1,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    })));
-    // Solid line: normal blending for visible definition
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     this.commFoldGroup.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.55,
-      depthWrite: false, blending: THREE.NormalBlending,
+      vertexColors: true, transparent: true, opacity: 0.38,
+      depthWrite: false, blending: THREE.AdditiveBlending,
     })));
   }
 
@@ -1941,8 +1865,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       });
     }
     if (this.crossFlowSegments.length === 0) return;
-    // Create flow particles — 15 per segment for visible density
-    const totalParticles = this.crossFlowSegments.length * 15;
+    // Create flow particles — 5 per segment for density
+    const totalParticles = this.crossFlowSegments.length * 5;
     const pArr = new Float32Array(totalParticles * 3);
     const cArr = new Float32Array(totalParticles * 3);
     this.crossFlowData = [];
@@ -1953,23 +1877,23 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       pArr[i * 3] = seg.x1 + (seg.x2 - seg.x1) * t;
       pArr[i * 3 + 1] = seg.y1 + (seg.y2 - seg.y1) * t;
       pArr[i * 3 + 2] = seg.z1 + (seg.z2 - seg.z1) * t;
-      // Mix of cyan, gold, and warm white with slight hue jitter for visual variety
-      const colorChoice = Math.random() + (i % 3) * 0.1;
-      if (colorChoice < 0.45) {
-        cArr[i * 3] = 0.3 + Math.random() * 0.2; cArr[i * 3 + 1] = 0.8 + Math.random() * 0.2; cArr[i * 3 + 2] = 0.9 + Math.random() * 0.1; // cyan range
-      } else if (colorChoice < 0.85) {
-        cArr[i * 3] = 0.9 + Math.random() * 0.1; cArr[i * 3 + 1] = 0.7 + Math.random() * 0.2; cArr[i * 3 + 2] = 0.2 + Math.random() * 0.2; // gold range
+      // Mix of cyan, gold, and warm white for visual variety
+      const colorChoice = Math.random();
+      if (colorChoice < 0.4) {
+        cArr[i * 3] = 0.4; cArr[i * 3 + 1] = 0.9; cArr[i * 3 + 2] = 1.0; // cyan
+      } else if (colorChoice < 0.8) {
+        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.8; cArr[i * 3 + 2] = 0.3; // gold
       } else {
-        cArr[i * 3] = 0.9 + Math.random() * 0.1; cArr[i * 3 + 1] = 0.85 + Math.random() * 0.15; cArr[i * 3 + 2] = 0.7 + Math.random() * 0.25; // warm white range
+        cArr[i * 3] = 1.0; cArr[i * 3 + 1] = 0.95; cArr[i * 3 + 2] = 0.85; // warm white
       }
-      this.crossFlowData.push({ segIdx, t, speed: 0.003 + Math.random() * 0.008 });
+      this.crossFlowData.push({ segIdx, t, speed: 0.004 + Math.random() * 0.012 });
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pArr, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(cArr, 3));
     const mat = new THREE.PointsMaterial({
-      size: 6.0, map: this.glowTex, blending: THREE.AdditiveBlending,
-      depthWrite: false, vertexColors: true, transparent: true, opacity: 1.0,
+      size: 3.5, map: this.glowTex, blending: THREE.AdditiveBlending,
+      depthWrite: false, vertexColors: true, transparent: true, opacity: 0.9,
     });
     this.crossFlowParticles = new THREE.Points(geo, mat);
     this.commFoldGroup.add(this.crossFlowParticles);
@@ -2027,8 +1951,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const flashScale = 1 + Math.sin(this.focusProgress * 20) * 0.5 * this.focusFlash;
       this.nodeGlows[this.focusNodeIdx].scale.setScalar(base * 5.5 * flashScale);
       (this.nodeGlows[this.focusNodeIdx].material as THREE.SpriteMaterial).opacity = 0.55 + 0.45 * this.focusFlash;
-      if (this._useIM) { this._setCoreScale(this.focusNodeIdx, base * flashScale); }
-      else { this.nodeCores[this.focusNodeIdx].scale.setScalar(base * flashScale); }
+      this.nodeCores[this.focusNodeIdx].scale.setScalar(base * flashScale);
       this.focusFlash *= 0.97;
     }
     if (t >= 1) { this.focusActive = false; if (this.enteredGalaxyId === null) setTimeout(() => this.restoreFocusNode(), 800); }
@@ -2039,8 +1962,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     const base = 0.6 + (this.deg[this.focusNodeIdx] / this.maxDeg) * 2.8;
     this.nodeGlows[this.focusNodeIdx].scale.setScalar(base * 5.5);
     (this.nodeGlows[this.focusNodeIdx].material as THREE.SpriteMaterial).opacity = 0.55;
-    if (this._useIM) { this._setCoreScale(this.focusNodeIdx, base); }
-    else { this.nodeCores[this.focusNodeIdx].scale.setScalar(base); }
+    this.nodeCores[this.focusNodeIdx].scale.setScalar(base);
     this.focusNodeIdx = -1;
   }
 
@@ -2048,13 +1970,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   render(graph: GraphJSON): void {
     this.clearGraph();
-    // Store project root for path normalization
-    this._graphRoot = ((graph.meta?.source_root || graph.meta?.root || '') as string).replace(/\\/g, '/');
-    if (this._graphRoot && !this._graphRoot.endsWith('/')) this._graphRoot += '/';
-    dbg('StarGraph.render', `root="${this._graphRoot}"`);
     const nodes = Array.isArray(graph.nodes) ? graph.nodes : Object.values(graph.nodes);
     const edges = Array.isArray(graph.edges) ? graph.edges : Object.values(graph.edges);
-    console.log(`[StarGraph.render] nodes=${nodes.length} edges=${edges.length} graphRoot="${this._graphRoot}"`);
     if (nodes.length === 0) { this.updateStatus(0, 0); return; }
     this.graphNodes = nodes;
 
@@ -2112,18 +2029,18 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     for (const e of eData) { if (e.couplingDepth >= 3) { this.l34Count[e.s]++; this.l34Count[e.t]++; } }
 
     const rawPos = layout3D(nodes.length, pairs);
-    // ── Safety: replace any NaN positions with origin ──
+    // ── Safety: replace NaN, safe centroid + camera ──
     let fixed = 0;
     for (let i = 0; i < rawPos.length; i++) {
       if (!isFinite(rawPos[i])) { rawPos[i] = 0; fixed++; }
     }
-    if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components after layout`);
-    let cx = 0, cy = 0, cz = 0, validCount = 0;
+    if (fixed > 0) console.warn(`[StarGraph] Fixed ${fixed} NaN position components`);
+    let cx = 0, cy = 0, cz = 0, valid = 0;
     for (let i = 0; i < nodes.length; i++) {
       const x = rawPos[i * 3], y = rawPos[i * 3 + 1], z = rawPos[i * 3 + 2];
-      if (isFinite(x) && isFinite(y) && isFinite(z)) { cx += x; cy += y; cz += z; validCount++; }
+      if (isFinite(x) && isFinite(y) && isFinite(z)) { cx += x; cy += y; cz += z; valid++; }
     }
-    if (validCount > 0) { cx /= validCount; cy /= validCount; cz /= validCount; }
+    if (valid > 0) { cx /= valid; cy /= valid; cz /= valid; }
     for (let i = 0; i < nodes.length; i++) { rawPos[i * 3] -= cx; rawPos[i * 3 + 1] -= cy; rawPos[i * 3 + 2] -= cz; }
     this.nodePositions = rawPos;
 
@@ -2132,19 +2049,14 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       const r2 = rawPos[i * 3] ** 2 + rawPos[i * 3 + 1] ** 2 + rawPos[i * 3 + 2] ** 2;
       if (isFinite(r2)) maxR = Math.max(maxR, Math.sqrt(r2));
     }
-    const camDist = maxR * 1.6;
+    const camDist = maxR * 2.6;
     this.camera.position.set(camDist * 0.55, camDist * 0.45, camDist * 0.65);
     this.controls.target.set(0, 0, 0);
     this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
     this.camera.updateProjectionMatrix(); this.controls.update();
 
     this.buildEdges(rawPos, eData);
-    // A1: InstancedMesh (default) vs legacy Mesh[] (?instanced=0)
-    if (this._useFallbackLegacy()) {
-      this.buildNodesLegacy(nodes, rawPos, deg);
-    } else {
-      this.buildNodes(nodes, rawPos, deg);
-    }
+    this.buildNodes(nodes, rawPos, deg);
     this.buildLabels(nodes, deg);
     this.positionGrid(rawPos);
 
@@ -2169,7 +2081,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (this.foldMode) this.applyFoldOverlay();
 
     this.updateStatus(nodes.length, edges.length, graph.meta);
-    this.onResize(); // ensure renderer/composer match container after data load
   }
 
   private clearGraph(): void {
@@ -2179,8 +2090,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     while (this.commFoldGroup.children.length) this.commFoldGroup.remove(this.commFoldGroup.children[0]);
     this.labelsContainer.innerHTML = '';
     this.labelDivs = []; this.nodeLabelIdx = [];
-    if (this.nodeCoresIM) { this.nodeCoresIM.geometry.dispose(); (this.nodeCoresIM.material as THREE.Material).dispose(); }
-    this.nodeCoresIM = null!; this._coreScale = null!; this._coreBaseScale = null!;
     this.nodeCores = []; this.nodeGlows = []; this.nodeGlows2 = []; this.nodeGlowColors = []; this.edgeLineGroups = [];
     this.galaxyClouds = []; this.galaxyGlows = [];
     this.galaxyMeta = [];
@@ -2193,12 +2102,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.blastMode = false; this.blastSource = -1; this.blastDistances = []; this.l34Count = [];
     this.tooltipEl?.classList.remove('visible');
     this.detailCard?.classList.remove('visible');
-    // Reset file/agent highlight state (prevents stale indices from old project)
-    this._fileHighlight = false;
-    this._fileHighlightIndices.clear();
-    this._fileOpacityOriginal.clear();
-    this._agentHighlightIndices.clear();
-    this._graphRoot = '';
   }
 
   // ── Edges ────────────────────────────────────────────────
@@ -2224,7 +2127,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         geo.setAttribute('color', new THREE.Float32BufferAttribute(cl, 3));
         const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: edgeOpacityByDepth(g.depth, this.mode), depthWrite: false, blending: g.depth >= 3 ? THREE.AdditiveBlending : THREE.NormalBlending });
         const lines = new THREE.LineSegments(geo, mat);
-        lines.userData['edgeDepth'] = g.depth;
         this.edgeGroup.add(lines); this.edgeLineGroups.push(lines);
       }
     }
@@ -2232,17 +2134,17 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
 
   // ── Nodes ────────────────────────────────────────────────
 
-  /** Legacy Mesh-per-node build (fallback via ?instanced=0). */
-  private buildNodesLegacy(nodes: GraphNode[], pos: Float32Array, deg: number[]): void {
+  private buildNodes(nodes: GraphNode[], pos: Float32Array, deg: number[]): void {
     const isFull = this.mode === 'full';
     for (let i = 0; i < nodes.length; i++) {
       const kind = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
-      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
+      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff); // white-hot core in full mode
       const glowColor = GLOW_COLORS[kind] || 0x4488cc;
       const baseScale = 0.6 + (deg[i] / this.maxDeg) * 2.8;
       const glowOpacity = false ? 0 : 0.55;
       const glowScaleMul = isFull ? 9 : 5.5;
 
+      // Full mode: large soft outer glow first (behind everything)
       if (isFull) {
         const outerGlow = new THREE.Sprite(new THREE.SpriteMaterial({
           map: this.glowTex, color: glowColor,
@@ -2253,6 +2155,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         this.nodeGroup.add(outerGlow); this.nodeGlows2.push(outerGlow);
       }
 
+      // Inner spike glow (or standard glow)
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: this.glowTex, color: glowColor,
         blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: glowOpacity,
@@ -2261,82 +2164,13 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
       glow.scale.setScalar(baseScale * glowScaleMul);
       this.nodeGroup.add(glow); this.nodeGlows.push(glow); this.nodeGlowColors.push(glowColor);
 
+      // Core — small bright white center in full mode, colored in standard
       const core = new THREE.Mesh(this.sphereGeo, new THREE.MeshBasicMaterial({ color: coreColor }));
       core.position.copy(glow.position);
-      core.scale.setScalar(isFull ? baseScale * 0.4 : baseScale);
+      core.scale.setScalar(isFull ? baseScale * 0.4 : baseScale); // smaller core in full mode = point-like star
       core.userData = { nodeIndex: i };
       this.nodeGroup.add(core); this.nodeCores.push(core);
     }
-  }
-
-  /** InstancedMesh build — 1 draw call for all core spheres. */
-  private buildNodes(nodes: GraphNode[], pos: Float32Array, deg: number[]): void {
-    const n = nodes.length;
-    if (n === 0) return;
-    const isFull = this.mode === 'full';
-
-    // CPU buffers
-    this._coreScale = new Float32Array(n);
-    this._coreBaseScale = new Float32Array(n);
-
-    // Create InstancedMesh (white base — per-instance colors multiply)
-    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    this.nodeCoresIM = new THREE.InstancedMesh(this.sphereGeo, mat, n);
-    this.nodeCoresIM.castShadow = false;
-    this.nodeCoresIM.receiveShadow = false;
-    this.nodeCoresIM.frustumCulled = false; // we handle visibility via scale
-
-    const dummy = new THREE.Object3D();
-    const color = new THREE.Color();
-
-    for (let i = 0; i < n; i++) {
-      const kind = ((nodes[i].type || nodes[i].kind || 'symbol') as string).toLowerCase();
-      const coreColor = isFull ? 0xffffff : (NODE_COLORS[kind] || 0x7eb8ff);
-      const glowColor = GLOW_COLORS[kind] || 0x4488cc;
-      const baseScale = 0.6 + (deg[i] / this.maxDeg) * 2.8;
-      const coreScale = isFull ? baseScale * 0.4 : baseScale;
-      const glowOpacity = false ? 0 : 0.55;
-      const glowScaleMul = isFull ? 9 : 5.5;
-
-      // Glow sprites (unchanged — Sprites don't benefit from InstancedMesh)
-      if (isFull) {
-        const outerGlow = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: this.glowTex, color: glowColor,
-          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.35,
-        }));
-        outerGlow.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-        outerGlow.scale.setScalar(baseScale * 16);
-        this.nodeGroup.add(outerGlow); this.nodeGlows2.push(outerGlow);
-      }
-
-      const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: this.glowTex, color: glowColor,
-        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: glowOpacity,
-      }));
-      glow.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-      glow.scale.setScalar(baseScale * glowScaleMul);
-      this.nodeGroup.add(glow); this.nodeGlows.push(glow); this.nodeGlowColors.push(glowColor);
-
-      // Instance: position + scale
-      dummy.position.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-      dummy.scale.setScalar(coreScale);
-      dummy.rotation.set(0, 0, 0);
-      dummy.updateMatrix();
-      this.nodeCoresIM.setMatrixAt(i, dummy.matrix);
-
-      // Instance: color
-      color.set(coreColor);
-      this.nodeCoresIM.setColorAt(i, color);
-
-      // CPU buffers
-      this._coreScale[i] = coreScale;
-      this._coreBaseScale[i] = coreScale;
-    }
-
-    this.nodeCoresIM.instanceMatrix.needsUpdate = true;
-    if (this.nodeCoresIM.instanceColor) this.nodeCoresIM.instanceColor.needsUpdate = true;
-    this.nodeGroup.add(this.nodeCoresIM);
-    this._useIM = true;
   }
 
   private buildLabels(nodes: GraphNode[], deg: number[]): void {
@@ -2470,8 +2304,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     if (!isMinimal) this.animateEdgeParticles();
     if (isMinimal) {
       this.controls.update();
-      this.renderer.setRenderTarget(null);
-      this.renderer.render(this.scene, this.camera);
+      this.composer.render();
       return;
     }
 
@@ -2480,17 +2313,10 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     // Hover effects
     this.hoverScale += (this.targetHoverScale - this.hoverScale) * 0.18;
     const neighborSet = new Set(this.hoveredIdx >= 0 ? this.neighborMap[this.hoveredIdx] || [] : []);
-    const nCores = this._useIM ? this._coreScale?.length ?? 0 : this.nodeCores.length;
-    if (this.hoveredIdx >= 0 && this.hoveredIdx < nCores) {
+    if (this.hoveredIdx >= 0 && this.hoveredIdx < this.nodeCores.length) {
       const base = 0.6 + (this.deg[this.hoveredIdx] / this.maxDeg) * 2.8;
-      // Respect full-mode's 0.4x core reduction + gentler hover bump (0.7 instead of 1.2)
-      const baseScale = isFull ? base * 0.4 : base;
-      const s = 1 + this.hoverScale * 0.7;
-      if (this._useIM) {
-        this._setCoreScale(this.hoveredIdx, baseScale * s);
-      } else {
-        this.nodeCores[this.hoveredIdx].scale.setScalar(baseScale * s);
-      }
+      const s = 1 + this.hoverScale * 1.2;
+      this.nodeCores[this.hoveredIdx].scale.setScalar(base * s);
       if (this.nodeGlows[this.hoveredIdx]) {
         this.nodeGlows[this.hoveredIdx].scale.setScalar(base * (isFull ? 7 : 5.5) * s);
         (this.nodeGlows[this.hoveredIdx].material as THREE.SpriteMaterial).opacity = 0.55 + this.hoverScale * 0.45;
@@ -2547,8 +2373,7 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
         if (this._pathNodes.has(i) || i === this._pathSource) continue; // path node — keep highlight
         if (this._pathNodes.size > 0) {
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.05;
-          if (this._useIM) { this._setCoreScale(i, 0); }
-          else { this.nodeCores[i].visible = false; }
+          this.nodeCores[i].visible = false;
           continue;
         }
       }
@@ -2559,15 +2384,10 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
           if (d === 0) c.set(0xffffff); else if (d === 1) c.set(0xff4422); else if (d === 2) c.set(0xff8800); else if (d === 3) c.set(0xffcc00); else c.setHSL(0.55 - (d / this.blastMaxDist) * 0.3, 0.6, 0.4 + (1 - d / this.blastMaxDist) * 0.3);
           (this.nodeGlows[i].material as THREE.SpriteMaterial).color.set(c);
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.7;
+          (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(c);
           const base = 0.6 + (this.deg[i] / this.maxDeg) * 2.8;
           this.nodeGlows[i].scale.setScalar(base * (isFull ? 7 : 5.5) * (d === 0 ? 2 : 1.2));
-          if (this._useIM) {
-            this.nodeCoresIM.setColorAt(i, c);
-            this._setCoreScale(i, base * (d === 0 ? 2 : 1));
-          } else {
-            (this.nodeCores[i].material as THREE.MeshBasicMaterial).color.set(c);
-            this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
-          }
+          this.nodeCores[i].scale.setScalar(base * (d === 0 ? 2 : 1));
         } else {
           (this.nodeGlows[i].material as THREE.SpriteMaterial).opacity = 0.12;
         }
@@ -2607,14 +2427,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     }
 
     this.updateTooltip(); this.updateLabels();
-    if (this._useIM) this._flushCores();
     this.controls.update();
-    if (isFull) {
-      this.composer.render();
-    } else {
-      this.renderer.setRenderTarget(null);
-      this.renderer.render(this.scene, this.camera);
-    }
+    this.composer.render();
   }
 
   // ── Resize ───────────────────────────────────────────────
@@ -2628,57 +2442,6 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.composer.setSize(w, h);
   };
 
-  // ── InstancedMesh helpers (A1) ───────────────────────────
-
-  /** Check URL param for legacy fallback. */
-  private _useFallbackLegacy(): boolean {
-    try {
-      const p = new URLSearchParams(window.location.search);
-      return p.get('instanced') === '0';
-    } catch { return false; }
-  }
-
-  /** Write position+scale matrix for instance i. Call after changing _coreScale[i]. */
-  private _writeCoreMatrix(i: number): void {
-    if (!this._useIM || !this.nodeCoresIM) return;
-    const s = this._coreScale[i];
-    const p = this.nodePositions;
-    const m = new THREE.Matrix4();
-    m.compose(
-      new THREE.Vector3(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]),
-      new THREE.Quaternion(),
-      new THREE.Vector3(s, s, s),
-    );
-    this.nodeCoresIM.setMatrixAt(i, m);
-  }
-
-  /** Set core scale (0 = effectively hidden). Does NOT flush to GPU — call _flushCores() to apply. */
-  private _setCoreScale(i: number, s: number): void {
-    if (!this._useIM) return;
-    this._coreScale[i] = s;
-    this._writeCoreMatrix(i);
-  }
-
-  /** Dim/hide via color (sets RGB to near-black). */
-  private _setCoreDimmed(i: number, dimmed: boolean): void {
-    if (!this._useIM || !this.nodeCoresIM) return;
-    if (dimmed) {
-      this.nodeCoresIM.setColorAt(i, new THREE.Color(0x010101)); // near-black
-    } else {
-      const base = this._coreBaseScale[i];
-      const isFull = this.mode === 'full';
-      const c = isFull ? 0xffffff : (NODE_COLORS[(this.graphNodes[i].type || this.graphNodes[i].kind || 'symbol').toLowerCase()] || 0x7eb8ff);
-      this.nodeCoresIM.setColorAt(i, new THREE.Color(c));
-    }
-  }
-
-  /** Flush pending IM buffer updates to GPU. Call once per frame after all changes. */
-  private _flushCores(): void {
-    if (!this._useIM || !this.nodeCoresIM) return;
-    this.nodeCoresIM.instanceMatrix.needsUpdate = true;
-    if (this.nodeCoresIM.instanceColor) this.nodeCoresIM.instanceColor.needsUpdate = true;
-  }
-
   // ── Destroy ──────────────────────────────────────────────
 
   destroy(): void {
@@ -2691,9 +2454,8 @@ if (this._pathSource >= 0) { this.clearPath(); e.stopImmediatePropagation(); ret
     this.renderer.dispose();
     this.renderer.domElement.remove();
     this.glowTex.dispose(); this.sphereGeo.dispose();
-    if (this.nodeCoresIM) { this.nodeCoresIM.geometry.dispose(); (this.nodeCoresIM.material as THREE.Material).dispose(); }
     for (const d of this.galaxyLabelDivs) d.remove(); this.galaxyLabelDivs = [];
-    this.galaxyTitleEl?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
+    this.galaxyTitleEl?.remove(); this.pieMenu?.remove(); this.tooltipEl?.remove(); this.labelsContainer?.remove(); this.detailCard?.remove();
   }
 }
 
