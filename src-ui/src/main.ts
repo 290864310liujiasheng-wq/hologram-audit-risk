@@ -208,15 +208,7 @@ async function openProject(path?: string): Promise<void> {
         statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
       }
     } else {
-      // Layout via Worker for responsiveness on large graphs
-      if (nodeCount > 2000) {
-        const pairs = buildEdgePairs(graph);
-        const pos = await layoutViaWorker(nodeCount, pairs);
-        if (pos.length > 0) starGraph.render(graph, pos);
-        else starGraph.render(graph);
-      } else {
-        starGraph.render(graph);
-      }
+      starGraph.render(graph);
       showGraphView(folder);
     }
     setLoading(false); // 图已就绪，不等 Agent
