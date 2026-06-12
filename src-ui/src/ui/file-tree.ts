@@ -22,6 +22,8 @@ export class FileTreePanel {
   private headerEl: HTMLElement;
   private open = false;
   private rootPath = '';
+  private _transitioning = false;
+  private _closeTimer: ReturnType<typeof setTimeout> | null = null;
 
   private static instance: FileTreePanel | null = null;
   static get(): FileTreePanel {
@@ -33,7 +35,7 @@ export class FileTreePanel {
     this.el = document.createElement('div');
     this.el.id = 'file-tree-panel';
     Object.assign(this.el.style, {
-      position: 'absolute', left: '0', top: '40px', bottom: '0', zIndex: '25',
+      position: 'absolute', left: '0', top: 'var(--toolbar-h)', bottom: 'var(--status-h)', zIndex: '25',
       width: '280px',
       background: 'var(--panel-bg, rgba(4, 10, 20, 0.97))',
       borderRight: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.45))',
@@ -54,15 +56,14 @@ export class FileTreePanel {
     this.headerEl = document.createElement('div');
     this.headerEl.className = 'ft-header';
 
-    // Close button
-    const closeBtn = document.createElement('button');
-    closeBtn.innerHTML = iconSvg('close', 12);
-    Object.assign(closeBtn.style, {
-      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',
-      padding: '2px', display: 'flex', marginLeft: 'auto',
+    // Path label (root path display)
+    const pathLabel = document.createElement('span');
+    pathLabel.className = 'ft-path-label';
+    Object.assign(pathLabel.style, {
+      flex: '1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono, monospace)',
     });
-    closeBtn.title = '关闭';
-    closeBtn.addEventListener('click', () => this.close());
+    this.headerEl.appendChild(pathLabel);
 
     // Refresh button
     const refreshBtn = document.createElement('button');
@@ -73,6 +74,16 @@ export class FileTreePanel {
     });
     refreshBtn.title = '刷新';
     refreshBtn.addEventListener('click', () => this.refresh());
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = iconSvg('close', 12);
+    Object.assign(closeBtn.style, {
+      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)',
+      padding: '2px', display: 'flex',
+    });
+    closeBtn.title = '关闭';
+    closeBtn.addEventListener('click', () => this.close());
 
     this.headerEl.appendChild(refreshBtn);
     this.headerEl.appendChild(closeBtn);
@@ -88,7 +99,8 @@ export class FileTreePanel {
 
   async load(rootPath: string): Promise<void> {
     this.rootPath = rootPath;
-    this.headerEl.childNodes[0] && (this.headerEl.childNodes[0].textContent = rootPath);
+    const pathLabel = this.headerEl.querySelector('.ft-path-label');
+    if (pathLabel) pathLabel.textContent = rootPath;
     try {
       const entries: DirEntry[] = await invoke('list_directory', { path: rootPath });
       this.renderTree(entries, this.treeEl, rootPath);
@@ -102,22 +114,35 @@ export class FileTreePanel {
   }
 
   toggle(): void {
+    if (this._transitioning) return;
     this.open ? this.close() : this.show();
   }
 
   show(): void {
+    if (this._transitioning) return;
+    this._transitioning = true;
+    // Cancel any pending close timer
+    if (this._closeTimer) { clearTimeout(this._closeTimer); this._closeTimer = null; }
     this.open = true;
     this.el.style.display = 'flex';
     requestAnimationFrame(() => {
       this.el.style.transform = 'translateX(0)';
     });
+    // Unlock after transition completes
+    setTimeout(() => { this._transitioning = false; }, 300);
     bus.emit('panel:toggle');
   }
 
   close(): void {
+    if (this._transitioning) return;
+    this._transitioning = true;
     this.open = false;
     this.el.style.transform = 'translateX(-100%)';
-    setTimeout(() => { if (!this.open) this.el.style.display = 'none'; }, 280);
+    this._closeTimer = setTimeout(() => {
+      if (!this.open) this.el.style.display = 'none';
+      this._transitioning = false;
+      this._closeTimer = null;
+    }, 300);
     bus.emit('panel:toggle');
   }
 
@@ -186,7 +211,14 @@ export class FileTreePanel {
             bus.emit('highlight:folder', entry.path);
           }
         });
-      } else if (!entry.is_dir) {
+      } else if (entry.is_dir) {
+        // Empty directory — brief flash feedback, no expand/collapse
+        row.addEventListener('click', (e) => {
+          e.stopPropagation();
+          row.style.background = 'rgba(48, 60, 80, 0.35)';
+          setTimeout(() => { row.style.background = ''; }, 300);
+        });
+      } else {
         row.addEventListener('click', () => {
           FileViewer.get().open(entry.path);
           dbg('FileTree.clickFile', entry.path);

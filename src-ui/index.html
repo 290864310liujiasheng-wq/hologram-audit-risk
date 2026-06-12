@@ -1015,6 +1015,46 @@
     }
     .msg-tool-card.tool-expanded .msg-tool-result { display: block; }
 
+    /* Permission card — inline approval request */
+    .msg-perm-card {
+      margin-top: 6px;
+      border: 1px solid rgba(54, 82, 128, 0.3);
+      border-radius: 6px; padding: 10px 12px;
+      background: rgba(10, 18, 36, 0.7);
+      font-family: var(--font-body, sans-serif);
+    }
+    .msg-perm-title {
+      font-size: 12px; margin-bottom: 4px;
+      color: var(--starlight, #e2edff);
+    }
+    .msg-perm-desc {
+      font-size: 11px; line-height: 1.4;
+      color: var(--starlight-dim, rgba(180,205,240,0.7));
+      margin-bottom: 10px;
+    }
+    .msg-perm-btns {
+      display: flex; gap: 6px;
+    }
+    .msg-perm-btn {
+      flex: 1; padding: 5px 10px;
+      font-size: 12px; font-weight: 600;
+      font-family: var(--font-body, sans-serif);
+      border: none; border-radius: 5px; cursor: pointer;
+      transition: filter var(--snap);
+    }
+    .msg-perm-btn:hover { filter: brightness(1.25); }
+    .msg-perm-btn kbd {
+      font-size: 9px; opacity: 0.5; margin-left: 3px;
+      font-family: var(--font-mono); font-weight: 400;
+    }
+    .perm-always { background: rgba(61,165,93,0.18); color: var(--pass, #3da55d); }
+    .perm-once  { background: rgba(80,140,240,0.15); color: var(--signal, #68a8ff); }
+    .perm-deny  { background: rgba(217,68,68,0.1);  color: var(--fail, #d94444); }
+    .msg-perm-result {
+      font-size: 11px; color: var(--text-muted);
+      font-family: var(--font-mono); padding: 4px 0;
+    }
+
     /* Usage pill */
     .msg-usage {
       margin-top: 5px; font-family: var(--font-mono); font-size: 8px;

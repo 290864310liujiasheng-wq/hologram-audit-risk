@@ -7,6 +7,7 @@ import { EventKind } from '../agent/agent';
 import type { StarGraph } from './graph';
 import { iconHtml } from './icons';
 import { bus } from './events';
+import { resolveApproval } from '../agent/permission';
 import { loadSettings } from '../settings';
 import { invoke } from '../bridge';
 import type { Message } from '../provider/types';
@@ -75,6 +76,29 @@ export class ChatPanel {
   constructor(container: HTMLElement) {
     this.container = container;
     this.buildDOM();
+    // Listen for permission requests — render inline card in message flow
+    bus.on('agent:permission-request', (req: { id: string; toolName: string; description: string; args: Record<string, unknown> }) => {
+      this.renderPermissionCard(req);
+    });
+    // Global keyboard shortcuts for active permission card
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (!this.activePermId) return;
+      // Don't intercept when user is typing in the input area
+      if (e.target === this.inputArea) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        resolveApproval(this.activePermId, { allow: false, remember: false });
+        this.activePermId = null;
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        resolveApproval(this.activePermId, { allow: true, remember: false });
+        this.activePermId = null;
+      } else if (e.key === 'y' && e.ctrlKey) {
+        e.preventDefault();
+        resolveApproval(this.activePermId, { allow: true, remember: true });
+        this.activePermId = null;
+      }
+    });
   }
 
   // ── Public API ──
@@ -1349,6 +1373,64 @@ export class ChatPanel {
 
     // Graph visualization is now handled by AgentVisualizer via EventBus
     // (single entry point — eliminates the old triple-call bug)
+  }
+
+  // ── Inline Permission Card — rendered in message flow ──
+
+  /** Currently active permission request ID (for keyboard shortcuts). */
+  private activePermId: string | null = null;
+
+  private renderPermissionCard(req: { id: string; toolName: string; description: string; args: Record<string, unknown> }): void {
+    // Auto-open the chat panel if closed (otherwise user can't see the prompt)
+    if (!this.openState) this.open();
+
+    this.flushReasoning();
+    this.flushText();
+    this.ensureAssistantBubble();
+
+    this.activePermId = req.id;
+
+    const card = document.createElement('div');
+    card.className = 'msg-perm-card';
+
+    // Icon + tool name
+    const title = document.createElement('div');
+    title.className = 'msg-perm-title';
+    title.innerHTML = `⚡ <strong>${req.toolName}</strong> 请求执行`;
+    card.appendChild(title);
+
+    // Description
+    const desc = document.createElement('div');
+    desc.className = 'msg-perm-desc';
+    desc.textContent = req.description.length > 100 ? req.description.slice(0, 97) + '...' : req.description;
+    card.appendChild(desc);
+
+    // Button row
+    const btns = document.createElement('div');
+    btns.className = 'msg-perm-btns';
+
+    const resolve = (result: { allow: boolean; remember: boolean }) => {
+      if (this.activePermId !== req.id) return; // already resolved (e.g. via keyboard)
+      this.activePermId = null;
+      resolveApproval(req.id, result);
+      btns.innerHTML = `<span class="msg-perm-result">${result.allow ? (result.remember ? '✓ 已始终允许' : '✓ 已允许') : '✗ 已拒绝'}</span>`;
+    };
+
+    const makeBtn = (label: string, hint: string, cls: string, result: { allow: boolean; remember: boolean }) => {
+      const btn = document.createElement('button');
+      btn.className = `msg-perm-btn ${cls}`;
+      btn.innerHTML = `${label} <kbd>${hint}</kbd>`;
+      btn.addEventListener('click', (e) => { e.stopPropagation(); resolve(result); });
+      return btn;
+    };
+
+    btns.appendChild(makeBtn('始终', 'Ctrl+Y', 'perm-always', { allow: true, remember: true }));
+    btns.appendChild(makeBtn('允许', 'Enter', 'perm-once', { allow: true, remember: false }));
+    btns.appendChild(makeBtn('拒绝', 'Esc', 'perm-deny', { allow: false, remember: false }));
+    card.appendChild(btns);
+
+    this.currentBubble!.appendChild(card);
+    this.scrollBottom();
   }
 
   // ── Usage ──

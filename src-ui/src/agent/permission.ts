@@ -193,7 +193,13 @@ export class PermissionGate {
   }
 }
 
-// ── Interactive approval modal ──
+// ── Interactive approval — delegates to ChatPanel via EventBus ──
+
+import { bus } from '../ui/events';
+
+/** Pending approval request resolvers, keyed by unique request ID. */
+const pending = new Map<string, (result: { allow: boolean; remember: boolean }) => void>();
+let nextId = 1;
 
 export function showApprovalDialog(
   toolName: string,
@@ -201,75 +207,17 @@ export function showApprovalDialog(
   args: Record<string, unknown>,
 ): Promise<{ allow: boolean; remember: boolean }> {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    Object.assign(overlay.style, {
-      position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
-      background: 'rgba(0,0,0,0.65)', zIndex: '9998',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    });
-    const dialog = document.createElement('div');
-    Object.assign(dialog.style, {
-      background: 'var(--panel-bg, rgba(6,12,24,0.97))',
-      border: '1px solid var(--panel-edge, rgba(54,82,128,0.35))',
-      borderRadius: '12px', padding: '20px 24px', maxWidth: '480px', minWidth: '340px',
-      color: 'var(--starlight, #e2edff)',
-      fontFamily: 'var(--font-mono, monospace)',
-      boxShadow: '0 16px 64px rgba(0,0,0,0.5)',
-    });
-
-    const header = document.createElement('div');
-    header.innerHTML = `⚠️ <strong style="color:var(--sol, #f0b848)">${toolName}</strong> 请求执行`;
-    Object.assign(header.style, { fontSize: '14px', marginBottom: '8px' });
-
-    const desc = document.createElement('div');
-    desc.textContent = description;
-    Object.assign(desc.style, { fontSize: '12px', color: 'var(--starlight-dim, #c9d1d9)', marginBottom: '12px' });
-
-    const argsPre = document.createElement('pre');
-    argsPre.textContent = JSON.stringify(args, null, 2).slice(0, 300);
-    Object.assign(argsPre.style, {
-      fontSize: '11px', color: 'var(--text-muted, #6b7d90)',
-      background: 'rgba(0,0,0,0.3)', padding: '8px', borderRadius: '6px',
-      maxHeight: '120px', overflow: 'auto', marginBottom: '16px',
-    });
-
-    const btnRow = document.createElement('div');
-    Object.assign(btnRow.style, { display: 'flex', gap: '8px' });
-
-    const makeBtn = (text: string, bg: string, color: string) => {
-      const btn = document.createElement('button');
-      btn.textContent = text;
-      Object.assign(btn.style, {
-        flex: '1', padding: '8px', fontSize: '13px', fontWeight: '600',
-        background: bg, color, border: 'none', borderRadius: '6px', cursor: 'pointer',
-      });
-      return btn;
-    };
-
-    const alwaysBtn = makeBtn('始终允许', 'rgba(61,165,93,0.2)', 'var(--pass, #3da55d)');
-    const onceBtn = makeBtn('这次允许', 'rgba(80,140,240,0.15)', 'var(--signal, #68a8ff)');
-    const denyBtn = makeBtn('拒绝', 'rgba(217,68,68,0.15)', 'var(--fail, #d94444)');
-
-    alwaysBtn.addEventListener('click', () => { overlay.remove(); resolve({ allow: true, remember: true }); });
-    onceBtn.addEventListener('click', () => { overlay.remove(); resolve({ allow: true, remember: false }); });
-    denyBtn.addEventListener('click', () => { overlay.remove(); resolve({ allow: false, remember: false }); });
-
-    btnRow.appendChild(alwaysBtn);
-    btnRow.appendChild(onceBtn);
-    btnRow.appendChild(denyBtn);
-
-    dialog.appendChild(header);
-    dialog.appendChild(desc);
-    dialog.appendChild(argsPre);
-    dialog.appendChild(btnRow);
-    overlay.appendChild(dialog);
-
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) { overlay.remove(); resolve({ allow: false, remember: false }); }
-    });
-    document.addEventListener('keydown', function escHandler(e) {
-      if (e.key === 'Escape') { overlay.remove(); resolve({ allow: false, remember: false }); document.removeEventListener('keydown', escHandler); }
-    });
-    document.body.appendChild(overlay);
+    const id = `perm-${nextId++}`;
+    pending.set(id, resolve);
+    bus.emit('agent:permission-request', { id, toolName, description, args });
   });
+}
+
+/** Called by ChatPanel when the user clicks a button on the inline permission card. */
+export function resolveApproval(id: string, result: { allow: boolean; remember: boolean }): void {
+  const resolve = pending.get(id);
+  if (resolve) {
+    pending.delete(id);
+    resolve(result);
+  }
 }

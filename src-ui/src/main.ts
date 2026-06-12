@@ -256,6 +256,9 @@ function showGraphView(path: string): void {
   tbPath.textContent = path;
   timelinePanel.setProjectPath(path);
   TerminalPanel.get().setCwd(path);
+  // Refresh file tree if it's already open (workspace switch)
+  const ft = FileTreePanel.get();
+  if (ft.isOpen()) ft.load(path);
 }
 
 // ── Search ──
@@ -761,9 +764,11 @@ async function init(): Promise<void> {
     if (!ft.isOpen()) {
       ft.show();
       btnExplorer.classList.add('active');
-      if (currentPath) ft.load(currentPath);
-      // Wait for tree to load, then highlight
-      setTimeout(() => ft.highlightPath(filePath), 300);
+      if (currentPath) {
+        ft.load(currentPath).then(() => {
+          ft.highlightPath(filePath);
+        });
+      }
     } else {
       ft.highlightPath(filePath);
     }
@@ -1003,7 +1008,10 @@ async function init(): Promise<void> {
       e.preventDefault();
       const ft = FileTreePanel.get();
       if (!ft.isOpen() && currentPath) ft.load(currentPath);
-      if (!ft.isOpen() && timelinePanel.isOpen()) timelinePanel.close();
+      if (!ft.isOpen()) {
+        if (timelinePanel.isOpen()) timelinePanel.close();
+        if (GitPanel.get().isOpen()) GitPanel.get().close();
+      }
       ft.toggle();
       btnExplorer.classList.toggle('active', ft.isOpen());
       updateTabs();

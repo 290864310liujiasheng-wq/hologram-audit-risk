@@ -61,3 +61,5 @@ export const bus = new EventBus();
 //   graph:path-selected ({ from: {name,id,type}, to: {name,id,type}, pathLength: number, pathNames: string[] }) — Shift+点击路径
 //   graph:region-selected ({ nodeNames: string[], nodeCount: number }) — 拖拽框选区域
 //   graph:show-prompt ({ title: string, question: string }) — 图交互完成，弹出确认条（不自动发查询）
+//   agent:permission-request ({ id: string, toolName: string, description: string, args: Record<string, unknown> }) — Agent 工具需要用户批准
+//   agent:permission-response ({ id: string, allow: boolean, remember: boolean }) — 用户对权限请求的回应
