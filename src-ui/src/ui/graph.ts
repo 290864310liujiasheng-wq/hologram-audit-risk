@@ -1257,18 +1257,21 @@ export class StarGraph {
     this._promptBarEl.appendChild(this._promptTitleEl);
     this._promptBtnEl = document.createElement('button');
     this._promptBtnEl.textContent = 'Ask Agent';
+    // Mirror detail-card button template (dc-agent-btn)
     this._promptBtnEl.style.cssText =
-      'padding:3px 10px;font-size:9px;font-weight:600;font-family:var(--font-mono);' +
-      'background:rgba(12,24,36,0.5);color:var(--signal,#68a8ff);cursor:pointer;' +
-      'border:1px solid rgba(60,100,180,0.12);border-radius:4px;' +
-      'letter-spacing:0.5px;transition:background 0.15s,color 0.15s;';
+      'font-family:var(--font-hud);font-size:7px;font-weight:600;' +
+      'letter-spacing:0.5px;text-transform:uppercase;' +
+      'padding:3px 8px;border-radius:2px;cursor:pointer;' +
+      'transition:all var(--snap);' +
+      'border:1px solid rgba(140,100,200,0.25);' +
+      'background:rgba(12,22,36,0.6);color:var(--nebula,#a088e0);';
     this._promptBtnEl.addEventListener('mouseenter', () => {
       this._promptBtnEl.style.background = 'rgba(22,36,54,0.7)';
-      this._promptBtnEl.style.color = 'var(--signal-bright,#8cc4ff)';
+      this._promptBtnEl.style.color = 'var(--starlight-dim,#c3daf8)';
     });
     this._promptBtnEl.addEventListener('mouseleave', () => {
-      this._promptBtnEl.style.background = 'rgba(12,24,36,0.5)';
-      this._promptBtnEl.style.color = 'var(--signal,#68a8ff)';
+      this._promptBtnEl.style.background = 'rgba(12,22,36,0.6)';
+      this._promptBtnEl.style.color = 'var(--nebula,#a088e0)';
     });
     this._promptBtnEl.addEventListener('click', (e) => {
       e.stopPropagation();
