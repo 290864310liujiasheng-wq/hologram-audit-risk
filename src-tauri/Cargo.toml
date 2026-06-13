@@ -17,6 +17,7 @@ walkdir = "2"
 ureq = "2"
 regex = "1"
 url = "2"
+portable-pty = "0.8"
 
 [features]
 default = ["custom-protocol"]

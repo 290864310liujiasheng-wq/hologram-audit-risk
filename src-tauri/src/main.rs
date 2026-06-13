@@ -5,8 +5,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod mcp_manager;
+mod pty_manager;
 
 use mcp_manager::McpManager;
+use pty_manager::{pty_spawn, pty_write, pty_resize, pty_kill};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -2565,6 +2567,11 @@ fn main() {
             mcp_call,
             mcp_list_tools,
             stop_mcp_server,
+            // PTY
+            pty_spawn,
+            pty_write,
+            pty_resize,
+            pty_kill,
         ])
         .run(tauri::generate_context!())
         .expect("error running hologram");

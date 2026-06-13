@@ -5,7 +5,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { invoke } from '../bridge';
+import { invoke, listen } from '../bridge';
 import { iconSvg } from './icons';
 import { bus } from './events';
 
@@ -17,10 +17,9 @@ interface TermSession {
   term: Terminal;
   fitAddon: FitAddon;
   el: HTMLElement;       // DOM container for this term
-  history: string[];
-  historyIdx: number;
-  inputLine: HTMLInputElement;
+  ptySessionId: number;  // Rust-side PTY session ID
   cwd: string;
+  unlisten: () => void;  // clean up event listener
 }
 
 let nextId = 1;
@@ -90,7 +89,7 @@ export class TerminalPanel {
 
   // ── Session management ────────────────────────────────────
 
-  private createSession(name?: string): TermSession {
+  private async createSession(name?: string): Promise<TermSession> {
     const id = nextId++;
     const label = name || `终端 ${id}`;
 
@@ -115,56 +114,50 @@ export class TerminalPanel {
         brightYellow: '#eebb33', brightBlue: '#99ccff', brightMagenta: '#d0a0ff',
         brightCyan: '#66dddd', brightWhite: '#e6edf3',
       },
-      allowProposedApi: true, scrollback: 2000,
+      allowProposedApi: true, scrollback: 5000,
     });
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(el);
 
-    // Welcome
-    term.write('\x1b[36m🔮 全息观测站 终端\x1b[0m\r\n');
-    term.write('输入命令后按 Enter 执行\r\n\r\n');
-
     // Resize observer
     const observer = new ResizeObserver(() => {
       try { fitAddon.fit(); } catch { /* ignore */ }
+      if (session && session.ptySessionId) {
+        invoke('pty_resize', { sessionId: session.ptySessionId, cols: term.cols, rows: term.rows }).catch(() => {});
+      }
     });
     observer.observe(el);
 
-    // Input row
-    const inputRow = document.createElement('div');
-    Object.assign(inputRow.style, {
-      display: 'flex', alignItems: 'center', gap: '0',
-      borderTop: '1px solid var(--panel-edge, rgba(48, 60, 80, 0.3))',
-      flexShrink: '0',
+    // Spawn PTY
+    const cwd = this.globalCwd || '.';
+    const ptySessionId = await invoke<number>('pty_spawn', {
+      cwd,
+      shell: null,
+      cols: term.cols || 80,
+      rows: term.rows || 24,
     });
 
-    const prompt = document.createElement('span');
-    prompt.textContent = '>';
-    Object.assign(prompt.style, {
-      color: 'var(--signal, #7eb8ff)', fontSize: '13px', padding: '0 8px',
-      fontFamily: 'var(--font-mono)', fontWeight: '600',
+    // Listen for PTY output
+    const unlisten = await listen<{ session_id: number; data: number[] }>('pty-output', (event) => {
+      const payload = (event as any).payload;
+      if (payload.session_id === ptySessionId) {
+        const bytes = new Uint8Array(payload.data);
+        term.write(bytes);
+      }
     });
 
-    const inputLine = document.createElement('input');
-    Object.assign(inputLine.style, {
-      flex: '1', height: '28px', padding: '0 8px', fontSize: '13px',
-      fontFamily: 'var(--font-mono)', background: 'transparent',
-      border: 'none', color: 'var(--starlight-dim)', outline: 'none',
+    // xterm input → PTY
+    term.onData((data) => {
+      invoke('pty_write', { sessionId: ptySessionId, data }).catch(() => {});
     });
-    inputLine.placeholder = '输入命令… (Enter 执行)';
-    inputLine.addEventListener('keydown', (e) => this.handleInputKey(e, inputLine, id));
-
-    inputRow.appendChild(prompt);
-    inputRow.appendChild(inputLine);
-    el.appendChild(inputRow);
 
     const session: TermSession = {
       id, name: label,
-      term, fitAddon, el, inputLine,
-      history: [], historyIdx: -1,
-      cwd: this.globalCwd,
+      term, fitAddon, el,
+      ptySessionId, cwd,
+      unlisten,
     };
 
     this.sessions.push(session);
@@ -177,6 +170,8 @@ export class TerminalPanel {
     if (idx < 0) return;
 
     const sess = this.sessions[idx];
+    invoke('pty_kill', { sessionId: sess.ptySessionId }).catch(() => {});
+    sess.unlisten();
     sess.term.dispose();
     sess.el.remove();
 
@@ -199,7 +194,7 @@ export class TerminalPanel {
     if (active) {
       setTimeout(() => {
         try { active.fitAddon.fit(); } catch { /* ignore */ }
-        active.inputLine.focus();
+        active.term.focus();
       }, 50);
     }
     this.renderTabs();
@@ -272,8 +267,8 @@ export class TerminalPanel {
       addBtn.style.color = 'var(--text-muted)';
       addBtn.style.background = 'none';
     });
-    addBtn.addEventListener('click', () => {
-      const s = this.createSession();
+    addBtn.addEventListener('click', async () => {
+      const s = await this.createSession();
       this.switchTo(s.id);
     });
     this.tabBar.appendChild(addBtn);
@@ -299,33 +294,6 @@ export class TerminalPanel {
     this.tabBar.appendChild(collapseBtn);
   }
 
-  // ── Input handling ────────────────────────────────────────
-
-  private handleInputKey(e: KeyboardEvent, input: HTMLInputElement, id: number): void {
-    const sess = this.sessions.find(s => s.id === id);
-    if (!sess) return;
-
-    if (e.key === 'Enter') {
-      const cmd = input.value.trim();
-      if (cmd) this.executeCommand(id, cmd);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (sess.history.length > 0) {
-        sess.historyIdx = Math.min(sess.historyIdx + 1, sess.history.length - 1);
-        input.value = sess.history[sess.history.length - 1 - sess.historyIdx] || '';
-      }
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (sess.historyIdx > 0) {
-        sess.historyIdx--;
-        input.value = sess.history[sess.history.length - 1 - sess.historyIdx] || '';
-      } else {
-        sess.historyIdx = -1;
-        input.value = '';
-      }
-    }
-  }
-
   // ── Public API ────────────────────────────────────────────
 
   setCwd(path: string): void {
@@ -347,10 +315,10 @@ export class TerminalPanel {
     }
   }
 
-  private open(): void {
+  private async open(): Promise<void> {
     // Lazy init first session
     if (this.sessions.length === 0) {
-      const s = this.createSession();
+      const s = await this.createSession();
       this.activeId = s.id;
       this.renderTabs();
     }
@@ -366,7 +334,7 @@ export class TerminalPanel {
       active.el.style.display = 'flex';
       setTimeout(() => {
         try { active.fitAddon.fit(); } catch { /* ignore */ }
-        active.inputLine.focus();
+        active.term.focus();
       }, 280);
     }
     this.renderTabs();
@@ -401,7 +369,7 @@ export class TerminalPanel {
       active.el.style.display = 'flex';
       setTimeout(() => {
         try { active.fitAddon.fit(); } catch { /* ignore */ }
-        active.inputLine.focus();
+        active.term.focus();
       }, 50);
     }
     this.renderTabs();
@@ -409,35 +377,4 @@ export class TerminalPanel {
   }
 
   isOpen(): boolean { return this.openState && !this.collapsed; }
-
-  // ── Command execution ─────────────────────────────────────
-
-  private async executeCommand(id: number, cmd: string): Promise<void> {
-    const sess = this.sessions.find(s => s.id === id);
-    if (!sess) return;
-
-    sess.history.push(cmd);
-    sess.historyIdx = -1;
-    sess.inputLine.value = '';
-    sess.inputLine.disabled = true;
-
-    const cwdDisplay = sess.cwd || '.';
-    sess.term.write(`\r\n\x1b[36m${cwdDisplay}>\x1b[0m ${cmd}\r\n`);
-
-    try {
-      const output = await invoke<string>('exec_command', {
-        command: cmd,
-        cwd: sess.cwd || null,
-      });
-      if (output) {
-        sess.term.write(output.trimEnd() + '\r\n');
-      }
-    } catch (err: any) {
-      sess.term.write(`\x1b[31m错误: ${err}\x1b[0m\r\n`);
-    }
-
-    sess.inputLine.disabled = false;
-    sess.inputLine.focus();
-    sess.term.scrollToBottom();
-  }
 }
