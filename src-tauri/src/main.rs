@@ -1507,6 +1507,45 @@ async fn write_file_content(file_path: String, content: String) -> Result<(), St
 }
 
 // ═══════════════════════════════════════════════════════
+// File tree operations
+// ═══════════════════════════════════════════════════════
+
+#[tauri::command]
+async fn create_directory(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path)
+        .map_err(|e| format!("无法创建目录 {}: {}", path, e))
+}
+
+#[tauri::command]
+async fn delete_file_or_dir(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() { return Err(format!("路径不存在: {}", path)); }
+    if p.is_dir() {
+        std::fs::remove_dir_all(p)
+            .map_err(|e| format!("无法删除目录 {}: {}", path, e))
+    } else {
+        std::fs::remove_file(p)
+            .map_err(|e| format!("无法删除文件 {}: {}", path, e))
+    }
+}
+
+#[tauri::command]
+async fn rename_file_or_dir(from: String, to: String) -> Result<(), String> {
+    std::fs::rename(&from, &to)
+        .map_err(|e| format!("无法重命名 {} -> {}: {}", from, to, e))
+}
+
+#[tauri::command]
+async fn move_file(source: String, dest_dir: String) -> Result<(), String> {
+    let src = std::path::Path::new(&source);
+    let name = src.file_name()
+        .ok_or_else(|| format!("无效路径: {}", source))?;
+    let dest = std::path::Path::new(&dest_dir).join(name);
+    std::fs::rename(src, &dest)
+        .map_err(|e| format!("无法移动 {} -> {}: {}", source, dest.display(), e))
+}
+
+// ═══════════════════════════════════════════════════════
 // Coding Agent: search_code — grep over project files
 // ═══════════════════════════════════════════════════════
 
@@ -2430,6 +2469,10 @@ fn main() {
             list_directory,
             read_file_content,
             write_file_content,
+            create_directory,
+            delete_file_or_dir,
+            rename_file_or_dir,
+            move_file,
             read_constraints,
             write_constraints,
             exec_command,

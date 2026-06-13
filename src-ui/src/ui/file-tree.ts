@@ -8,6 +8,7 @@ import { FileViewer } from './file-viewer';
 import { bus } from './events';
 import { askAgent } from './agent-visualizer';
 import { dbg } from './debug';
+import { showContextMenu } from './context-menu';
 
 interface DirEntry {
   name: string;
@@ -92,6 +93,20 @@ export class FileTreePanel {
     // Tree container
     this.treeEl = document.createElement('div');
     this.treeEl.className = 'ft-tree';
+
+    // Empty-area context menu
+    this.treeEl.addEventListener('contextmenu', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.ft-row')) return; // handled by row handler
+      e.preventDefault();
+      showContextMenu(e, [
+        { label: '新建文件…', action: () => this.promptNewFile(this.rootPath) },
+        { label: '新建文件夹…', action: () => this.promptNewFolder(this.rootPath) },
+        { label: '刷新', action: () => this.refresh() },
+      ]);
+    });
+
+    this.setupFilter();
     this.el.appendChild(this.treeEl);
 
     document.body.appendChild(this.el);
@@ -147,6 +162,93 @@ export class FileTreePanel {
   }
 
   isOpen(): boolean { return this.open; }
+
+  // ── File operations (context menu) ──
+
+  private async promptNewFile(parentPath: string): Promise<void> {
+    const name = prompt('文件名:');
+    if (!name) return;
+    const fullPath = `${parentPath.replace(/\\/g, '/')}/${name}`;
+    await invoke('write_file_content', { filePath: fullPath, content: '' });
+    this.refresh();
+  }
+
+  private async promptNewFolder(parentPath: string): Promise<void> {
+    const name = prompt('文件夹名:');
+    if (!name) return;
+    const fullPath = `${parentPath.replace(/\\/g, '/')}/${name}`;
+    await invoke('create_directory', { path: fullPath });
+    this.refresh();
+  }
+
+  private async promptRename(oldPath: string, oldName: string): Promise<void> {
+    const newName = prompt('新名称:', oldName);
+    if (!newName || newName === oldName) return;
+    const parts = oldPath.replace(/\\/g, '/').split('/');
+    parts[parts.length - 1] = newName;
+    const newPath = parts.join('/');
+    await invoke('rename_file_or_dir', { from: oldPath, to: newPath });
+    this.refresh();
+  }
+
+  private async confirmDelete(targetPath: string, isDir: boolean): Promise<void> {
+    const label = isDir ? `文件夹 "${targetPath}"` : `文件 "${targetPath}"`;
+    if (!confirm(`确认删除 ${label}？\n此操作不可撤销。`)) return;
+    await invoke('delete_file_or_dir', { path: targetPath });
+    this.refresh();
+  }
+
+  // ── Filter ──
+
+  private filterInput!: HTMLInputElement;
+
+  private setupFilter(): void {
+    this.filterInput = document.createElement('input');
+    this.filterInput.placeholder = '过滤文件…';
+    Object.assign(this.filterInput.style, {
+      width: '100%', padding: '3px 8px', margin: '0',
+      background: 'rgba(8,16,28,0.6)', border: '1px solid var(--panel-edge, rgba(48,60,80,0.3))',
+      borderRadius: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px',
+      color: 'var(--starlight-dim)', outline: 'none', flexShrink: '0',
+    });
+    let timer: ReturnType<typeof setTimeout>;
+    this.filterInput.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => this.applyFilter(this.filterInput.value), 200);
+    });
+    this.el.insertBefore(this.filterInput, this.treeEl);
+  }
+
+  private applyFilter(query: string): void {
+    const q = query.toLowerCase();
+    const rows = this.treeEl.querySelectorAll<HTMLElement>('.ft-row');
+    // Track which parent containers have visible descendants
+    const visibleParents = new Set<HTMLElement>();
+    for (const row of rows) {
+      const name = (row.querySelector('.ft-name')?.textContent || '').toLowerCase();
+      const match = !q || name.includes(q);
+      (row.style as any).display = match ? '' : 'none';
+      if (match && q) {
+        // Mark all ancestor containers as visible
+        let p = row.nextElementSibling as HTMLElement;
+        while (p) {
+          if (p.tagName === 'DIV' && !p.classList.contains('ft-row')) {
+            p.style.display = 'block';
+          }
+          p = p.nextElementSibling as HTMLElement;
+        }
+        // Also expand parent containers upward
+        let parent = row.parentElement;
+        while (parent && parent !== this.treeEl) {
+          parent.style.display = 'block';
+          const parentRow = parent.previousElementSibling as HTMLElement;
+          const arrow = parentRow?.querySelector('.ft-arrow') as HTMLElement;
+          if (arrow) arrow.textContent = '▾';
+          parent = parent.parentElement;
+        }
+      }
+    }
+  }
 
   /** Highlight and scroll to a file path in the tree. Used by graph→tree reverse linking. */
   highlightPath(filePath: string): void {
@@ -265,6 +367,52 @@ export class FileTreePanel {
       row.appendChild(askIcon);
     }
 
+    // Drag-and-drop: files/folders are draggable; folders are drop targets
+    if (!entry.is_dir) {
+      row.draggable = true;
+      row.addEventListener('dragstart', (ev) => {
+        ev.dataTransfer!.setData('text/plain', entry.path);
+        ev.dataTransfer!.effectAllowed = 'move';
+        row.style.opacity = '0.5';
+      });
+      row.addEventListener('dragend', () => { row.style.opacity = ''; });
+    } else {
+      row.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        ev.dataTransfer!.dropEffect = 'move';
+        row.style.background = 'rgba(60,100,170,0.25)';
+      });
+      row.addEventListener('dragleave', () => { row.style.background = ''; });
+      row.addEventListener('drop', async (ev) => {
+        ev.preventDefault();
+        row.style.background = '';
+        const srcPath = ev.dataTransfer!.getData('text/plain');
+        if (srcPath && srcPath !== entry.path) {
+          await invoke('move_file', { source: srcPath, destDir: entry.path });
+          this.refresh();
+        }
+      });
+    }
+
+    // Right-click context menu
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const items = entry.is_dir
+        ? [
+            { label: '新建文件…', action: () => this.promptNewFile(entry.path) },
+            { label: '新建文件夹…', action: () => this.promptNewFolder(entry.path) },
+            { label: '重命名…', action: () => this.promptRename(entry.path, entry.name) },
+            { label: '删除', action: () => this.confirmDelete(entry.path, entry.is_dir) },
+          ]
+        : [
+            { label: '打开', action: () => FileViewer.get().open(entry.path) },
+            { label: '重命名…', action: () => this.promptRename(entry.path, entry.name) },
+            { label: '删除', action: () => this.confirmDelete(entry.path, false) },
+            { label: '复制路径', action: () => navigator.clipboard.writeText(entry.path) },
+          ];
+      showContextMenu(e, items);
+    });
+
     return row;
   }
 }
@@ -274,9 +422,12 @@ export class FileTreePanel {
 function fileIcon(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
-    ts: 'code', tsx: 'code', js: 'code', jsx: 'code', mjs: 'code',
-    py: 'code', rs: 'code', go: 'code', java: 'code',
-    c: 'code', cpp: 'code', h: 'code', cs: 'code', rb: 'code', php: 'code',
+    ts: 'code', tsx: 'code', mts: 'code', cts: 'code',
+    js: 'code', jsx: 'code', mjs: 'code', cjs: 'code',
+    py: 'code-py', rs: 'code-rs', go: 'code-go', java: 'code',
+    c: 'code', cpp: 'code', h: 'code', hpp: 'code',
+    cs: 'code', rb: 'code', php: 'code',
+    kt: 'code', kts: 'code', swift: 'code', lua: 'code',
     html: 'code', htm: 'code', css: 'code', scss: 'code',
     json: 'file', yaml: 'file', yml: 'file', toml: 'file',
     md: 'file', txt: 'file', log: 'file',

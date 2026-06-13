@@ -211,6 +211,18 @@ const icons: Record<string, IconDef> = {
     label: '代码',
     path: '<polyline points="6,5 2,9 6,13"/><polyline points="12,5 16,9 12,13"/><line x1="9" y1="13" x2="11" y2="3"/>',
   },
+  'code-py': {
+    label: 'Python',
+    path: '<polyline points="6,5 2,9 6,13"/><polyline points="12,5 16,9 12,13"/><text x="9" y="14" text-anchor="middle" font-size="5" fill="currentColor" font-weight="700">Py</text>',
+  },
+  'code-rs': {
+    label: 'Rust',
+    path: '<polyline points="6,5 2,9 6,13"/><polyline points="12,5 16,9 12,13"/><text x="9" y="14" text-anchor="middle" font-size="5" fill="currentColor" font-weight="700">Rs</text>',
+  },
+  'code-go': {
+    label: 'Go',
+    path: '<polyline points="6,5 2,9 6,13"/><polyline points="12,5 16,9 12,13"/><text x="9" y="14" text-anchor="middle" font-size="5" fill="currentColor" font-weight="700">Go</text>',
+  },
   copy: {
     label: '复制',
     path: '<rect x="5" y="5" width="8" height="10" rx="1"/><polyline points="9,3 13,3 13,12 11,12"/>',
