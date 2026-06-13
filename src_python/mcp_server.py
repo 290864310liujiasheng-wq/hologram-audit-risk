@@ -358,7 +358,6 @@ class MCPServer:
         from .adapters.tree_sitter_adapter import TreeSitterAdapter
         from .pipeline import PipelineRunner
         from .core.merger import CrossFileResolver
-        from .core.community import CommunityDetector
 
         registry = AdapterRegistry()
         registry.register(TreeSitterAdapter())
@@ -372,11 +371,9 @@ class MCPServer:
         # 注意：runner.run() 已经调用了 resolve()，这里不再重复调用
         # 但保留这段代码以兼容旧版本或手动调用场景
 
-        # 社区发现
-        detector = CommunityDetector()
-        communities = detector.detect(graph)
-        if communities:
-            print(f"  Communities detected: {len(communities)}", file=sys.stderr)
+        # 社区发现 → 懒加载（首次 hologram_community_report / hologram_community 调用时触发）
+        # 大型项目的 Leiden 递归聚类可能超过 120s MCP 启动超时，改延迟初始化。
+        graph.communities = []  # 占位，_ensure_communities 会在首次访问时填充
 
         # 耦合分析
         try:
@@ -397,15 +394,8 @@ class MCPServer:
         except Exception as exc:
             print(f"  coupling analysis skipped: {exc}", file=sys.stderr)
 
-        # 布局预计算（igraph FR/DrL + Z 轴社区分层）
-        try:
-            from .pipeline.layout import compute_layout
-            n = compute_layout(graph)
-            if n:
-                print(f"  layout: {n} nodes positioned", file=sys.stderr)
-        except Exception as exc:
-            print(f"  layout skipped: {exc}", file=sys.stderr)
-
+        # 布局预计算已在首次分析时完成（坐标随 graph JSON 写入磁盘），
+        # MCP 不需要布局——它只做图查询，不渲染。跳过可省 2-5 分钟启动时间。
         print(f"[MCP] 分析完成: {graph.node_count} 节点, {graph.edge_count} 边, {report.elapsed_sec:.1f}s", file=sys.stderr)
 
         return cls(graph)
@@ -452,10 +442,46 @@ class MCPServer:
             self._boundary_detector = None
         return self._boundaries
 
+    def _ensure_communities(self) -> List[Dict[str, Any]]:
+        """懒加载社区检测 — 首次 hologram_community_report 调用时触发。
+        使用 Label Propagation（O(n+m) 近线性），秒级完成。"""
+        if self.graph.communities:
+            return self.graph.communities
+        try:
+            from .core.community import detect_fast
+            communities = detect_fast(self.graph)
+            if communities:
+                self.graph.communities = communities
+                # Backfill: 每个节点归属其社区
+                for node in self.graph.nodes.values():
+                    node.community_id = None
+                for comm in communities:
+                    for nid in comm.node_ids:
+                        node = self.graph.get_node(nid)
+                        if node is not None:
+                            node.community_id = comm.id
+                print(f"  [lazy] Communities detected: {len(communities)}", file=sys.stderr)
+            return self.graph.communities
+        except Exception as e:
+            print(f"  community detection skipped: {e}", file=sys.stderr)
+            self.graph.communities = []
+            return []
+
+    # ── 参数提取辅助 ────────────────────────────────────────
+
+    @staticmethod
+    def _get_node_id(args: Dict[str, Any]) -> str:
+        """从工具参数中提取 node_id，兼容 nodeId (JS 驼峰) 和 node_id (Python 蛇形)。
+        不做 json.loads — node ID 就是裸字符串。"""
+        # 先取蛇形（Python schema），再取驼峰（前端硬编码 fallback）
+        nid = args.get("node_id") or args.get("nodeId") or ""
+        # 防御：即使调用方传了奇怪的值，也当字符串用
+        return str(nid)
+
     # ── V1 工具实现 ────────────────────────────────────────
 
     def _tool_neighbors(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        node_id = args["node_id"]
+        node_id = self._get_node_id(args)
         node = self.graph.get_node(node_id)
         if not node:
             return {"error": f"Node {node_id} not found"}
@@ -481,7 +507,7 @@ class MCPServer:
         }
 
     def _tool_impact(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        node_id = args["node_id"]
+        node_id = self._get_node_id(args)
         depth = args.get("depth", 3)
         layers = self.graph.impact_bfs(node_id, depth)
         total_affected = sum(len(l["nodes"]) for l in layers) - 1
@@ -521,7 +547,7 @@ class MCPServer:
         }
 
     def _tool_history(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        node_id = args["node_id"]
+        node_id = self._get_node_id(args)
         node = self.graph.get_node(node_id)
         if not node:
             return {"error": f"Node {node_id} not found"}
@@ -537,22 +563,23 @@ class MCPServer:
         }
 
     def _tool_community(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        node_id = args["node_id"]
+        """局部 BFS 聚类 — 不跑全图，毫秒级。
+        从节点出发 2 跳，按边权重找耦合最紧的邻居群。"""
+        node_id = self._get_node_id(args)
         node = self.graph.get_node(node_id)
         if not node:
             return {"error": f"Node {node_id} not found"}
 
-        if not hasattr(node, 'community_id') or not node.community_id:
-            return {"node_id": node_id, "community": None, "message": "Community detection not yet run or node not assigned"}
+        from .core.community import detect_local
+        community = detect_local(self.graph, node_id)
+        if community is None:
+            return {"node_id": node_id, "community": None, "message": "Node not found in graph"}
 
-        for c in self.graph.communities:
-            if c.id == node.community_id:
-                return {
-                    "node_id": node_id,
-                    "community": c.to_dict(),
-                    "sibling_nodes": [nid for nid in c.node_ids if nid != node_id],
-                }
-        return {"node_id": node_id, "community": None}
+        return {
+            "node_id": node_id,
+            "community": community.to_dict(),
+            "sibling_nodes": [nid for nid in community.node_ids if nid != node_id],
+        }
 
     def _tool_delayed(self, args: Dict[str, Any]) -> Dict[str, Any]:
         delayed = []
@@ -957,6 +984,7 @@ class MCPServer:
 
     def _tool_community_report(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """社区结构报告。"""
+        self._ensure_communities()
         min_size = args.get("min_size", 3)
         communities = []
         for c in self.graph.communities:

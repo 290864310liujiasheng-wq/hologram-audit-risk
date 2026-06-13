@@ -20,7 +20,7 @@ from src_python.core.graph import (
 )
 from src_python.core.diff import GraphDiffer, GraphDiff, ModifiedNode
 from src_python.core.merger import GraphMerger, CrossFileResolver
-from src_python.core.community import CommunityDetector, HAS_LEIDEN
+from src_python.core.community import CommunityDetector, HAS_LEIDEN, _generate_label
 from src_python.pipeline.discovery import discover_files, DEFAULT_EXCLUDE_DIRS, DEFAULT_EXCLUDE_FILES
 from src_python.pipeline.cache import IncrementalCache
 from src_python.pipeline.runner import PipelineRunner, PipelineReport
@@ -1524,7 +1524,7 @@ class TestCommunityMoreGaps:
         g.add_edge(Edge("e2", EdgeType.STRUCTURAL, "call", "n2", "n1"))
 
         detector = CommunityDetector()
-        label = detector._generate_label(g, {"n1", "n2"})
+        label = _generate_label(g, {"n1", "n2"})
         assert "/" in label or label in ("FuncA", "FuncB")
 
     def test_label_three_top_names(self):
@@ -1537,7 +1537,7 @@ class TestCommunityMoreGaps:
             g.add_edge(Edge(f"e{i}", EdgeType.STRUCTURAL, "call", "n0", f"n{i}"))
 
         detector = CommunityDetector()
-        label = detector._generate_label(g, {"n0", "n1", "n2", "n3"})
+        label = _generate_label(g, {"n0", "n1", "n2", "n3"})
         # Should contain Hub and some leaves, max 3 names separated by /
         parts = label.split("/")
         assert len(parts) <= 3
@@ -1548,7 +1548,7 @@ class TestCommunityMoreGaps:
         g.add_node(Node("n1", NodeType.SYMBOL, "Real", "a.py:1", "python", "function"))
 
         detector = CommunityDetector()
-        label = detector._generate_label(g, {"n1", "ghost"})
+        label = _generate_label(g, {"n1", "ghost"})
         assert label == "Real"  # ghost skipped
 
 

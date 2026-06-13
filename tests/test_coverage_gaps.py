@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 from io import StringIO
 
 from src_python.core.graph import Graph, Node, Edge, NodeType, EdgeType, Community
-from src_python.core.community import CommunityDetector, HAS_LEIDEN
+from src_python.core.community import CommunityDetector, HAS_LEIDEN, _generate_label
 from src_python.core.diff import GraphDiffer, GraphDiff, ModifiedNode
 from src_python.mcp_server import MCPServer
 
@@ -84,14 +84,14 @@ class TestCommunityDetectorGaps:
     def test_label_empty_node_ids(self, detector):
         """空 node_ids 应返回 'empty'。"""
         g = Graph()
-        label = detector._generate_label(g, set())
+        label = _generate_label(g, set())
         assert label == "empty"
 
     def test_label_single_node(self, detector):
         """单节点社区标签应为该节点名。"""
         g = Graph()
         g.add_node(Node("n1", NodeType.SYMBOL, "SoloFunction", "solo.py:1", "python", "function"))
-        label = detector._generate_label(g, {"n1"})
+        label = _generate_label(g, {"n1"})
         assert label == "SoloFunction"
 
     def test_build_hierarchy_returns_empty_for_small_graph(self, detector):

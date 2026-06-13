@@ -148,19 +148,25 @@ class TestMCPServer:
 
     # -- hologram_community --
 
-    def test_community_no_detection(self, server):
-        """未运行社区发现的节点返回空社区。"""
+    def test_community_local_clustering(self, server):
+        """局部 BFS 聚类：不依赖全局检测，直接返回节点的邻居社区。"""
         req = self._req("tools/call", {
             "name": "hologram_community",
             "arguments": {"node_id": "n1"},
         })
         resp = server.handle_request(req)
         content = json.loads(resp["result"]["content"][0]["text"])
-        assert content["community"] is None
+        # n1 → n2 (structural call), 局部聚类应包含 n2
+        assert content["community"] is not None
+        assert "n1" in content["community"]["node_ids"]
+        assert "n2" in content["community"]["node_ids"]
+        assert len(content["sibling_nodes"]) >= 1
+        assert "n2" in content["sibling_nodes"]
 
     def test_community_with_assignment(self, graph):
-        """节点已分配 community_id 时返回社区信息。"""
+        """局部聚类忽略预分配的 community_id，始终基于 BFS 邻居权重。"""
         from src_python.core.graph import Community
+        # 预分配一个社区 — 但 _tool_community 走局部聚类，会忽略它
         c = Community(id="community_000", level=0, label="core", node_ids={"n1"})
         graph.communities = [c]
         graph.nodes["n1"].community_id = "community_000"
@@ -172,8 +178,10 @@ class TestMCPServer:
         })
         resp = server.handle_request(req)
         content = json.loads(resp["result"]["content"][0]["text"])
+        # 局部聚类始终返回基于 BFS 的结果，标签来自节点名称
         assert content["community"] is not None
-        assert content["community"]["label"] == "core"
+        assert "n1" in content["community"]["node_ids"]
+        assert "n2" in content["community"]["node_ids"]
 
     # -- hologram_delayed --
 
@@ -279,13 +287,15 @@ class TestMCPServer:
         assert resp is None
 
     def test_missing_required_args(self, server):
-        """缺少必需参数应返回错误。"""
+        """缺少必需参数应返回工具级错误（非 JSON-RPC 异常）。"""
         req = self._req("tools/call", {
             "name": "hologram_neighbors",
             "arguments": {},  # 缺少 node_id
         })
         resp = server.handle_request(req)
-        assert "error" in resp
+        content = json.loads(resp["result"]["content"][0]["text"])
+        assert "error" in content
+        assert "not found" in content["error"]
 
     # -- hologram_run_check --
 
