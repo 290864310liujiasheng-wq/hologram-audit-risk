@@ -77,3 +77,5 @@ README.md
 AGENT_MEMORY_SYSTEM.txt
 src-tauri/python/
 scripts/python-3.14.4-embed-amd64.zip
+_check_debug.log
+test-results/
