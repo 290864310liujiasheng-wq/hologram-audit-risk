@@ -584,7 +584,34 @@ print(json.dumps(summary, indent=2, ensure_ascii=False))
 #[tauri::command]
 async fn hologram_run_check(path: String) -> Result<String, String> {
     let graph_path = format!("{}/hologram_graph.json", path);
-    run_hologram(&["check", &path, "--json", "-g", &graph_path])
+    let root = project_root();
+    let output = silent_command(&python())
+        .current_dir(&root)
+        .args(["-m", "src_python"])
+        .args(["check", &path, "--json", "-g", &graph_path])
+        .output()
+        .map_err(|e| format!("Failed to spawn Python: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // cmd_check returns exit code 1 when violations found — that's NOT a system error,
+    // the JSON output in stdout still encodes the full pass/fail/violations result.
+    if !stdout.trim().is_empty() {
+        return Ok(stdout);
+    }
+
+    // Truly empty output: stderr might have the error detail
+    if !output.status.success() {
+        return Err(if stderr.is_empty() {
+            format!("Check failed with exit code {}", output.status)
+        } else {
+            stderr
+        });
+    }
+
+    // Exit code 0 but no output: return a synthetic pass
+    Ok("{\"passed\": true, \"message\": \"No output\"}".into())
 }
 
 // ═══════════════════════════════════════════════════════

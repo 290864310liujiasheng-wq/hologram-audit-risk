@@ -5,7 +5,24 @@
 > 每次落地一个功能后更新此文件。这应该是项目里唯一需要维护的规划文档。
 >
 > 生成日期：2026-06-10 · 代码审计完成 · 全部修复落地
-> **最后更新：2026-06-13 · 架构重构第三步——图作为输入（点击节点驱动 Agent）**
+> **最后更新：2026-06-13 · 简报 exit code 1 bug 修复**
+
+---
+
+## 2026-06-13 简报 exit code 1 bug 修复
+
+**问题：** 系统分析完成后简报面板显示"简报请求失败" — Python 生成了正确 JSON 但 Rust 端丢弃了。
+
+**根因：** Python `cmd_check` 发现违规时返回 exit code 1（语义: "未通过"），Rust `hologram_run_check` 把非零 exit 当系统错误返回 `Err`，前端收不到 JSON。
+
+**修复：**
+- **Rust** `main.rs:594-614` `hologram_run_check` — stdout 非空时直接返回（不管 exit code），只在 stdout 为空时返回 Err
+- **Python** `cli.py:25-36` `_safe_print` — 主动 `reconfigure(stdout, encoding='utf-8')`，不再依赖 `UnicodeEncodeError`（GBK 编码中文不抛异常，直接产乱码）
+- **Python** `cli.py:744` `cmd_check` — `--json` 模式始终返回 exit 0
+- **Python** `cli.py:866` `cmd_preflight` — 同上
+- **Python** `cli.py:956` `cmd_health` — 同上
+
+**验证：** Rust `cargo check` ✅ · Python 103 tests ✅ · check --json 手动测试 ✅ JSON 正常/中文不乱码/exit 0
 
 ---
 

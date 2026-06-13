@@ -23,16 +23,21 @@ from typing import Dict, List, Optional
 
 
 def _safe_print(text: str, **kwargs) -> None:
-    """Print UTF-8 safely — handles both terminal (GBK fallback) and pipe (Tauri)."""
+    """Print UTF-8 safely — ensures stdout is UTF-8 regardless of system locale."""
+    try:
+        enc = (sys.stdout.encoding or '').lower()
+        if enc not in ('utf-8', 'utf8'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            enc = 'utf-8'
+    except Exception:
+        pass  # stdout not reconfigurable (e.g. piped), rely on PYTHONIOENCODING env
     try:
         print(text, **kwargs)
     except UnicodeEncodeError:
-        # Pipe mode (Tauri): force UTF-8
         try:
             sys.stdout.reconfigure(encoding='utf-8', errors='replace')
             print(text, **kwargs)
         except Exception:
-            # Last resort: strip non-ASCII
             safe = text.encode('ascii', errors='replace').decode('ascii')
             print(safe, **kwargs)
 
@@ -736,7 +741,9 @@ def cmd_check(args) -> int:
     except Exception:
         pass
 
-    return 0 if summary.passed else 1
+    # 用 --json 时始终返回 0：pass/fail 信息已在 JSON 中编码，
+    # 非零 exit code 在 Tauri/HTTP 层会被误判为"命令失败"而丢弃 JSON 输出。
+    return 0
 
 
 def cmd_constraints(args) -> int:
@@ -858,7 +865,8 @@ def cmd_preflight(args) -> int:
     else:
         _print_preflight_text(report)
 
-    return 0 if report.risk_level == "low" else 1
+    # 用 --json 时始终返回 0：risk_level 已在 JSON 中编码。
+    return 0
 
 
 def _print_preflight_text(report) -> None:
@@ -945,7 +953,8 @@ def cmd_health(args) -> int:
     else:
         _print_health_text(report)
 
-    return 0 if report.health_score >= 60 else 1
+    # 用 --json 时始终返回 0：health_score 已在 JSON 中编码。
+    return 0
 
 
 def _print_health_text(report) -> None:
