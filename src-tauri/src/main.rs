@@ -132,8 +132,10 @@ fn silent_command(program: &str) -> Command {
     {
         cmd.creation_flags(NO_WINDOW);
     }
+    let root = project_root();
     cmd.env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1");
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONPATH", root.to_string_lossy().to_string());
     cmd
 }
 
@@ -163,7 +165,7 @@ fn py_json(s: &str) -> String {
 // ═══════════════════════════════════════════════════════
 
 /// Find the Python executable with required dependencies.
-/// Checks: 1) HOLOGRAM_PYTHON env var  2) sibling venv  3) python3 / python on PATH
+/// Checks: 1) HOLOGRAM_PYTHON env var  2) bundled python next to exe  3) sibling venv  4) system PATH
 fn python() -> String {
     // 1) Explicit override via environment variable
     if let Ok(p) = std::env::var("HOLOGRAM_PYTHON") {
@@ -171,7 +173,16 @@ fn python() -> String {
             return p;
         }
     }
-    // 2) Project-local venv (check both Windows and Unix layout)
+    // 2) Bundled Python next to exe (production install)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join("python").join("python.exe");
+            if bundled.exists() {
+                return bundled.to_string_lossy().to_string();
+            }
+        }
+    }
+    // 3) Project-local venv (check both Windows and Unix layout)
     let venv_dir = project_root().join(".venv");
     for sub in &["Scripts", "bin"] {
         let py = venv_dir.join(sub).join("python.exe");
@@ -195,6 +206,17 @@ fn python() -> String {
 }
 
 pub(crate) fn project_root() -> PathBuf {
+    // Production (installed app): use exe directory — python/ and src_python/ are bundled next to it
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let dir_str = dir.to_string_lossy();
+            // "target" in path = cargo build dir → dev mode; otherwise = installed app
+            if !dir_str.contains("target") {
+                return dir.to_path_buf();
+            }
+        }
+    }
+    // Dev mode: CARGO_MANIFEST_DIR is src-tauri/, project root is one level up
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap_or(PathBuf::from(".").as_path())
@@ -245,10 +267,10 @@ fn active_graph() -> String {
     }
 }
 
-/// Run a Python hologram CLI command with timeout (120s) and capture stdout+stderr.
+/// Run a Python hologram CLI command with timeout (600s) and capture stdout+stderr.
 fn run_hologram(args: &[&str]) -> Result<String, String> {
     let root = project_root();
-    let timeout = std::time::Duration::from_secs(120);
+    let timeout = std::time::Duration::from_secs(600);
     let mut child = silent_command(&python())
         .current_dir(&root)
         .args(["-m", "src_python"])
@@ -278,7 +300,7 @@ fn run_hologram(args: &[&str]) -> Result<String, String> {
                 if start.elapsed() >= timeout {
                     child.kill().ok();
                     let _ = child.wait();
-                    return Err("Python 命令超时 (120s)，已强制终止".into());
+                    return Err("Python 命令超时 (600s)，已强制终止".into());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -287,10 +309,10 @@ fn run_hologram(args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Run inline Python code with timeout (120s) and return output.
+/// Run inline Python code with timeout (300s) and return output.
 fn run_python_code(code: &str) -> Result<String, String> {
     let root = project_root();
-    let timeout = std::time::Duration::from_secs(120);
+    let timeout = std::time::Duration::from_secs(300);
     let mut child = silent_command(&python())
         .current_dir(&root)
         .args(["-c", code])
@@ -314,7 +336,7 @@ fn run_python_code(code: &str) -> Result<String, String> {
                 if start.elapsed() >= timeout {
                     child.kill().ok();
                     let _ = child.wait();
-                    return Err("Python 代码执行超时 (120s)，已强制终止".into());
+                    return Err("Python 代码执行超时 (300s)，已强制终止".into());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -1327,7 +1349,7 @@ async fn exec_command(
         return Ok(format!("[后台任务已启动, ID: {}]\n使用 bash_output({}) 查看输出, bash_kill({}) 终止任务", id, id, id));
     }
 
-    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(120_000)); // default 2 min
+    let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(300_000)); // default 5 min
 
     let mut child = if cfg!(target_os = "windows") {
         let mut c = silent_command("cmd");
@@ -1382,7 +1404,7 @@ async fn exec_command(
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     child.kill().ok();
-                    return Err(format!("命令超时 ({}ms)，已强制终止", timeout_ms.unwrap_or(120_000)));
+                    return Err(format!("命令超时 ({}ms)，已强制终止", timeout_ms.unwrap_or(300_000)));
                 }
                 thread::sleep(Duration::from_millis(50));
             }
@@ -2067,23 +2089,42 @@ async fn analyze_and_load(path: String, force: Option<bool>, app: tauri::AppHand
     let root = project_root();
     let python = python();
 
-    let output = silent_command(&python)
+    let mut child = silent_command(&python)
         .current_dir(&root)
         .args(["-m", "src_python", &path, "--format", "json"])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("无法启动 Python:\n  Python: {python}\n  错误: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if !output.status.success() {
-        return Err(format!(
-            "分析失败 (exit code {}):\n--- stderr ---\n{}\n--- stdout ---\n{}",
-            output.status,
-            stderr,
-            if stdout.len() > 500 { format!("{}...", &stdout[..500]) } else { stdout }
-        ));
-    }
+    let analyze_timeout = std::time::Duration::from_secs(600);
+    let start = std::time::Instant::now();
+    let (stdout, stderr) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = read_pipe(child.stdout.take());
+                let stderr = read_pipe(child.stderr.take());
+                if !status.success() {
+                    return Err(format!(
+                        "分析失败 (exit code {}):\n--- stderr ---\n{}\n--- stdout ---\n{}",
+                        status,
+                        stderr,
+                        if stdout.len() > 500 { format!("{}...", &stdout[..500]) } else { stdout }
+                    ));
+                }
+                break (stdout, stderr);
+            }
+            Ok(None) => {
+                if start.elapsed() >= analyze_timeout {
+                    child.kill().ok();
+                    let _ = child.wait();
+                    return Err("项目分析超时 (600s)，项目过大或 Python 引擎卡死。已强制终止。".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("分析进程异常: {e}")),
+        }
+    };
 
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.set_title("全息观测站");

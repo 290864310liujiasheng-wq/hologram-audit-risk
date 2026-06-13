@@ -125,8 +125,21 @@ let memoryManager: MemoryManager | null = null;
 
 // ── Mode switch ──
 
+const MODE_BUTTONS = () => document.querySelectorAll<HTMLButtonElement>('#mode-switch .mode-btn');
+
+function setModeButtonsEnabled(enabled: boolean): void {
+  MODE_BUTTONS().forEach(b => {
+    const m = (b as HTMLElement).dataset['mode'];
+    if (m === 'files') return; // file view always available
+    b.disabled = !enabled;
+    b.style.opacity = enabled ? '' : '0.35';
+    b.style.cursor = enabled ? '' : 'not-allowed';
+    b.title = enabled ? '' : '项目节点数超过渲染上限，星图已禁用';
+  });
+}
+
 function setupModeSwitch(): void {
-  const buttons = document.querySelectorAll<HTMLButtonElement>('#mode-switch .mode-btn');
+  const buttons = MODE_BUTTONS();
 
   // Restore saved view mode on startup
   const savedMode = loadSettings().display?.defaultViewMode || 'standard';
@@ -141,6 +154,7 @@ function setupModeSwitch(): void {
 
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
+      if (btn.disabled) return;
       const mode = btn.dataset['mode'] as VisualMode;
       if (mode === currentMode) return;
       currentMode = mode;
@@ -226,7 +240,9 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
       currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
     } catch { currentFileGraphData = null; }
 
-    if (nodeCount > 50000) {
+    // Layout3D is O(n²) — 1500 nodes ≈ 3-8s, 2000 → 15s+ blocker. Hard cap at 1500.
+    const LAYOUT_CAP = 5000;
+    if (nodeCount > LAYOUT_CAP) {
       if (currentFileGraphData) {
         currentMode = 'files';
         starGraph.destroy();
@@ -234,14 +250,16 @@ async function openProject(path?: string, forceReanalyze = false): Promise<void>
         chatPanel.setStarGraph(starGraph);
         agentViz?.setGraph(starGraph);
         starGraph.render(currentFileGraphData);
-        statusText.textContent = `⚠️ ${nodeCount} 节点 — 已切换文件视图`;
+        statusText.textContent = `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
+        setModeButtonsEnabled(false);
       } else {
-        statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限，使用 Agent 查询`;
+        statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限且文件图缺失，使用 Agent 查询`;
       }
-      showGraphView(folder);  // Always set currentPath so file tree / timeline use correct project
+      showGraphView(folder);
     } else {
       starGraph.render(graph);
       showGraphView(folder);
+      setModeButtonsEnabled(true);
     }
     setLoading(false); // 图已就绪，不等 Agent
     // Agent 初始化（异步，不阻塞图的显示）
@@ -1364,7 +1382,30 @@ async function init(): Promise<void> {
       await invoke('set_active_project', { path: root }).catch(() => {});
 
       currentGraphData = graph;
-      starGraph.render(graph);
+      // Auto-load file-level graph for large projects
+      try {
+        const filesPath = root.replace(/\\/g, '/').replace(/\/$/, '') + '/hologram_graph_files.json';
+        currentFileGraphData = JSON.parse(await invoke<string>('read_file_content', { filePath: filesPath }));
+      } catch { currentFileGraphData = null; }
+
+      const LAYOUT_CAP = 5000;
+      if (nodeCount > LAYOUT_CAP) {
+        if (currentFileGraphData) {
+          currentMode = 'files';
+          starGraph.destroy();
+          starGraph = new StarGraph(graphEl, 'files');
+          chatPanel.setStarGraph(starGraph);
+          agentViz?.setGraph(starGraph);
+          starGraph.render(currentFileGraphData);
+          statusText.textContent = `⚠️ ${nodeCount} 节点 — 星图已禁用，仅文件视图可用`;
+          setModeButtonsEnabled(false);
+        } else {
+          statusText.textContent = `⚠️ ${nodeCount} 节点 — 超出渲染上限且文件图缺失，使用 Agent 查询`;
+        }
+      } else {
+        starGraph.render(graph);
+        setModeButtonsEnabled(true);
+      }
       showGraphView(root);
       setLoading(false);
       // Agent 初始化（异步，不阻塞图的显示）

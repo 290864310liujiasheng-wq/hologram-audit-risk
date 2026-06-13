@@ -53,6 +53,7 @@ impl McpManager {
                 .stderr(Stdio::inherit())
                 .env("PYTHONIOENCODING", "utf-8")
                 .env("PYTHONUTF8", "1")
+                .env("PYTHONPATH", root.to_string_lossy().to_string())
                 .spawn()
                 .map_err(|e| format!("无法启动 MCP Server: {e}"))?
         };
@@ -66,6 +67,7 @@ impl McpManager {
                 .stderr(Stdio::inherit())
                 .env("PYTHONIOENCODING", "utf-8")
                 .env("PYTHONUTF8", "1")
+                .env("PYTHONPATH", root.to_string_lossy().to_string())
                 .spawn()
                 .map_err(|e| format!("无法启动 MCP Server: {e}"))?
         };
@@ -157,7 +159,7 @@ impl McpManager {
 
     /// Read the JSON "ready" notification from stdout after spawning.
     /// Blocks until the server finishes analysis and signals readiness.
-    /// Timeout: 120 seconds (large projects may take a long time to analyze).
+    /// Timeout: 600 seconds (large projects need time for layout computation).
     fn read_ready(&mut self) -> Result<(), String> {
         let child = self.child.as_mut().ok_or("子进程不存在")?;
         let stdout = child.stdout.take().ok_or("stdout 不可用")?;
@@ -177,8 +179,8 @@ impl McpManager {
             }
         });
 
-        // Wait with timeout (120 seconds for large projects)
-        match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+        // Wait with timeout (600 seconds for large projects with layout computation)
+        match rx.recv_timeout(std::time::Duration::from_secs(600)) {
             Ok(Ok((stdout_back, line))) => {
                 // Put stdout back
                 if let Some(ref mut child) = self.child {
@@ -201,7 +203,7 @@ impl McpManager {
             Ok(Err(e)) => Err(e),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 self.kill_inner();
-                Err("MCP Server 启动超时（120秒），项目分析可能耗时过长".into())
+                Err("MCP Server 启动超时（600秒），项目分析 + 布局计算可能耗时过长".into())
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 Err("MCP Server 读取线程异常断开".into())
