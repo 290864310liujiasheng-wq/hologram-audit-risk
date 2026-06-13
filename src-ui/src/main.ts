@@ -1173,8 +1173,8 @@ async function init(): Promise<void> {
   btnColorMode.addEventListener('click', () => {
     colorModeIdx = (colorModeIdx + 1) % 3;
     const label = starGraph.recolorByMode(colorModeOrder[colorModeIdx]);
-    btnColorMode.innerHTML = `${iconSvg('chart')} ${label}`;
-    btnColorMode.title = `着色模式: ${label}`;
+    btnColorMode.innerHTML = iconSvg('chart');
+    btnColorMode.title = `着色: ${label}`;
   });
 
   // Scale mode toggle
@@ -1182,8 +1182,8 @@ async function init(): Promise<void> {
   btnScaleMode.addEventListener('click', () => {
     scaleByCoupling = !scaleByCoupling;
     const label = starGraph.rescaleByMode(scaleByCoupling ? 'coupling' : 'degree');
-    btnScaleMode.innerHTML = `${iconSvg('blast')} ${label}`;
-    btnScaleMode.title = `节点大小: ${label}`;
+    btnScaleMode.innerHTML = iconSvg('blast');
+    btnScaleMode.title = `缩放: ${label}`;
   });
 
   // Fold toggle
