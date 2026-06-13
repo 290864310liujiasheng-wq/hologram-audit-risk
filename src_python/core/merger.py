@@ -196,6 +196,12 @@ class CrossFileResolver:
         changed_set = set(changed_node_ids)
         added = 0
 
+        # 构建已有边索引，防止重复添加（与 resolve() 保持一致）
+        existing_edges: Set[Tuple[str, str, str, str]] = set()
+        for edge in graph.edges.values():
+            key = (edge.source, edge.target, type_val(edge.type), edge.direction)
+            existing_edges.add(key)
+
         for node_id in changed_set:
             node = graph.get_node(node_id)
             if not node or node.type != NodeType.SYMBOL:

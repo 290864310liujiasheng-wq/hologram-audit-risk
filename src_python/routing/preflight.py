@@ -10,11 +10,14 @@ health:    健康趋势 — timeline 聚合 + coupling 快照
 from __future__ import annotations
 
 import datetime
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ..core.graph import Graph
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -155,6 +158,7 @@ def run_preflight(
             warnings.append(f"检测到 {l4_total} 个 L4 封装穿透")
 
     except Exception as e:
+        logger.warning("耦合分析不可用: %s", e, exc_info=True)
         warnings.append(f"耦合分析不可用: {e}")
 
     # ── 3. Community: 检查跨社区影响 ──
@@ -192,6 +196,7 @@ def run_preflight(
                     + ", ".join(c["community_label"] for c in report.cross_community_details)
                 )
     except Exception as e:
+        logger.warning("社区分析不可用: %s", e, exc_info=True)
         warnings.append(f"社区分析不可用: {e}")
 
     # ── 4. Cycles: 检查是否触碰到已有数据流环 ──
@@ -236,6 +241,7 @@ def run_preflight(
             warnings.append(f"项目中存在 {len(all_cycles)} 个数据流环（>10）")
 
     except Exception as e:
+        logger.warning("数据流环检测不可用: %s", e, exc_info=True)
         warnings.append(f"数据流环检测不可用: {e}")
 
     # ── 5. 汇总风险等级 ──
@@ -484,3 +490,124 @@ def run_health(
     report.warnings = warnings
 
     return report
+
+
+# ============================================================
+# run_full_check — V3 全量约束校验（CLI 与 MCP 共用核心）
+# ============================================================
+
+def run_full_check(
+    before_graph: Graph,
+    after_graph: Graph,
+    changed_files: List[str],
+    file_changes: Optional[Dict[str, Any]] = None,
+    project_root: str = "",
+) -> Dict[str, Any]:
+    """
+    运行完整 V3 约束校验管线：耦合 → 数据流环 → 线程 → 信号 → 约束 → 摘要。
+
+    供 CLI cmd_check 和 MCP hologram_run_check 共用，保证行为一致。
+
+    Args:
+        before_graph: 变更前的图
+        after_graph: 变更后的图
+        changed_files: 变更文件列表
+        file_changes: {file_path: FileChange} 字典（可选）
+        project_root: 项目根目录
+
+    Returns:
+        dict: 包含 passed, violations, signals, summary 等字段
+    """
+    import sys
+
+    # ── Step 1: 运行 V2 分析 ──
+    coupling_result = None
+    cycle_result = None
+    thread_result = None
+
+    try:
+        from ..analysis.coupling import coupling_depth_report
+        coupling_result = coupling_depth_report(after_graph)
+        print(f"  Coupling analysis: {coupling_result.get('total_l4', 0)} L4 violations", file=sys.stderr)
+    except Exception as e:
+        logger.warning("耦合分析不可用: %s", e, exc_info=True)
+        print(f"  Coupling analysis skipped: {e}", file=sys.stderr)
+
+    try:
+        from ..analysis.dataflow import cycle_report as _cycle_report
+        cycle_result = _cycle_report(after_graph, mode="all")
+        print(f"  Cycle detection: {cycle_result.get('total_cycles', 0)} cycles", file=sys.stderr)
+    except Exception as e:
+        logger.warning("数据流环检测不可用: %s", e, exc_info=True)
+        print(f"  Cycle detection skipped: {e}", file=sys.stderr)
+
+    try:
+        from ..analysis.threading import thread_conflict_report
+        thread_sources = {}
+        if file_changes:
+            for fp, fc in file_changes.items():
+                source = getattr(fc, 'new_source', None) or (fc.get('new_source') if isinstance(fc, dict) else None)
+                if source:
+                    thread_sources[fp] = source
+        if thread_sources:
+            thread_result = thread_conflict_report(thread_sources, language="python")
+            print(f"  Thread analysis: {thread_result.get('total_threads_found', 0)} threads", file=sys.stderr)
+    except Exception as e:
+        logger.warning("线程分析不可用: %s", e, exc_info=True)
+        print(f"  Thread analysis skipped: {e}", file=sys.stderr)
+
+    # ── Step 2: 生成 L5-L1 信号 ──
+    from .signals import SignalGenerator
+    sig_gen = SignalGenerator()
+    signals = sig_gen.generate(
+        before_graph=before_graph,
+        after_graph=after_graph,
+        file_changes=file_changes or {},
+        coupling_result=coupling_result,
+        cycle_result=cycle_result,
+        thread_result=thread_result,
+    )
+    print(f"  Signals generated: {len(signals)} (L5={sum(1 for s in signals if s.level==5)} "
+          f"L4={sum(1 for s in signals if s.level==4)} "
+          f"L3={sum(1 for s in signals if s.level==3)} "
+          f"L2={sum(1 for s in signals if s.level==2)} "
+          f"L1={sum(1 for s in signals if s.level==1)})", file=sys.stderr)
+
+    # ── Step 3: 约束校验 ──
+    from .constraints import ConstraintChecker
+    checker = ConstraintChecker(project_root) if project_root else ConstraintChecker()
+    constraint_result = checker.check(signals)
+
+    # ── Step 4: 生成变更摘要 ──
+    from .summary import ChangeSummaryGenerator
+    summary_gen = ChangeSummaryGenerator()
+    summary = summary_gen.generate(
+        before_graph=before_graph,
+        after_graph=after_graph,
+        changed_files=changed_files,
+        constraint_result=constraint_result,
+        signals=signals,
+        coupling_result=coupling_result,
+        cycle_result=cycle_result,
+        thread_result=thread_result,
+    )
+
+    return {
+        "passed": summary.passed,
+        "one_line": summary.one_line(),
+        "violations": [v.to_dict() for v in constraint_result.violations],
+        "violation_count": constraint_result.violation_count,
+        "l5_count": constraint_result.l5_count,
+        "l4_count": constraint_result.l4_count,
+        "l3_count": constraint_result.l3_count,
+        "l2_count": constraint_result.l2_count,
+        "passed_checks": constraint_result.passed_checks,
+        "auto_released": constraint_result.auto_released,
+        "signals_count": len(signals),
+        "signals": [s.to_dict() for s in signals],
+        "coupling": coupling_result,
+        "cycles": cycle_result,
+        "summary": summary.to_dict(),
+        "changed_files": changed_files,
+        "total_changed_files": len(changed_files),
+    }

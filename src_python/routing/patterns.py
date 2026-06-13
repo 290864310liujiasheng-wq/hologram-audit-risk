@@ -187,10 +187,11 @@ class PatternMatcher:
         self._compiled_llm_prompt = [re.compile(p) for p in LLM_PROMPT_VARIABLE_PATTERNS]
         self._compiled_sort_filter = [re.compile(p) for p in SORT_FILTER_FUNCTION_PATTERNS]
         self._compiled_rhythm = [re.compile(p) for p in RHYTHM_VARIABLE_PATTERNS]
-        self._compiled_denylist = [re.compile(p, re.IGNORECASE) for p in [
-            "password", "secret", "token", "api_key",
-            "private_key", "credential", "authorization",
-        ]]
+        from .constraints import DEFAULT_CONSTRAINTS
+        self._compiled_denylist = [
+            re.compile(re.escape(kw), re.IGNORECASE)
+            for kw in DEFAULT_CONSTRAINTS["denylist"]["keywords"]
+        ]
 
     # ── 文件名匹配 ──
 

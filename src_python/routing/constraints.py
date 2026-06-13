@@ -200,7 +200,13 @@ class ConstraintChecker:
         try:
             import yaml
         except ImportError:
-            # yaml 未安装时回退到默认配置（非致命）
+            # yaml 未安装时回退到默认配置
+            import sys
+            print(
+                "Warning: PyYAML not installed — using default constraints. "
+                f"Install PyYAML to use {config_path}.",
+                file=sys.stderr,
+            )
             return ConstraintConfig.defaults()
 
         try:

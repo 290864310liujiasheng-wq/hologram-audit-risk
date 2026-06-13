@@ -485,7 +485,7 @@ class _MediaVisitor(ast.NodeVisitor):
             # 返回最近的一个
             for n in reversed(candidates):
                 try:
-                    loc_lineno = int(n.location.split(":")[-1])
+                    loc_lineno = int(n.location.rsplit(":", 1)[-1])
                     if loc_lineno <= getattr(node, "lineno", float("inf")):
                         return n
                 except (ValueError, IndexError):
@@ -646,7 +646,7 @@ class _TemporalVisitor(ast.NodeVisitor):
         if candidates:
             for n in reversed(candidates):
                 try:
-                    loc_lineno = int(n.location.split(":")[-1])
+                    loc_lineno = int(n.location.rsplit(":", 1)[-1])
                     if loc_lineno <= getattr(node, "lineno", float("inf")):
                         return n
                 except (ValueError, IndexError):

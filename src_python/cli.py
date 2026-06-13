@@ -22,15 +22,20 @@ import sys
 from typing import Dict, List, Optional
 
 
+_stdout_configured = False
+
+
 def _safe_print(text: str, **kwargs) -> None:
     """Print UTF-8 safely — ensures stdout is UTF-8 regardless of system locale."""
-    try:
-        enc = (sys.stdout.encoding or '').lower()
-        if enc not in ('utf-8', 'utf8'):
-            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-            enc = 'utf-8'
-    except Exception:
-        pass  # stdout not reconfigurable (e.g. piped), rely on PYTHONIOENCODING env
+    global _stdout_configured
+    if not _stdout_configured:
+        try:
+            enc = (sys.stdout.encoding or '').lower()
+            if enc not in ('utf-8', 'utf8'):
+                sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass  # stdout not reconfigurable (e.g. piped), rely on PYTHONIOENCODING env
+        _stdout_configured = True
     try:
         print(text, **kwargs)
     except UnicodeEncodeError:
@@ -645,81 +650,45 @@ def cmd_check(args) -> int:
                 new_source=source,
             )
 
-    # Step 5: 运行 V2 分析
-    coupling_result = None
-    cycle_result = None
-    thread_result = None
-
-    try:
-        from .analysis.coupling import coupling_depth_report
-        coupling_result = coupling_depth_report(after_graph)
-        print(f"  Coupling analysis: {coupling_result.get('total_l4', 0)} L4 violations", file=sys.stderr)
-    except Exception as e:
-        print(f"  Coupling analysis skipped: {e}", file=sys.stderr)
-
-    try:
-        from .analysis.dataflow import cycle_report as _cycle_report
-        cycle_result = _cycle_report(after_graph, mode="all")
-        print(f"  Cycle detection: {cycle_result.get('total_cycles', 0)} cycles", file=sys.stderr)
-    except Exception as e:
-        print(f"  Cycle detection skipped: {e}", file=sys.stderr)
-
-    try:
-        from .analysis.threading import thread_conflict_report
-        thread_sources = {}
-        for fp, fc in file_changes.items():
-            if fc.new_source:
-                thread_sources[fp] = fc.new_source
-        if thread_sources:
-            thread_result = thread_conflict_report(thread_sources, language="python")
-            print(f"  Thread analysis: {thread_result.get('total_threads_found', 0)} threads", file=sys.stderr)
-    except Exception as e:
-        print(f"  Thread analysis skipped: {e}", file=sys.stderr)
-
-    # Step 6: 生成 L5-L1 信号
-    from .routing.signals import SignalGenerator
-    sig_gen = SignalGenerator()
-    signals = sig_gen.generate(
-        before_graph=before_graph,
-        after_graph=after_graph,
-        file_changes=file_changes,
-        coupling_result=coupling_result,
-        cycle_result=cycle_result,
-        thread_result=thread_result,
-    )
-    print(f"  Signals generated: {len(signals)} (L5={sum(1 for s in signals if s.level==5)} "
-          f"L4={sum(1 for s in signals if s.level==4)} "
-          f"L3={sum(1 for s in signals if s.level==3)} "
-          f"L2={sum(1 for s in signals if s.level==2)} "
-          f"L1={sum(1 for s in signals if s.level==1)})", file=sys.stderr)
-
-    # Step 7: 约束校验
-    from .routing.constraints import ConstraintChecker
-    checker = ConstraintChecker(root)
-    result = checker.check(signals)
-
-    # Step 8: 生成变更摘要
-    from .routing.summary import ChangeSummaryGenerator
-    summary_gen = ChangeSummaryGenerator()
-    summary = summary_gen.generate(
+    # Step 5-8: 运行 V3 全量约束校验（CLI/MCP 共用核心）
+    from .routing.preflight import run_full_check
+    check_result = run_full_check(
         before_graph=before_graph,
         after_graph=after_graph,
         changed_files=changed_files,
-        constraint_result=result,
-        signals=signals,
-        coupling_result=coupling_result,
-        cycle_result=cycle_result,
-        thread_result=thread_result,
+        file_changes=file_changes,
+        project_root=root,
     )
 
     # Step 9: 输出
-    json_output = json.dumps(summary.to_dict(), indent=2, ensure_ascii=False)
+    import datetime as _dt
+    json_output = json.dumps(check_result, indent=2, ensure_ascii=False)
     if args.json:
         _safe_print(json_output)
-    elif summary.passed:
-        _safe_print(summary.one_line())
+    elif check_result["passed"]:
+        _safe_print(check_result["one_line"])
     else:
-        _safe_print(summary_gen.render_panel(summary))
+        # 从 check_result 重建 ChangeSummary 以使用 render_panel
+        from .routing.summary import ChangeSummary, ChangeSummaryGenerator
+        s = check_result["summary"]
+        summary_obj = ChangeSummary(
+            passed=check_result["passed"],
+            timestamp=s.get("timestamp", _dt.datetime.now().isoformat()),
+            commit_hash=s.get("commit_hash", ""),
+            changed_files=s.get("changed_files", []),
+            total_changed_files=s.get("total_changed_files", 0),
+            l5_violations=s.get("l5_violations", []),
+            l4_violations=s.get("l4_violations", []),
+            l3_violations=s.get("l3_violations", []),
+            l2_violations=s.get("l2_violations", []),
+            passed_checks=s.get("passed_checks", []),
+            blast_radius=s.get("blast_radius", 0),
+            cross_community_edges=s.get("cross_community_edges", 0),
+            new_cycles=s.get("new_cycles", 0),
+            new_thread_conflicts=s.get("new_thread_conflicts", 0),
+            api_signature_changes=s.get("api_signature_changes", 0),
+        )
+        _safe_print(ChangeSummaryGenerator.render_panel(summary_obj))
 
     # Step 9.5: 缓存 check 结果（加速二次调用）
     try:
@@ -734,13 +703,13 @@ def cmd_check(args) -> int:
         from .timeline import TimelineStore
         with TimelineStore(root) as store:
             store.record(
-                event_type="commit_violation" if not summary.passed else "commit_clean",
+                event_type="commit_violation" if not check_result["passed"] else "commit_clean",
                 file=", ".join(changed_files[:3]),
-                changed_by=f"hologram check {'⚠' if not summary.passed else '✅'}",
-                summary=summary.one_line(),
+                changed_by=f"hologram check {'⚠' if not check_result['passed'] else '✅'}",
+                summary=check_result["one_line"],
                 properties={
-                    "passed": summary.passed,
-                    "violations": summary.to_dict(),
+                    "passed": check_result["passed"],
+                    "violations": check_result,
                     "signals_count": len(signals),
                 },
             )

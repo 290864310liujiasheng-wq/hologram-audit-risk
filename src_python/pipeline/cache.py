@@ -63,6 +63,14 @@ class IncrementalCache:
             entry = self._cache.get(file_path)
         return entry.get("graph") if entry else None
 
+    def get_entry(self, file_path: str) -> Optional[tuple[str, Graph]]:
+        """原子获取缓存条目 — 消除 get_hash/get_graph 之间的 TOCTOU 窗口。"""
+        with self._lock:
+            entry = self._cache.get(file_path)
+        if entry:
+            return (entry["hash"], entry.get("graph"))
+        return None
+
     def set(self, file_path: str, file_hash: str, graph: Graph) -> None:
         with self._lock:
             # 如果已经在缓存中，直接更新，不需要逐出

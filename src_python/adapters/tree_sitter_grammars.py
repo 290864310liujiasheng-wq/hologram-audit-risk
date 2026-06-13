@@ -159,6 +159,7 @@ class GrammarManager:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._loaded: Dict[str, "tree_sitter.Language"] = {}
+        self._loaded_dlls: Dict[str, "ctypes.CDLL"] = {}
         self._ext_to_lang: Dict[str, str] = {}
 
         # 构建扩展名 → 语言名索引
@@ -305,8 +306,18 @@ class GrammarManager:
 
         # 使用 ctypes 加载 DLL 并提取 TSLanguage 指针
         dll = ctypes.CDLL(str(dll_path))
+        self._loaded_dlls[lang_name] = dll
         lang_func = getattr(dll, cfg["symbol"])
         lang_func.restype = ctypes.c_void_p
         lang_ptr = lang_func()
 
         return _ts().Language(lang_ptr)
+
+    def unload(self, lang_name: Optional[str] = None) -> None:
+        """卸载 DLL 句柄。不传参数则卸载全部。"""
+        if lang_name:
+            self._loaded_dlls.pop(lang_name, None)
+            self._loaded.pop(lang_name, None)
+        else:
+            self._loaded_dlls.clear()
+            self._loaded.clear()

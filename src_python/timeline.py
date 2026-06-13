@@ -378,7 +378,14 @@ class TimelineStore:
         return changes
 
     def close(self) -> None:
-        self._conn.close()
+        if hasattr(self, '_conn'):
+            self._conn.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass  # best-effort — GC may fire after interpreter shutdown
 
     def __enter__(self):
         return self

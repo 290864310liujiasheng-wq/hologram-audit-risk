@@ -557,9 +557,9 @@ class MCPServer:
 
         try:
             try:
-                from src_python.timeline import TimelineStore
+                from .timeline import TimelineStore
             except ImportError:
-                from timeline import TimelineStore
+                from timeline import TimelineStore  # fallback for non-package execution
             store = TimelineStore(source_root)
             # Query the most recent file_changed or commit event
             rows = store.query(limit=1, event_type="file_changed")
@@ -974,18 +974,85 @@ class MCPServer:
             return {"error": str(e)}
 
     def _tool_run_check(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """V3 约束校验。"""
+        """V3 全量约束校验 — 与 CLI cmd_check 行为对齐。
+
+        重新分析项目 → 与旧图 diff → 运行完整 V3 管线
+        （耦合 + 数据流环 + 线程 + 信号生成 + 约束校验 + 摘要）。
+        """
         path = args.get("path", "")
         if not path:
             return {"error": "path is required"}
         try:
-            from .routing.preflight import run_preflight
-            all_files = sorted(set(
-                n.location.rsplit(":", 1)[0] if ":" in (n.location or "") else (n.location or "")
-                for n in self.graph.nodes.values() if n.location
-            ))
-            report = run_preflight(self.graph, all_files, project_root=path)
-            return report.to_dict()
+            import os as _os
+            # 保存旧图作为基线
+            before_graph = self.graph
+
+            # 重新分析项目
+            new_server = MCPServer.from_project(path)
+            after_graph = new_server.graph
+
+            # 热加载新图 + 重置缓存
+            self.graph = after_graph
+            self._coupling_result = None
+            self._cycle_result = None
+            self._boundaries = None
+
+            # 收集变更文件（通过 diff）
+            from .core.diff import GraphDiffer
+            differ = GraphDiffer()
+            diff_result = differ.diff(before_graph, after_graph)
+
+            changed_file_set: set = set()
+            for mn in diff_result.modified_nodes:
+                node = after_graph.get_node(mn.node_id)
+                if node and node.location:
+                    f = node.location.rsplit(":", 1)[0] if ":" in (node.location or "") else node.location
+                    changed_file_set.add(f)
+            for n in diff_result.added_nodes:
+                if n.location:
+                    f = n.location.rsplit(":", 1)[0] if ":" in (n.location or "") else n.location
+                    changed_file_set.add(f)
+            for n in diff_result.removed_nodes:
+                if n.location:
+                    f = n.location.rsplit(":", 1)[0] if ":" in (n.location or "") else n.location
+                    changed_file_set.add(f)
+            changed_files = sorted(changed_file_set)
+
+            if not changed_files:
+                return {
+                    "passed": True,
+                    "message": "No changes detected",
+                    "total_nodes": after_graph.node_count,
+                    "total_edges": after_graph.edge_count,
+                }
+
+            # 读取变更文件源码
+            from .routing.patterns import FileChange
+            file_changes: Dict[str, Any] = {}
+            for fp in changed_files:
+                full_path = _os.path.join(path, fp) if not _os.path.isabs(fp) else fp
+                if _os.path.exists(full_path):
+                    try:
+                        with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
+                            source = fh.read()
+                    except Exception:
+                        source = ""
+                    file_changes[fp] = FileChange(
+                        file_path=fp,
+                        old_source=None,
+                        new_source=source,
+                    )
+
+            # 运行完整 V3 约束校验
+            from .routing.preflight import run_full_check
+            result = run_full_check(
+                before_graph=before_graph,
+                after_graph=after_graph,
+                changed_files=changed_files,
+                file_changes=file_changes,
+                project_root=path,
+            )
+            return result
         except Exception as e:
             return {"error": str(e)}
 

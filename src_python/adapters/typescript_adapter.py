@@ -343,7 +343,7 @@ class TypeScriptAdapter(LanguageAdapter):
             if not n.location or not n.location.startswith(path):
                 continue
             try:
-                n_line = int(n.location.split(":")[-1])
+                n_line = int(n.location.rsplit(":", 1)[-1])
             except (ValueError, IndexError):
                 continue
             if n_line <= target_line and n_line > best_line:

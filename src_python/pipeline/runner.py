@@ -72,17 +72,17 @@ class PipelineRunner:
                 report.error_files += 1
                 continue
 
-            # 增量检查
+            # 增量检查 — 原子获取避免 TOCTOU
             file_hash = self.cache.hash_source(source)
-            if self.cache.has(file_path) and self.cache.get_hash(file_path) == file_hash:
-                cached = self.cache.get_graph(file_path)
-                if cached:
-                    file_graphs[file_path] = cached
-                    merged_graph.merge(cached)
-                    report.cached_files += 1
-                    if on_progress:
-                        on_progress(file_path, i + 1, len(files))
-                    continue
+            entry = self.cache.get_entry(file_path)
+            if entry and entry[0] == file_hash and entry[1] is not None:
+                cached = entry[1]
+                file_graphs[file_path] = cached
+                merged_graph.merge(cached)
+                report.cached_files += 1
+                if on_progress:
+                    on_progress(file_path, i + 1, len(files))
+                continue
 
             try:
                 result = adapter.analyze(file_path, source, merged_graph)

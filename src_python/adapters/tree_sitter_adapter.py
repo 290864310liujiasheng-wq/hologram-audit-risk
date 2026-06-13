@@ -984,7 +984,7 @@ class _MediaExtractor(_BaseExtractor):
         if candidates:
             for n in reversed(candidates):
                 try:
-                    loc_lineno = int(n.location.split(":")[-1])
+                    loc_lineno = int(n.location.rsplit(":", 1)[-1])
                     if loc_lineno <= lineno:
                         return n
                 except (ValueError, IndexError):
@@ -1117,7 +1117,7 @@ class _TemporalExtractor(_BaseExtractor):
         if candidates:
             for n in reversed(candidates):
                 try:
-                    loc_lineno = int(n.location.split(":")[-1])
+                    loc_lineno = int(n.location.rsplit(":", 1)[-1])
                     if loc_lineno <= lineno:
                         return n
                 except (ValueError, IndexError):
