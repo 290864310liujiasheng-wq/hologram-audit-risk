@@ -29,6 +29,8 @@ interface TabData {
   originalContent: string;
   loading: boolean;
   error: string;
+  /** If set, this tab is a read-only diff view. */
+  diffModels?: { original: monaco.editor.ITextModel; modified: monaco.editor.ITextModel };
 }
 
 interface WindowState {
@@ -45,6 +47,8 @@ export class FileViewer {
   private tabBar!: HTMLElement;
   private editorContainer!: HTMLElement;
   private editor!: monaco.editor.IStandaloneCodeEditor;
+  private diffEditorContainer!: HTMLElement;
+  private diffEditor!: monaco.editor.IStandaloneDiffEditor;
   private resizeHandle!: HTMLElement;
   private windowCloseBtn!: HTMLElement;
 
@@ -163,6 +167,10 @@ export class FileViewer {
     this.editorContainer = document.createElement('div');
     Object.assign(this.editorContainer.style, { flex: '1', overflow: 'hidden' });
 
+    // Diff editor container (hidden by default)
+    this.diffEditorContainer = document.createElement('div');
+    Object.assign(this.diffEditorContainer.style, { flex: '1', overflow: 'hidden', display: 'none' });
+
     // Resize handle
     this.resizeHandle = document.createElement('div');
     this.resizeHandle.className = 'fv-grip';
@@ -173,6 +181,7 @@ export class FileViewer {
 
     this.el.appendChild(this.header);
     this.el.appendChild(this.editorContainer);
+    this.el.appendChild(this.diffEditorContainer);
     this.el.appendChild(this.resizeHandle);
 
     // Drag — only on empty header area
@@ -208,10 +217,32 @@ export class FileViewer {
       // Match our deep-space theme
       overviewRulerBorder: false,
       hideCursorInOverviewRuler: true,
+      // ── Enabled Monaco IDE features ──
+      bracketPairColorization: { enabled: true },
+      cursorSmoothCaretAnimation: 'on',
+      linkedEditing: true,
+      stickyScroll: { enabled: true },
+      formatOnPaste: true,
+      matchBrackets: 'always',
     });
 
     // Ctrl+S → save
     this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => this.saveActiveTab());
+
+    // Editor context menu actions
+    this.editor.addAction({
+      id: 'format-document', label: '格式化文档',
+      contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 2,
+      run: () => this.editor.getAction('editor.action.formatDocument')?.run(),
+    });
+    this.editor.addAction({
+      id: 'copy-file-path', label: '复制文件路径',
+      contextMenuGroupId: '9_cutcopypaste', contextMenuOrder: 3,
+      run: () => {
+        const tab = this.tabs[this.activeIdx];
+        if (tab?.filePath) navigator.clipboard.writeText(tab.filePath);
+      },
+    });
   }
 
   // ── Tab rendering ──
@@ -265,10 +296,17 @@ export class FileViewer {
     if (idx < 0 || idx >= this.tabs.length) return;
     this.activeIdx = idx;
     const tab = this.tabs[idx];
-    this.editor.setModel(tab.model);
+    if (tab.diffModels) {
+      if (this.diffEditor) this.diffEditor.setModel(tab.diffModels);
+      this.showDiffEditor();
+      if (this.diffEditor) this.diffEditor.layout();
+    } else {
+      this.editor.setModel(tab.model);
+      this.showNormalEditor();
+      this.editor.layout();
+      this.editor.focus();
+    }
     this.renderTabs();
-    this.editor.layout();
-    this.editor.focus();
   }
 
   private async closeTab(idx: number): Promise<void> {
@@ -282,6 +320,10 @@ export class FileViewer {
     }
 
     tab.model.dispose();
+    if (tab.diffModels) {
+      tab.diffModels.original.dispose();
+      tab.diffModels.modified.dispose();
+    }
     this.tabs.splice(idx, 1);
 
     if (this.tabs.length === 0) {
@@ -387,7 +429,52 @@ export class FileViewer {
     }
   }
 
-  /** Open a read-only diff view — used by GitPanel. */
+  /** Open a side-by-side diff view (Monaco DiffEditor) — used by GitPanel. */
+  openInlineDiff(fileName: string, originalContent: string, modifiedContent: string): void {
+    const label = `差异: ${fileName.replace(/\\/g, '/').split('/').pop() || fileName}`;
+
+    // Lazy-init diff editor
+    if (!this.diffEditor) {
+      this.diffEditor = monaco.editor.createDiffEditor(this.diffEditorContainer, {
+        theme: 'vs-dark',
+        fontSize: 13,
+        fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+        readOnly: true,
+        automaticLayout: false,
+        scrollBeyondLastLine: false,
+        minimap: { enabled: false },
+        renderSideBySide: true,
+        originalEditable: false,
+      });
+    }
+
+    const originalUri = monaco.Uri.parse(`diff-original:///${label}`);
+    const modifiedUri = monaco.Uri.parse(`diff-modified:///${label}`);
+    const origModel = monaco.editor.createModel(originalContent, undefined, originalUri);
+    const modModel = monaco.editor.createModel(modifiedContent, undefined, modifiedUri);
+    this.diffEditor.setModel({ original: origModel, modified: modModel });
+
+    const tab: TabData = {
+      filePath: `[diff] ${fileName}`,
+      fileName: label,
+      model: modModel, // placeholder; diff editors use diffModels
+      dirty: false,
+      originalContent: '',
+      loading: false,
+      error: '',
+      diffModels: { original: origModel, modified: modModel },
+    };
+    this.tabs.push(tab);
+    this.activeIdx = this.tabs.length - 1;
+    this.renderTabs();
+    this.showDiffEditor();
+    this.el.classList.add('fv-open');
+    this.el.style.zIndex = String(Math.max(30, Number(this.el.style.zIndex) + 1));
+    this.centerOnScreen();
+    this.diffEditor.layout();
+  }
+
+  /** Legacy wrapper — raw diff text as plain diff model. */
   openDiff(fileName: string, diffContent: string): void {
     const label = `差异: ${fileName.replace(/\\/g, '/').split('/').pop() || fileName}`;
     const uri = monaco.Uri.parse(`diff:///${label}`);
@@ -413,13 +500,30 @@ export class FileViewer {
     this.editor.focus();
   }
 
+  private showDiffEditor(): void {
+    this.editorContainer.style.display = 'none';
+    this.diffEditorContainer.style.display = '';
+  }
+
+  private showNormalEditor(): void {
+    this.diffEditorContainer.style.display = 'none';
+    this.editorContainer.style.display = '';
+  }
+
   closeAll(): void {
     this.state.open = false;
     // Dispose all models
-    for (const tab of this.tabs) tab.model.dispose();
+    for (const tab of this.tabs) {
+      if (tab.diffModels) {
+        tab.diffModels.original.dispose();
+        tab.diffModels.modified.dispose();
+      }
+      tab.model.dispose();
+    }
     this.tabs = [];
     this.activeIdx = -1;
     this.tabBar.innerHTML = '';
+    this.showNormalEditor();
     this.el.classList.remove('fv-open');
   }
 
@@ -494,6 +598,7 @@ export class FileViewer {
     this.el.style.width = `${Math.max(360, this.dragStart.w + dw)}px`;
     this.el.style.height = `${Math.max(240, this.dragStart.h + dh)}px`;
     this.editor.layout();
+    if (this.diffEditor) this.diffEditor.layout();
   }
 
   private onResizeEnd(): void {
@@ -510,9 +615,11 @@ export class FileViewer {
 function detectLanguage(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+    ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+    js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
     py: 'python', rs: 'rust', go: 'go', java: 'java', c: 'c', cpp: 'cpp',
     h: 'c', hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php',
+    kt: 'kotlin', kts: 'kotlin', swift: 'swift', lua: 'lua',
     html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
     json: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml',
     md: 'markdown', sql: 'sql', sh: 'shell', bash: 'shell',
