@@ -132,3 +132,41 @@ class TestCrossFileResolver:
         call_edges = [e for e in g.edges.values()
                       if e.direction == "call" and e.source == "n2"]
         assert len(call_edges) >= 1
+
+    def test_resolve_incremental_no_duplicate_edges(self):
+        """增量解析不应创建重复边（TOCTOU/去重修复）。"""
+        g = Graph()
+        n1 = Node("n1", NodeType.SYMBOL, "Base", "base.py:1", "python", "class")
+        n2 = Node("n2", NodeType.SYMBOL, "Child", "child.py:1", "python", "class",
+                  properties={"bases": ["Base"]})
+        g.add_node(n1); g.add_node(n2)
+
+        resolver = CrossFileResolver()
+
+        # 第一次解析：创建继承边
+        added1 = resolver.resolve_incremental(g, ["n2"])
+        assert added1 >= 1
+        edge_count_after_first = g.edge_count
+
+        # 第二次解析：不应该再创建重复边
+        added2 = resolver.resolve_incremental(g, ["n2"])
+        assert added2 == 0, f"Expected 0 new edges, got {added2}"
+        assert g.edge_count == edge_count_after_first, \
+            f"Edge count changed from {edge_count_after_first} to {g.edge_count}"
+
+    def test_resolve_incremental_dedup_across_types(self):
+        """不同边类型（call + inherit）的去重检查各自独立。"""
+        g = Graph()
+        n1 = Node("n1", NodeType.SYMBOL, "Base", "base.py:1", "python", "class")
+        n2 = Node("n2", NodeType.SYMBOL, "Child", "child.py:1", "python", "class",
+                  properties={"bases": ["Base"], "calls": ["Base"]})
+        g.add_node(n1); g.add_node(n2)
+
+        resolver = CrossFileResolver()
+        added = resolver.resolve_incremental(g, ["n2"])
+        # 应创建两条边：inherit(n2→n1) + call(n2→n1)
+        assert added >= 2
+
+        # 重复调用不应再创建新边
+        added2 = resolver.resolve_incremental(g, ["n2"])
+        assert added2 == 0

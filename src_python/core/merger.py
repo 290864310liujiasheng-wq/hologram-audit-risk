@@ -213,15 +213,18 @@ class CrossFileResolver:
                 short = base_name.split(".")[-1]
                 for target in name_index.get(short, []):
                     if target.id != node.id:
-                        edge = Edge(
-                            id=Edge.make_id(),
-                            type=EdgeType.STRUCTURAL,
-                            direction="inherit",
-                            source=node.id,
-                            target=target.id,
-                        )
-                        if graph.add_edge(edge):
-                            added += 1
+                        edge_key = (node.id, target.id, "structural", "inherit")
+                        if edge_key not in existing_edges:
+                            edge = Edge(
+                                id=Edge.make_id(),
+                                type=EdgeType.STRUCTURAL,
+                                direction="inherit",
+                                source=node.id,
+                                target=target.id,
+                            )
+                            if graph.add_edge(edge):
+                                added += 1
+                                existing_edges.add(edge_key)
                         break
 
             # 处理 calls（调用关系）
@@ -230,15 +233,18 @@ class CrossFileResolver:
                 short = call_name.split(".")[-1]
                 for target in name_index.get(short, []):
                     if target.id != node.id:
-                        edge = Edge(
-                            id=Edge.make_id(),
-                            type=EdgeType.STRUCTURAL,
-                            direction="call",
-                            source=node.id,
-                            target=target.id,
-                        )
-                        if graph.add_edge(edge):
-                            added += 1
+                        edge_key = (node.id, target.id, "structural", "call")
+                        if edge_key not in existing_edges:
+                            edge = Edge(
+                                id=Edge.make_id(),
+                                type=EdgeType.STRUCTURAL,
+                                direction="call",
+                                source=node.id,
+                                target=target.id,
+                            )
+                            if graph.add_edge(edge):
+                                added += 1
+                                existing_edges.add(edge_key)
                         break
 
         return added

@@ -117,6 +117,47 @@ class TestIncrementalCache:
         assert cache.get_hash("nope.py") is None
         assert cache.get_graph("nope.py") is None
 
+    def test_get_entry_atomic(self, cache):
+        """get_entry 原子返回 hash + graph，消除 TOCTOU 窗口。"""
+        g = Graph()
+        cache.set("test.py", "abc123", g)
+        result = cache.get_entry("test.py")
+        assert result is not None
+        h, graph = result
+        assert h == "abc123"
+        assert graph is g
+
+    def test_get_entry_miss(self, cache):
+        """缓存未命中时 get_entry 返回 None。"""
+        assert cache.get_entry("nope.py") is None
+
+    def test_get_entry_thread_safety(self, cache):
+        """get_entry 与 set 并发不应抛异常。"""
+        import threading
+        errors = []
+
+        def setter():
+            try:
+                for i in range(50):
+                    cache.set(f"f{i}.py", f"hash{i}", Graph())
+            except Exception as e:
+                errors.append(e)
+
+        def getter():
+            try:
+                for _ in range(50):
+                    cache.get_entry("f0.py")
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=setter)
+        t2 = threading.Thread(target=getter)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
+
     def test_invalidate(self, cache):
         g = Graph()
         cache.set("test.py", "abc", g)

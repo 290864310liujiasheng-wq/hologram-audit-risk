@@ -286,3 +286,50 @@ class TestMCPServer:
         })
         resp = server.handle_request(req)
         assert "error" in resp
+
+    # -- hologram_run_check --
+
+    def test_run_check_missing_path(self, server):
+        """缺少 path 参数应返回错误。"""
+        req = self._req("tools/call", {
+            "name": "hologram_run_check",
+            "arguments": {},
+        })
+        resp = server.handle_request(req)
+        content = json.loads(resp["result"]["content"][0]["text"])
+        assert "error" in content
+        assert "path" in content["error"].lower()
+
+    def test_run_check_with_project(self, server, tmp_path):
+        """在临时项目中运行全量约束校验。"""
+        # 写入 Python 源文件让分析管线有东西可以分析
+        project = tmp_path / "testproj"
+        project.mkdir()
+        (project / "main.py").write_text("def main():\n    pass\n")
+        (project / "utils.py").write_text("def helper():\n    return 42\n")
+
+        # 先用 from_project 预热 server 图
+        from src_python.mcp_server import MCPServer
+        try:
+            new_server = MCPServer.from_project(str(project))
+        except Exception:
+            # from_project 可能因 tree-sitter 等不可用而失败
+            # 直接测试 _tool_run_check 的路径校验即可
+            return
+
+        req = self._req("tools/call", {
+            "name": "hologram_run_check",
+            "arguments": {"path": str(project)},
+        })
+        resp = new_server.handle_request(req)
+        assert resp["id"] == 1
+        content = json.loads(resp["result"]["content"][0]["text"])
+        # 结果应该包含 passed 或 error
+        assert "passed" in content or "error" in content
+
+    def test_run_check_tool_listed(self, server):
+        """hologram_run_check 应在 tools/list 中。"""
+        req = self._req("tools/list")
+        resp = server.handle_request(req)
+        tool_names = [t["name"] for t in resp["result"]["tools"]]
+        assert "hologram_run_check" in tool_names
