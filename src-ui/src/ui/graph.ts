@@ -10,6 +10,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { iconHtml } from './icons';
 import { bus } from './events';
+import { t, getLang, setLang } from '../i18n';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -457,6 +458,24 @@ export class StarGraph {
 
     this.buildLegend();
     this.buildFocusBanner();
+
+    // Rebuild legend + focus banner on language change
+    bus.on('lang:changed', ({ lang }: { lang: string }) => {
+      setLang(lang as 'zh' | 'en');
+      // Remove old DOM elements before rebuilding
+      if (this.legendEl) { this.legendEl.remove(); }
+      this.buildLegend();
+      if (this.graphNodes.length > 0) this.legendEl.style.display = '';
+      if (this.focusSubgraphBanner) { this.focusSubgraphBanner.remove(); }
+      this.buildFocusBanner();
+      if (this.focusSubgraphActive && this.focusSubgraphIdx >= 0) {
+        // Refresh focus banner text while staying in focus mode
+        const node = this.graphNodes[this.focusSubgraphIdx];
+        this.focusSubgraphBanner.innerHTML =
+          `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
+        this.focusSubgraphBanner.style.display = 'flex';
+      }
+    });
     let pointerDown = new THREE.Vector2();
     let pointerDragged = false;
     const canvas = this.renderer.domElement;
@@ -1640,7 +1659,7 @@ export class StarGraph {
       this.nodeGlowColors[i] = glowColor;
     }
 
-    const labels: Record<string, string> = { type: '按类型', community: '按社区', coupling: '按耦合' };
+    const labels: Record<string, string> = { type: t('color.type'), community: t('color.community'), coupling: t('color.coupling') };
     return labels[mode];
   }
 
@@ -1669,7 +1688,7 @@ export class StarGraph {
         this.nodeGlows2[i].scale.setScalar(base * 16);
       }
     }
-    return mode === 'degree' ? '按度' : '按耦合风险';
+    return mode === 'degree' ? t('scale.degree') : t('scale.coupling');
   }
 
   // ── Agent highlight (Agent ↔ 星图联动) ──────────────────
@@ -2996,17 +3015,17 @@ export class StarGraph {
     this.legendEl.style.display = 'none';
     this.legendEl.innerHTML =
       `<div class="legend-section">
-        <div class="legend-title">节点</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0x7eb8ff)};color:${hexToCSS(0x7eb8ff)}"></span> 符号</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> 介质</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xc098ff)};color:${hexToCSS(0xc098ff)}"></span> 时序</div>
+        <div class="legend-title">${t('legend.node')}</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0x7eb8ff)};color:${hexToCSS(0x7eb8ff)}"></span> ${t('legend.symbol')}</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> ${t('legend.medium')}</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xc098ff)};color:${hexToCSS(0xc098ff)}"></span> ${t('legend.temporal')}</div>
       </div>
       <div class="legend-section">
-        <div class="legend-title">连线</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x6699cc)}"></span> 结构</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x66dd66)}"></span> 数据读</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff7777)}"></span> 数据写</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xffaa55)}"></span> 时序</div>
+        <div class="legend-title">${t('legend.edge')}</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x6699cc)}"></span> ${t('legend.structural')}</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x66dd66)}"></span> ${t('legend.dataRead')}</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff7777)}"></span> ${t('legend.dataWrite')}</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xffaa55)}"></span> ${t('legend.temporalEdge')}</div>
       </div>`;
     this.container.appendChild(this.legendEl);
   }
@@ -3068,7 +3087,7 @@ export class StarGraph {
     this.focusSubgraphActive = true;
     const node = this.graphNodes[idx];
     this.focusSubgraphBanner.innerHTML =
-      `${iconHtml('focus', 14)} <b>聚焦: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} 节点 &middot; Esc 退出`;
+      `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
     this.focusSubgraphBanner.style.display = 'flex';
     this.flyToNode(idx);
   }

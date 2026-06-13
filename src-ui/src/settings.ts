@@ -18,6 +18,7 @@ export interface AgentSettings {
 
 export interface DisplaySettings {
   defaultViewMode: 'standard' | 'full' | 'files';
+  language: 'zh' | 'en';
 }
 
 export interface AppSettings {
@@ -58,6 +59,7 @@ const DEFAULTS: AppSettings = {
   },
   display: {
     defaultViewMode: 'standard',
+    language: 'zh',
   },
 };
 

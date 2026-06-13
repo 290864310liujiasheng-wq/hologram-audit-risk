@@ -23,6 +23,7 @@ import { PermissionPolicy, PermissionGate, showApprovalDialog } from './agent/pe
 import { MemoryManager, createMemoryTools } from './agent/memory';
 import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNodeIndex } from './agent/hooks';
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing } from './settings';
+import { t, setLang } from './i18n';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
 import type { Provider } from './provider/types';
@@ -726,6 +727,9 @@ function setupIcons(): void {
 // ── Init ──
 
 async function init(): Promise<void> {
+  // Init language from saved settings
+  setLang(loadSettings().display.language);
+
   // ── 毙掉 Tauri WebView 的所有浏览器原生快捷键 ──
   // capture 阶段拦截，preventDefault 阻止浏览器默认行为，不阻止事件继续冒泡
   (() => {
@@ -1170,20 +1174,34 @@ async function init(): Promise<void> {
   // Color mode cycle
   const colorModeOrder: Array<'type' | 'community' | 'coupling'> = ['type', 'community', 'coupling'];
   let colorModeIdx = 0;
+  const updateColorTooltip = () => {
+    const mode = colorModeOrder[colorModeIdx];
+    const labels: Record<string, string> = { type: t('color.type'), community: t('color.community'), coupling: t('color.coupling') };
+    btnColorMode.title = `${t('color.tooltip')}: ${labels[mode]}`;
+  };
   btnColorMode.addEventListener('click', () => {
     colorModeIdx = (colorModeIdx + 1) % 3;
-    const label = starGraph.recolorByMode(colorModeOrder[colorModeIdx]);
+    starGraph.recolorByMode(colorModeOrder[colorModeIdx]);
     btnColorMode.innerHTML = iconSvg('chart');
-    btnColorMode.title = `着色: ${label}`;
+    updateColorTooltip();
   });
 
   // Scale mode toggle
   let scaleByCoupling = false;
+  const updateScaleTooltip = () => {
+    btnScaleMode.title = `${t('scale.tooltip')}: ${scaleByCoupling ? t('scale.coupling') : t('scale.degree')}`;
+  };
   btnScaleMode.addEventListener('click', () => {
     scaleByCoupling = !scaleByCoupling;
-    const label = starGraph.rescaleByMode(scaleByCoupling ? 'coupling' : 'degree');
+    starGraph.rescaleByMode(scaleByCoupling ? 'coupling' : 'degree');
     btnScaleMode.innerHTML = iconSvg('blast');
-    btnScaleMode.title = `缩放: ${label}`;
+    updateScaleTooltip();
+  });
+
+  // Update tooltips on language change
+  bus.on('lang:changed', () => {
+    updateColorTooltip();
+    updateScaleTooltip();
   });
 
   // Fold toggle

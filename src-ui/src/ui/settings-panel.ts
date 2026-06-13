@@ -4,6 +4,8 @@
 
 import { loadSettings, saveSettings, updateProvider } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
+import { setLang } from '../i18n';
+import type { Lang } from '../i18n';
 import { iconHtml } from './icons';
 import { bus } from './events';
 
@@ -114,7 +116,7 @@ export class SettingsPanel {
       <div class="sp-content">
         ${this.renderProviderTab(active)}
         ${this.renderAgentTab(s.agent)}
-        ${this.renderDisplayTab(s.display.defaultViewMode)}
+        ${this.renderDisplayTab(s.display.defaultViewMode, s.display.language)}
       </div>
 
       <!-- Footer -->
@@ -229,7 +231,7 @@ export class SettingsPanel {
       </div>`;
   }
 
-  private renderDisplayTab(viewMode: string): string {
+  private renderDisplayTab(viewMode: string, language: string): string {
     const modes: Array<{ id: string; label: string; desc: string }> = [
       { id: 'files', label: '文件视图', desc: '文件级聚合（大项目防崩）' },
       { id: 'standard', label: '标准星图', desc: '完整依赖图 + 社区星系' },
@@ -244,14 +246,32 @@ export class SettingsPanel {
         <span class="sp-radio-desc">${m.desc}</span>
       </label>`;
     }
+
+    const langOpts = [
+      { id: 'zh', label: '中文' },
+      { id: 'en', label: 'English' },
+    ];
+    let langRadios = '';
+    for (const l of langOpts) {
+      const checked = l.id === language ? 'checked' : '';
+      langRadios += `<label class="sp-radio">
+        <input type="radio" name="language" value="${l.id}" ${checked}>
+        <span class="sp-radio-label">${l.label}</span>
+      </label>`;
+    }
+
     return `
       <div class="sp-tab-content" data-tab="display" style="${this.activeTab === 'display' ? '' : 'display:none'}">
         <div class="sp-section">
           <div class="sp-section-title">默认视角</div>
           <div class="sp-radio-group">${opts}</div>
         </div>
+        <div class="sp-section">
+          <div class="sp-section-title">语言 / Language</div>
+          <div class="sp-radio-group">${langRadios}</div>
+        </div>
         <div class="sp-hint">
-          启动时使用的视角模式。切换模式也会更新此设置。
+          图例、聚焦横幅、工具栏提示的语言。其他界面不受影响。
         </div>
       </div>`;
   }
@@ -360,9 +380,15 @@ export class SettingsPanel {
     if (viewModeEl) {
       s.display.defaultViewMode = viewModeEl.value as 'standard' | 'full' | 'files';
     }
+    const langEl = this.panel.querySelector('input[name="language"]:checked') as HTMLInputElement;
+    if (langEl) {
+      s.display.language = langEl.value as Lang;
+    }
 
     // Save to localStorage
     saveSettings(s);
+    setLang(s.display.language);
+    bus.emit('lang:changed', { lang: s.display.language });
     this.originalSettings = JSON.parse(JSON.stringify(s));
     this.dirty = false;
 
