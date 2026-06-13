@@ -790,7 +790,7 @@ export class StarGraph {
     this.detailCard.querySelector('.dc-close')!.addEventListener('click', (e) => { e.stopPropagation(); this.hideDetail(); });
     this.detailCard.querySelector('.dc-focus-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
-      if (this.selectedIdx >= 0) this.flyToNode(this.selectedIdx);
+      if (this.selectedIdx >= 0) { this.hideDetail(); this.enterFocusSubgraph(this.selectedIdx); }
     });
     this.detailCard.querySelector('.dc-blast-btn')!.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); e.preventDefault();
