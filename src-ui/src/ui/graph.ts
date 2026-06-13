@@ -2996,17 +2996,17 @@ export class StarGraph {
     this.legendEl.style.display = 'none';
     this.legendEl.innerHTML =
       `<div class="legend-section">
-        <div class="legend-title">NODE</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0x7eb8ff)};color:${hexToCSS(0x7eb8ff)}"></span> Symbol</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> Medium</div>
-        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xc098ff)};color:${hexToCSS(0xc098ff)}"></span> Temporal</div>
+        <div class="legend-title">节点</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0x7eb8ff)};color:${hexToCSS(0x7eb8ff)}"></span> 符号</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xf0c060)};color:${hexToCSS(0xf0c060)}"></span> 介质</div>
+        <div class="legend-row"><span class="legend-swatch" style="background:${hexToCSS(0xc098ff)};color:${hexToCSS(0xc098ff)}"></span> 时序</div>
       </div>
       <div class="legend-section">
-        <div class="legend-title">EDGE</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x6699cc)}"></span> Structural</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x66dd66)}"></span> Data&nbsp;Read</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff7777)}"></span> Data&nbsp;Write</div>
-        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xffaa55)}"></span> Temporal</div>
+        <div class="legend-title">连线</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x6699cc)}"></span> 结构</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0x66dd66)}"></span> 数据读</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xff7777)}"></span> 数据写</div>
+        <div class="legend-row"><span class="legend-edge-swatch" style="background:${hexToCSS(0xffaa55)}"></span> 时序</div>
       </div>`;
     this.container.appendChild(this.legendEl);
   }
@@ -3068,7 +3068,7 @@ export class StarGraph {
     this.focusSubgraphActive = true;
     const node = this.graphNodes[idx];
     this.focusSubgraphBanner.innerHTML =
-      `${iconHtml('focus', 14)} <b>Focus: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} nodes &middot; Esc to exit`;
+      `${iconHtml('focus', 14)} <b>聚焦: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} 节点 &middot; Esc 退出`;
     this.focusSubgraphBanner.style.display = 'flex';
     this.flyToNode(idx);
   }
