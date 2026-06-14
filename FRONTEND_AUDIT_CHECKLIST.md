@@ -40,50 +40,50 @@ cd src-ui && npx tsc --noEmit
 
 ### agent/ — Agent 核心逻辑
 
-- [ ] `src-ui/src/agent/agent.ts`
-- [ ] `src-ui/src/agent/hooks.ts`
-- [ ] `src-ui/src/agent/memory.ts`
-- [ ] `src-ui/src/agent/permission.ts`
-- [ ] `src-ui/src/agent/tool.ts`
+- [x] `src-ui/src/agent/agent.ts`
+- [x] `src-ui/src/agent/hooks.ts`
+- [x] `src-ui/src/agent/memory.ts`
+- [x] `src-ui/src/agent/permission.ts`
+- [x] `src-ui/src/agent/tool.ts`
 
 ### provider/ — LLM 对接
 
-- [ ] `src-ui/src/provider/anthropic.ts`
-- [ ] `src-ui/src/provider/openai.ts`
-- [ ] `src-ui/src/provider/types.ts`
+- [x] `src-ui/src/provider/anthropic.ts`
+- [x] `src-ui/src/provider/openai.ts`
+- [x] `src-ui/src/provider/types.ts`
 
 ### ui/ — 界面组件（大头，21 个）
 
-- [ ] `src-ui/src/ui/agent-lens.ts`
-- [ ] `src-ui/src/ui/agent-visualizer.ts`
-- [ ] `src-ui/src/ui/chat.ts`
-- [ ] `src-ui/src/ui/check.ts`
-- [ ] `src-ui/src/ui/conflict.ts`
-- [ ] `src-ui/src/ui/constraints.ts`
-- [ ] `src-ui/src/ui/context-menu.ts`
-- [ ] `src-ui/src/ui/debug.ts`
-- [ ] `src-ui/src/ui/events.ts`
-- [ ] `src-ui/src/ui/file-tree.ts`
-- [ ] `src-ui/src/ui/file-viewer.ts`
-- [ ] `src-ui/src/ui/git-panel.ts`
-- [ ] `src-ui/src/ui/gpu-layout.ts`
-- [ ] `src-ui/src/ui/graph-interaction.ts`
-- [ ] `src-ui/src/ui/graph.ts`
-- [ ] `src-ui/src/ui/hotspots.ts`
-- [ ] `src-ui/src/ui/icons.ts`
-- [ ] `src-ui/src/ui/layout.worker.ts`
-- [ ] `src-ui/src/ui/lsp-client.ts`
-- [ ] `src-ui/src/ui/settings-panel.ts`
-- [ ] `src-ui/src/ui/terminal.ts`
-- [ ] `src-ui/src/ui/timeline.ts`
+- [x] `src-ui/src/ui/agent-lens.ts`
+- [x] `src-ui/src/ui/agent-visualizer.ts`
+- [x] `src-ui/src/ui/chat.ts`
+- [x] `src-ui/src/ui/check.ts`
+- [x] `src-ui/src/ui/conflict.ts`
+- [x] `src-ui/src/ui/constraints.ts`
+- [x] `src-ui/src/ui/context-menu.ts`
+- [x] `src-ui/src/ui/debug.ts`
+- [x] `src-ui/src/ui/events.ts`
+- [x] `src-ui/src/ui/file-tree.ts`
+- [x] `src-ui/src/ui/file-viewer.ts`
+- [x] `src-ui/src/ui/git-panel.ts`
+- [x] `src-ui/src/ui/gpu-layout.ts`
+- [x] `src-ui/src/ui/graph-interaction.ts`
+- [x] `src-ui/src/ui/graph.ts`
+- [x] `src-ui/src/ui/hotspots.ts`
+- [x] `src-ui/src/ui/icons.ts`
+- [x] `src-ui/src/ui/layout.worker.ts`
+- [x] `src-ui/src/ui/lsp-client.ts`
+- [x] `src-ui/src/ui/settings-panel.ts`
+- [x] `src-ui/src/ui/terminal.ts`
+- [x] `src-ui/src/ui/timeline.ts`
 
 ### 顶层
 
-- [ ] `src-ui/src/bridge.ts`
-- [ ] `src-ui/src/i18n.ts`
-- [ ] `src-ui/src/main.ts`
-- [ ] `src-ui/src/mock-data.ts`
-- [ ] `src-ui/src/settings.ts`
+- [x] `src-ui/src/bridge.ts`
+- [x] `src-ui/src/i18n.ts`
+- [x] `src-ui/src/main.ts`
+- [x] `src-ui/src/mock-data.ts`
+- [x] `src-ui/src/settings.ts`
 
 ---
 

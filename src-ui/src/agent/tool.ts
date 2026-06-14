@@ -572,7 +572,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           });
           const selected = new Set<number>();
           const done = () => {
-            overlay.remove();
+            cleanup();
             if (multiSelect) {
               const chosen = options.filter((_, i) => selected.has(i)).map(o => o.label);
               resolve(JSON.stringify({ answers: chosen }));
@@ -618,7 +618,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
                 }
               } else {
                 resolve(JSON.stringify({ answer: opt.label }));
-                overlay.remove();
+                cleanup();
               }
             });
             btnContainer.appendChild(btn);
@@ -626,12 +626,17 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
           dialog.appendChild(btnContainer);
           overlay.appendChild(dialog);
           // Close on Escape or clicking outside
+          const cleanup = () => {
+            document.removeEventListener('keydown', escHandler);
+            overlay.remove();
+          };
+          const escHandler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') { resolve(JSON.stringify({ answer: null })); cleanup(); }
+          };
           overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) { resolve(JSON.stringify({ answer: null })); overlay.remove(); }
+            if (e.target === overlay) { resolve(JSON.stringify({ answer: null })); cleanup(); }
           });
-          document.addEventListener('keydown', function escHandler(e) {
-            if (e.key === 'Escape') { resolve(JSON.stringify({ answer: null })); overlay.remove(); document.removeEventListener('keydown', escHandler); }
-          });
+          document.addEventListener('keydown', escHandler);
           document.body.appendChild(overlay);
         });
       },
@@ -911,7 +916,9 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       }),
       readOnly: () => false,
       execute: async (args) => {
-        const files = (args.files as string).trim();
+        const filesRaw = args.files as string | undefined;
+        if (!filesRaw) return 'error: files argument is required';
+        const files = filesRaw.trim();
         if (files === '.' || files === 'all') {
           return exec('git_stage_all', { path: args.path });
         }

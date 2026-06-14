@@ -252,8 +252,10 @@ export class TimelinePanel {
           // Try to find full path
           for (const ev of this.events) {
             if (ev.file && ev.file.endsWith(fileName!)) {
-              const { FileViewer } = await import('./file-viewer');
-              FileViewer.get().open(ev.file);
+              try {
+                const { FileViewer } = await import('./file-viewer');
+                FileViewer.get().open(ev.file);
+              } catch { /* dynamic import failed */ }
               break;
             }
           }

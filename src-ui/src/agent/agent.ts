@@ -272,54 +272,58 @@ export class Agent {
     let usage: Usage | undefined;
     let err: Error | undefined;
 
-    for await (const chunk of gen) {
-      switch (chunk.type) {
-        case ChunkType.Reasoning:
-          reasoning += chunk.text || '';
-          if (chunk.signature) signature = chunk.signature;
-          if (chunk.text) {
-            this.sink({ kind: EventKind.Reasoning, text: chunk.text });
-          }
-          break;
+    try {
+      for await (const chunk of gen) {
+        switch (chunk.type) {
+          case ChunkType.Reasoning:
+            reasoning += chunk.text || '';
+            if (chunk.signature) signature = chunk.signature;
+            if (chunk.text) {
+              this.sink({ kind: EventKind.Reasoning, text: chunk.text });
+            }
+            break;
 
-        case ChunkType.Text:
-          text += chunk.text || '';
-          this.sink({ kind: EventKind.Text, text: chunk.text });
-          break;
+          case ChunkType.Text:
+            text += chunk.text || '';
+            this.sink({ kind: EventKind.Text, text: chunk.text });
+            break;
 
-        case ChunkType.ToolCallStart:
-          if (chunk.tool_call) {
-            this.sink({
-              kind: EventKind.ToolDispatch,
-              tool: {
-                id: chunk.tool_call.id,
-                name: chunk.tool_call.name,
-                args: '',
-                read_only: this.toolReadOnly(chunk.tool_call.name),
-                partial: true,
-              },
-            });
-          }
-          break;
+          case ChunkType.ToolCallStart:
+            if (chunk.tool_call) {
+              this.sink({
+                kind: EventKind.ToolDispatch,
+                tool: {
+                  id: chunk.tool_call.id,
+                  name: chunk.tool_call.name,
+                  args: '',
+                  read_only: this.toolReadOnly(chunk.tool_call.name),
+                  partial: true,
+                },
+              });
+            }
+            break;
 
-        case ChunkType.ToolCall:
-          if (chunk.tool_call) calls.push(chunk.tool_call);
-          break;
+          case ChunkType.ToolCall:
+            if (chunk.tool_call) calls.push(chunk.tool_call);
+            break;
 
-        case ChunkType.Usage:
-          usage = chunk.usage;
-          break;
+          case ChunkType.Usage:
+            usage = chunk.usage;
+            break;
 
-        case ChunkType.Error:
-          err = chunk.err;
-          // fall through to Done to stop iteration
-          break;
+          case ChunkType.Error:
+            err = chunk.err;
+            // fall through to Done to stop iteration
+            break;
 
-        case ChunkType.Done:
-          break;
+          case ChunkType.Done:
+            break;
+        }
+
+        if (err) break;
       }
-
-      if (err) break;
+    } catch (e: any) {
+      err = e instanceof Error ? e : new Error(String(e));
     }
 
     if (err) return { text: '', reasoning: '', signature: '', calls: [], usage, err };
@@ -600,7 +604,7 @@ export class Agent {
     const region = msgs.slice(head, start);
     const abortCtrl = new AbortController();
     this.summarizeRegion(abortCtrl.signal, region).then((summary) => {
-      if (genAtStart !== this.sessionGen) return; // session replaced, discard
+      if (genAtStart !== this.sessionGen) { this.compactRunning = false; return; } // session replaced, discard
       if (!summary) { this.compactRunning = false; return; }
       const compacted: Message[] = [
         ...msgs.slice(0, head),
@@ -619,7 +623,7 @@ export class Agent {
         text: `自动压缩完成: ${region.length} 条消息 → 摘要`,
       });
     }).catch(() => {
-      if (genAtStart !== this.sessionGen) return; // session replaced, discard
+      if (genAtStart !== this.sessionGen) { this.compactRunning = false; return; } // session replaced, discard
       this.compactStuck = true;
       this.compactRunning = false;
       this.sink({
@@ -809,6 +813,9 @@ function renderTranscript(msgs: Message[]): string {
         break;
       case 'system':
         lines.push(`[系统]\n${m.content || ''}\n`);
+        break;
+      default:
+        lines.push(`[${m.role}]\n${m.content || ''}\n`);
         break;
     }
   }

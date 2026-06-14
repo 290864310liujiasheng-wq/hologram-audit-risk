@@ -59,7 +59,7 @@ function layoutViaWorker(
       const timeout = setTimeout(() => {
         worker.terminate();
         // Fallback: import sync layout3D
-        import('./ui/graph').then(() => resolve(new Float32Array(0)));
+        import('./ui/graph').then(() => resolve(new Float32Array(0))).catch(() => resolve(new Float32Array(0)));
       }, 5000);
       worker.onmessage = (e: MessageEvent) => {
         clearTimeout(timeout);

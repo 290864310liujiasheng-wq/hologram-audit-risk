@@ -11,14 +11,18 @@ let _realListen: any;
 
 async function loadReal() {
   if (!_realInvoke) {
-    const core = await import('@tauri-apps/api/core');
+    const core = await import('@tauri-apps/api/core').catch(() => {
+      throw new Error('Failed to load Tauri core API — is the app running in Tauri shell?');
+    });
     _realInvoke = core.invoke;
   }
 }
 
 async function loadRealListen() {
   if (!_realListen) {
-    const event = await import('@tauri-apps/api/event');
+    const event = await import('@tauri-apps/api/event').catch(() => {
+      throw new Error('Failed to load Tauri event API — is the app running in Tauri shell?');
+    });
     _realListen = event.listen;
   }
 }

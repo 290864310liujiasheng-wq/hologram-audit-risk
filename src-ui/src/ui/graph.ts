@@ -464,7 +464,7 @@ export class StarGraph {
     this.buildFocusBanner();
 
     // Rebuild legend + focus banner on language change
-    bus.on('lang:changed', ({ lang }: { lang: string }) => {
+    this._langHandler = ({ lang }: { lang: string }) => {
       setLang(lang as 'zh' | 'en');
       // Remove old DOM elements before rebuilding
       if (this.legendEl) { this.legendEl.remove(); }
@@ -479,7 +479,8 @@ export class StarGraph {
           `${iconHtml('focus', 14)} <b>${t('focus.title')}: ${node.name}</b> &middot; ${this.focusSubgraphVisibleIndices.size} ${t('focus.nodes')} &middot; ${t('focus.exit')}`;
         this.focusSubgraphBanner.style.display = 'flex';
       }
-    });
+    };
+    bus.on('lang:changed', this._langHandler);
     let pointerDown = new THREE.Vector2();
     let pointerDragged = false;
     const canvas = this.renderer.domElement;
@@ -564,7 +565,7 @@ export class StarGraph {
     // Kick off WebGPU compute pipeline init (non-blocking)
     gpuLayout.init().then(ready => {
       if (ready) console.log('[StarGraph] GPU layout ready');
-    });
+    }).catch(() => { /* GPU init failure is non-critical; CPU fallback used */ });
   }
 
   // ── Cross-edge energy flow (fold mode) ──────────────────
@@ -848,7 +849,7 @@ export class StarGraph {
           const loc = node.location;
           const lastColon = loc.lastIndexOf(':');
           const filePath = lastColon > 1 ? loc.substring(0, lastColon) : loc;
-          import('./events').then(m => m.bus.emit('navigate:file', filePath));
+          import('./events').then(m => m.bus.emit('navigate:file', filePath)).catch(() => {});
         }
       }
     });
@@ -859,7 +860,7 @@ export class StarGraph {
         const kind = ((node.type || node.kind || 'symbol') as string).toLowerCase();
         const question = `分析节点 "${node.name}" (${TYPE_LABELS[kind] || kind}, 度=${this.deg[this.selectedIdx]}, ${node.location || '未知位置'})。它和其他模块的关系如何？改它会有什么影响？`;
         // Emit event to ChatPanel via bus
-        import('./events').then(m => m.bus.emit('agent:query', question));
+        import('./events').then(m => m.bus.emit('agent:query', question)).catch(() => {});
       }
     });
   }
@@ -998,6 +999,8 @@ export class StarGraph {
   private _promptBtnEl!: HTMLButtonElement;
   private _promptQuestion = '';
   private _promptTimer: ReturnType<typeof setTimeout> | null = null;
+  private _langHandler: ((data: { lang: string }) => void) | null = null;
+  private _showPromptBound: ((data: { title: string; question: string }) => void) | null = null;
 
   private setPathSource(idx: number): void {
     if (this.focusSubgraphActive) this.exitFocusSubgraph();
@@ -1332,7 +1335,8 @@ export class StarGraph {
     this.container.appendChild(this._promptBarEl);
 
     // Subscribe to show-prompt events (from GraphInteraction)
-    bus.on('graph:show-prompt', this._showPrompt.bind(this));
+    this._showPromptBound = this._showPrompt; // arrow fn already bound
+    bus.on('graph:show-prompt', this._showPromptBound);
   }
 
   private _showPrompt = (data: { title: string; question: string }): void => {
@@ -3884,9 +3888,16 @@ export class StarGraph {
 
   destroy(): void {
     cancelAnimationFrame(this.animId);
+    // Cancel progressive reveal if in-flight (audit: prevent rAF leak after destroy)
+    this._revealCancelled = true;
+    // Clear prompt auto-hide timer (audit: prevent timeout after destroy)
+    if (this._promptTimer) { clearTimeout(this._promptTimer); this._promptTimer = null; }
     window.removeEventListener('resize', this.onResize);
     // Remove window keydown listener (audit HIGH fix — prevent stale reference)
     if (this._onKeyDown) window.removeEventListener('keydown', this._onKeyDown);
+    // Unsubscribe EventBus handlers (audit: prevent stale bus listeners)
+    if (this._langHandler) { bus.off('lang:changed', this._langHandler); this._langHandler = null; }
+    if (this._showPromptBound) { bus.off('graph:show-prompt', this._showPromptBound); this._showPromptBound = null; }
     // Dispose all GPU resources
     for (const cloud of this.galaxyClouds) { if (cloud) { cloud.geometry.dispose(); (cloud.material as THREE.Material).dispose(); } }
     for (const glow of this.galaxyGlows) (glow.material as THREE.Material).dispose();

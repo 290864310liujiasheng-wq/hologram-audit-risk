@@ -9,8 +9,10 @@ export interface ContextMenuItem {
 }
 
 let _activeMenu: HTMLElement | null = null;
+let _activeCleanup: (() => void) | null = null;
 
 function dismiss(): void {
+  if (_activeCleanup) { _activeCleanup(); _activeCleanup = null; }
   if (_activeMenu) {
     _activeMenu.remove();
     _activeMenu = null;
@@ -82,15 +84,16 @@ export function showContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
 
   // Dismiss on outside click / Escape
   const onDown = (ev: Event) => {
-    if (!menu.contains(ev.target as Node)) { dismiss(); cleanup(); }
+    if (!menu.contains(ev.target as Node)) { dismiss(); }
   };
   const onKey = (ev: KeyboardEvent) => {
-    if (ev.key === 'Escape') { dismiss(); cleanup(); }
+    if (ev.key === 'Escape') { dismiss(); }
   };
   const cleanup = () => {
     document.removeEventListener('pointerdown', onDown, true);
     document.removeEventListener('keydown', onKey);
   };
+  _activeCleanup = cleanup;
   setTimeout(() => {
     document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey);

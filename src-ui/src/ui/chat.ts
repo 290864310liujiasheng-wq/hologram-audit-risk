@@ -1246,8 +1246,8 @@ export class ChatPanel {
     }
     const el = document.createElement('div');
     el.className = 'msg-text msg-markdown';
-    // Render markdown
-    const html = marked.parse(text) as string;
+    // Render markdown (sanitized for XSS)
+    const html = DOMPurify.sanitize(marked.parse(text) as string);
     el.innerHTML = html;
     // Syntax-highlight code blocks
     el.querySelectorAll('pre code').forEach((block) => {

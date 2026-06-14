@@ -140,11 +140,15 @@ function buildRequest(
           blocks.push({ type: 'text', text: m.content });
         }
         for (const tc of m.tool_calls || []) {
+          let input: unknown = {};
+          if (tc.arguments) {
+            try { input = JSON.parse(tc.arguments); } catch { /* malformed JSON → empty input */ }
+          }
           blocks.push({
             type: 'tool_use',
             id: tc.id,
             name: tc.name,
-            input: tc.arguments ? JSON.parse(tc.arguments) : {},
+            input,
           });
         }
         appendBlocks('assistant', blocks);

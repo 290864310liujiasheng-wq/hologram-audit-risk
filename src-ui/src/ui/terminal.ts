@@ -160,6 +160,9 @@ export class TerminalPanel {
       unlisten,
     };
 
+    // Store observer for cleanup (audit: prevent ResizeObserver leak)
+    (session as any)._observer = observer;
+
     this.sessions.push(session);
     return session;
   }
@@ -173,6 +176,9 @@ export class TerminalPanel {
     invoke('pty_kill', { sessionId: sess.ptySessionId }).catch(() => {});
     sess.unlisten();
     sess.term.dispose();
+    // Disconnect ResizeObserver (audit: prevent leak)
+    const observer = (sess as any)._observer as ResizeObserver | undefined;
+    if (observer) observer.disconnect();
     sess.el.remove();
 
     this.sessions.splice(idx, 1);

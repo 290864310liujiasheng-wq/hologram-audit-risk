@@ -472,10 +472,11 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
         if (!['fact', 'reference', 'background', 'suppressed'].includes(confidence)) {
           confidence = 'reference';
         }
-        // Enforce: Agent cannot self-elevate to fact
+        // Enforce: Agent cannot self-elevate to fact — auto-downgrade to reference
+        let factDowngraded = false;
         if (confidence === 'fact') {
           confidence = 'reference';
-          return '提示: Agent 不能自己指定 fact 级别。已降为 reference。fact 级别只能由用户通过 /remember 命令授权。';
+          factDowngraded = true;
         }
         await mm.save(
           args.name as string,
@@ -484,7 +485,10 @@ export function createMemoryTools(mm: MemoryManager): Tool[] {
           args.content as string,
           confidence,
         );
-        return `已保存记忆 "${args.name}" (${confidence})。`;
+        const downgradeNote = factDowngraded
+          ? ' (注意: fact 级别需用户授权，已自动降为 reference)'
+          : '';
+        return `已保存记忆 "${args.name}" (${confidence})。${downgradeNote}`;
       },
     },
     {
