@@ -1,11 +1,11 @@
 # HoloGram
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/HoloGramHG/HoloGram?color=orange)](https://github.com/HoloGramHG/HoloGram/releases)
-[![Stars](https://img.shields.io/github/stars/HoloGramHG/HoloGram?style=flat&color=yellow)](https://github.com/HoloGramHG/HoloGram/stargazers)
-[![CI](https://img.shields.io/badge/tests-911%20passed-brightgreen)](https://github.com/HoloGramHG/HoloGram/actions)
-[![Coverage](https://img.shields.io/badge/coverage-92%25-44cc11)](https://github.com/HoloGramHG/HoloGram/actions)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/HoloGramHG/HoloGram/releases)
+[![Release](https://img.shields.io/github/v/release/834063245-creator/HoloGram?color=orange)](https://github.com/834063245-creator/HoloGram/releases)
+[![Stars](https://img.shields.io/github/stars/834063245-creator/HoloGram?style=flat&color=yellow)](https://github.com/834063245-creator/HoloGram/stargazers)
+[![CI](https://img.shields.io/badge/tests-911%20passed-brightgreen)](https://github.com/834063245-creator/HoloGram/actions)
+[![Coverage](https://img.shields.io/badge/coverage-92%25-44cc11)](https://github.com/834063245-creator/HoloGram/actions)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/834063245-creator/HoloGram/releases)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Node.js](https://img.shields.io/badge/node-18%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -14,7 +14,7 @@
 [![Three.js](https://img.shields.io/badge/three.js-r184-black?logo=threedotjs&logoColor=white)](https://threejs.org/)
 [![Vite](https://img.shields.io/badge/vite-6-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Monaco](https://img.shields.io/badge/monaco-0.55-1E8BCB?logo=visualstudiocode&logoColor=white)](https://microsoft.github.io/monaco-editor/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/HoloGramHG/HoloGram/pulls)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/834063245-creator/HoloGram/pulls)
 
 <p align="center">
   <img src="assets/banner.png" alt="HoloGram" />
@@ -93,7 +93,7 @@ HoloGram **分析自身代码库**，项目根目录下的 `hologram_graph.json`
 
 ### Windows 预编译安装包
 
-从 [Releases](https://github.com/HoloGramHG/HoloGram/releases) 下载 `.msi` 安装程序。
+从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 下载 `.msi` 安装程序。
 
 ### 从源码构建
 
@@ -106,7 +106,7 @@ HoloGram **分析自身代码库**，项目根目录下的 `hologram_graph.json`
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/HoloGramHG/HoloGram.git
+git clone https://github.com/834063245-creator/HoloGram.git
 cd HoloGram
 
 # 2. Python 引擎

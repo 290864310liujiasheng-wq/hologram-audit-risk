@@ -41,11 +41,11 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/HoloGramHG/HoloGram"
-Documentation = "https://github.com/HoloGramHG/HoloGram/blob/main/README.md"
-Repository = "https://github.com/HoloGramHG/HoloGram"
-Issues = "https://github.com/HoloGramHG/HoloGram/issues"
-Discussions = "https://github.com/HoloGramHG/HoloGram/discussions"
+Homepage = "https://github.com/834063245-creator/HoloGram"
+Documentation = "https://github.com/834063245-creator/HoloGram/blob/main/README.md"
+Repository = "https://github.com/834063245-creator/HoloGram"
+Issues = "https://github.com/834063245-creator/HoloGram/issues"
+Discussions = "https://github.com/834063245-creator/HoloGram/discussions"
 
 dependencies = [
     "networkx>=3.0",

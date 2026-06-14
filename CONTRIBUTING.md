@@ -14,7 +14,7 @@ HoloGram 是一个 **Python 引擎 + Rust/Tauri 2 桌面壳 + TypeScript/Three.j
 
 ### 报告 Bug
 
-1. 在 [Issues](https://github.com/HoloGramHG/HoloGram/issues) 搜索是否已有相同报告
+1. 在 [Issues](https://github.com/834063245-creator/HoloGram/issues) 搜索是否已有相同报告
 2. 使用 Bug Report 模板
 3. 提供：
    - 操作系统和版本
@@ -89,7 +89,7 @@ tests/          Python 测试集（pytest）
 ### 需要帮助？
 
 - 阅读 [README](README.md)
-- 查看 [GitHub Discussions](https://github.com/HoloGramHG/HoloGram/discussions)
+- 查看 [GitHub Discussions](https://github.com/834063245-creator/HoloGram/discussions)
 - Python 代码内有大量中文注释，读源码也是好办法
 
 ---
