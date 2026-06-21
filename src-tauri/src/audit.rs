@@ -11,6 +11,7 @@ pub struct AuditEntry {
     pub target_path: String,
     pub action: String,   // "allowed" | "denied" | "user_approved" | "user_denied"
     pub reason: String,
+    pub details: Option<serde_json::Value>,
 }
 
 /// Append-only JSONL audit logger.
@@ -36,6 +37,7 @@ impl AuditLogger {
                 "path": entry.target_path,
                 "action": entry.action,
                 "reason": entry.reason,
+                "details": entry.details,
             });
             let _ = writeln!(f, "{}", line);
         }
@@ -48,6 +50,13 @@ impl AuditLogger {
         let lines: Vec<&str> = content.lines().collect();
         let start = if lines.len() > limit { lines.len() - limit } else { 0 };
         lines[start..].iter().map(|s| s.to_string()).collect()
+    }
+
+    pub fn recent_json(&self, limit: usize) -> Vec<serde_json::Value> {
+        self.recent(limit)
+            .into_iter()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+            .collect()
     }
 }
 

@@ -2591,6 +2591,7 @@ fn audit_allow(tool: &str, path: &str) {
                 target_path: path.to_string(),
                 action: "allowed".to_string(),
                 reason: String::new(),
+                details: None,
             });
         }
     }
@@ -2605,9 +2606,41 @@ fn audit_deny(tool: &str, path: &str, reason: &str) {
                 target_path: path.to_string(),
                 action: "denied".to_string(),
                 reason: reason.to_string(),
+                details: None,
             });
         }
     }
+}
+
+#[tauri::command]
+fn audit_append_review(
+    tool: String,
+    target_path: String,
+    action: String,
+    reason: String,
+    details_json: String,
+) -> Result<(), String> {
+    let details = serde_json::from_str::<serde_json::Value>(&details_json)
+        .map_err(|e| format!("audit_append_review: invalid details json: {e}"))?;
+    let logger = AUDIT_LOGGER.lock().map_err(|_| "audit_append_review: logger poisoned".to_string())?;
+    let logger = logger.as_ref().ok_or("audit_append_review: logger not initialized".to_string())?;
+    logger.log(&AuditEntry {
+        timestamp: now_iso(),
+        tool,
+        target_path,
+        action,
+        reason,
+        details: Some(details),
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn audit_recent_reviews(limit: Option<usize>) -> Result<String, String> {
+    let limit = limit.unwrap_or(10);
+    let logger = AUDIT_LOGGER.lock().map_err(|_| "audit_recent_reviews: logger poisoned".to_string())?;
+    let logger = logger.as_ref().ok_or("audit_recent_reviews: logger not initialized".to_string())?;
+    Ok(serde_json::json!({ "entries": logger.recent_json(limit) }).to_string())
 }
 
 #[tauri::command]
@@ -2778,6 +2811,8 @@ fn main() {
             workspace_activate,
             workspace_deactivate,
             workspace_start_watcher,
+            audit_append_review,
+            audit_recent_reviews,
             list_directory,
             read_file_content,
             write_file_content,

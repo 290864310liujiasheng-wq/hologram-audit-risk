@@ -5,6 +5,9 @@
 import { bus } from './events';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
+import { adaptCheckResultToFindings, buildCheckRiskSummary } from '../risk/check-adapter';
+import { summarizeRecentAuditEntries, type RecentAuditEntry } from '../risk/audit-bridge';
+import type { CurrentReviewState } from '../risk/current-review';
 
 export interface Violation {
   signal?: {
@@ -45,10 +48,13 @@ export class CheckPanel {
   private panel!: HTMLElement;
   private content!: HTMLElement;
   private headerStatus!: HTMLElement;
+  private tabLabelEl!: HTMLElement;
   private openState = false;
   private lastResult: CheckResult | null = null;
   private viewingHistory = false;
   private historyTimestamp = '';
+  private lastAuditRows: ReturnType<typeof summarizeRecentAuditEntries> = [];
+  private currentReviewState: CurrentReviewState | null = null;
 
   constructor(container: HTMLElement) {
     this.buildDOM(container);
@@ -56,11 +62,14 @@ export class CheckPanel {
 
   // ── Public API ──
 
-  update(result: CheckResult): void {
+  update(result: CheckResult, currentReviewState?: CurrentReviewState): void {
     this.lastResult = result;
+    this.currentReviewState = currentReviewState || null;
     this.viewingHistory = false;
     this.historyTimestamp = '';
     this.renderResult(result);
+    this.loadRecentAudit().catch(() => {});
+    this.refreshTabLabel();
 
     // Auto-open on failure
     if (!result.passed && !this.openState) {
@@ -69,6 +78,7 @@ export class CheckPanel {
   }
 
   showHistory(data: CheckResult, timestamp: string): void {
+    this.currentReviewState = null;
     this.viewingHistory = true;
     this.historyTimestamp = timestamp;
     this.renderResult(data, true);
@@ -81,6 +91,7 @@ export class CheckPanel {
     if (this.lastResult) {
       this.renderResult(this.lastResult);
     }
+    this.refreshTabLabel();
   }
 
   getLastResult(): CheckResult | null {
@@ -129,10 +140,10 @@ export class CheckPanel {
     this.headerStatus.className = 'check-tab-status check-loading';
     tab.appendChild(this.headerStatus);
 
-    const tabLabel = document.createElement('span');
-    tabLabel.className = 'check-tab-label';
-    tabLabel.textContent = '简报';
-    tab.appendChild(tabLabel);
+    this.tabLabelEl = document.createElement('span');
+    this.tabLabelEl.className = 'check-tab-label';
+    this.tabLabelEl.textContent = '简报';
+    tab.appendChild(this.tabLabelEl);
 
     const tabArrow = document.createElement('span');
     tabArrow.className = 'check-tab-arrow';
@@ -184,6 +195,15 @@ export class CheckPanel {
     header.appendChild(ts);
     this.content.appendChild(header);
 
+    if (this.lastAuditRows.length > 0) {
+      this.content.appendChild(this.renderRecentAudit());
+    }
+
+    if (!isHistory && this.currentReviewState) {
+      this.content.appendChild(this.renderMultiAgentReview(this.currentReviewState));
+      this.content.appendChild(this.renderRepairPlan(this.currentReviewState));
+    }
+
     // ── Files ──
     const filesSec = ce('div', 'check-section');
     const filesTitle = ce('div', 'check-section-title');
@@ -210,6 +230,8 @@ export class CheckPanel {
 
     // ── Violations ──
     if (!r.passed && totalV > 0) {
+      this.content.appendChild(this.renderRiskSummary(r));
+
       const vSec = ce('div', 'check-section');
       const vTitle = ce('div', 'check-section-title');
       vTitle.innerHTML = `${iconHtml('alert', 11)} 违规 (${totalV})`;
@@ -268,6 +290,48 @@ export class CheckPanel {
       }
       this.content.appendChild(apSec);
     }
+  }
+
+  private async loadRecentAudit(): Promise<void> {
+    const { invoke } = await import('../bridge');
+    const json = await invoke<string>('audit_recent_reviews', { limit: 6 });
+    const data = JSON.parse(json) as { entries?: RecentAuditEntry[] };
+    this.lastAuditRows = summarizeRecentAuditEntries(data.entries || []);
+    this.refreshTabLabel();
+    if (this.lastResult && !this.viewingHistory) {
+      this.renderResult(this.lastResult);
+    }
+  }
+
+  private renderRecentAudit(): HTMLElement {
+    const sec = ce('div', 'check-section check-risk-summary');
+    const title = ce('div', 'check-section-title');
+    title.innerHTML = `${iconHtml('clock', 11)} 最近审计`;
+    sec.appendChild(title);
+
+    for (const row of this.lastAuditRows) {
+      const item = ce('div', `check-gate-item ${row.actionLabel === '拒绝' ? 'check-gate-high' : 'check-gate-low'}`);
+      const head = ce('div', 'check-gate-item-head');
+      const tag = ce('span', `check-gate-risk ${row.actionLabel === '拒绝' ? 'check-gate-risk-high' : 'check-gate-risk-low'}`);
+      tag.textContent = `${row.toolLabel}${row.actionLabel}`;
+      head.appendChild(tag);
+
+      const name = ce('span', 'check-gate-name');
+      name.textContent = row.subject || 'workspace';
+      head.appendChild(name);
+
+      const ts = ce('span', 'check-gate-stats');
+      ts.textContent = fmtTime(row.timestamp);
+      head.appendChild(ts);
+      item.appendChild(head);
+
+      const reason = ce('div', 'check-gate-rec');
+      reason.textContent = row.reason;
+      item.appendChild(reason);
+      sec.appendChild(item);
+    }
+
+    return sec;
   }
 
   private renderViolationGroup(
@@ -365,6 +429,214 @@ export class CheckPanel {
     return group;
   }
 
+  private renderRiskSummary(result: CheckResult): HTMLElement {
+    const findings = adaptCheckResultToFindings(result, {
+      jobId: `check:${result.timestamp || 'current'}`,
+      evidencePrefix: 'check',
+    });
+    const summary = buildCheckRiskSummary(findings);
+
+    const sec = ce('div', 'check-section check-risk-summary');
+    const title = ce('div', 'check-section-title');
+    title.innerHTML = `${iconHtml('alert', 11)} 风控摘要 (${summary.total})`;
+    sec.appendChild(title);
+
+    const badges = ce('div', 'check-gate-summary');
+    if (summary.counts.critical > 0) {
+      const critical = ce('span', 'check-gate-badge check-gate-high');
+      critical.textContent = `✗ ${summary.counts.critical} Critical`;
+      badges.appendChild(critical);
+    }
+    if (summary.counts.high > 0) {
+      const high = ce('span', 'check-gate-badge check-gate-high');
+      high.textContent = `⚠ ${summary.counts.high} High`;
+      badges.appendChild(high);
+    }
+    if (summary.counts.medium > 0) {
+      const medium = ce('span', 'check-gate-badge check-gate-mid');
+      medium.textContent = `⚡ ${summary.counts.medium} Medium`;
+      badges.appendChild(medium);
+    }
+    if (summary.counts.low > 0) {
+      const low = ce('span', 'check-gate-badge check-gate-low');
+      low.textContent = `✓ ${summary.counts.low} Low`;
+      badges.appendChild(low);
+    }
+    sec.appendChild(badges);
+
+    for (const finding of summary.topFindings) {
+      const item = ce('div', `check-gate-item ${riskClassForSeverity(finding.severity)}`);
+      const head = ce('div', 'check-gate-item-head');
+      const risk = ce('span', `check-gate-risk ${riskLabelClassForSeverity(finding.severity)}`);
+      risk.textContent = finding.severity === 'critical' ? '阻断' : severityBadge(finding.severity);
+      head.appendChild(risk);
+
+      const name = ce('span', 'check-gate-name');
+      name.textContent = finding.locationLabel;
+      head.appendChild(name);
+
+      const category = ce('span', 'check-gate-stats');
+      category.textContent = finding.category;
+      head.appendChild(category);
+      item.appendChild(head);
+
+      const desc = ce('div', 'check-gate-rec');
+      desc.textContent = finding.plain_explanation;
+      item.appendChild(desc);
+      sec.appendChild(item);
+    }
+
+    return sec;
+  }
+
+  private renderMultiAgentReview(state: CurrentReviewState): HTMLElement {
+    const sec = ce('div', 'check-section check-risk-summary');
+    const title = ce('div', 'check-section-title');
+    title.innerHTML = `${iconHtml('agent', 11)} 多代理审计`;
+    sec.appendChild(title);
+
+    const summary = ce('div', 'check-gate-summary');
+    const completed = state.multi_agent_review.agent_results.filter((result) => result.run.status === 'completed').length;
+    const degraded = state.multi_agent_review.agent_results.filter((result) => result.run.status === 'degraded').length;
+
+    const completedBadge = ce('span', 'check-gate-badge check-gate-low');
+    completedBadge.textContent = `✓ ${completed} 已完成`;
+    summary.appendChild(completedBadge);
+
+    if (degraded > 0) {
+      const degradedBadge = ce('span', 'check-gate-badge check-gate-mid');
+      degradedBadge.textContent = `⚠ ${degraded} 降级`;
+      summary.appendChild(degradedBadge);
+    }
+
+    if (state.multi_agent_review.aggregation.conflicts.length > 0) {
+      const conflictBadge = ce('span', 'check-gate-badge check-gate-high');
+      conflictBadge.textContent = `✗ ${state.multi_agent_review.aggregation.conflicts.length} 冲突`;
+      summary.appendChild(conflictBadge);
+    }
+    sec.appendChild(summary);
+
+    for (const result of state.multi_agent_review.agent_results) {
+      const item = ce('div', `check-gate-item ${result.run.status === 'degraded' ? 'check-gate-mid' : 'check-gate-low'}`);
+      const head = ce('div', 'check-gate-item-head');
+      const tag = ce('span', `check-gate-risk ${result.run.status === 'degraded' ? 'check-gate-risk-mid' : 'check-gate-risk-low'}`);
+      tag.textContent = result.run.status === 'degraded' ? '降级' : '完成';
+      head.appendChild(tag);
+
+      const name = ce('span', 'check-gate-name');
+      name.textContent = result.run.agent_type;
+      head.appendChild(name);
+
+      const stats = ce('span', 'check-gate-stats');
+      stats.textContent = `${result.findings.length} finding(s)`;
+      head.appendChild(stats);
+      item.appendChild(head);
+
+      const desc = ce('div', 'check-gate-rec');
+      desc.textContent = result.run.error || `建议: ${result.suggested_decision}`;
+      item.appendChild(desc);
+      sec.appendChild(item);
+    }
+
+    if (state.multi_agent_review.degraded_reasons.length > 0) {
+      const note = ce('div', 'check-vmore');
+      note.textContent = `降级原因: ${state.multi_agent_review.degraded_reasons.join('；')}`;
+      sec.appendChild(note);
+    }
+
+    return sec;
+  }
+
+  private renderRepairPlan(state: CurrentReviewState): HTMLElement {
+    const sec = ce('div', 'check-section check-risk-summary');
+    const title = ce('div', 'check-section-title');
+    title.innerHTML = `${iconHtml('tool', 11)} 自修复闭环`;
+    sec.appendChild(title);
+
+    const plan = state.repair_plan;
+    const statusRow = ce('div', 'check-gate-summary');
+    const status = ce('span', `check-gate-badge ${repairBadgeClass(plan.approval_state)}`);
+    status.textContent = `状态 ${plan.approval_state}`;
+    statusRow.appendChild(status);
+    const tests = ce('span', 'check-gate-badge check-gate-low');
+    tests.textContent = `${plan.required_tests.length} 个验证命令`;
+    statusRow.appendChild(tests);
+    sec.appendChild(statusRow);
+
+    const strategy = ce('div', 'check-gate-rec');
+    strategy.textContent = plan.strategy;
+    sec.appendChild(strategy);
+
+    const risk = ce('div', 'check-vchange');
+    risk.textContent = plan.risk_note;
+    sec.appendChild(risk);
+
+    const commandList = ce('div', 'check-vaffect');
+    commandList.textContent = `验证: ${plan.required_tests.join(' · ')}`;
+    sec.appendChild(commandList);
+
+    if (state.patch_proposal) {
+      const proposal = ce('div', 'check-vaffect');
+      proposal.textContent = `补丁提案: ${state.patch_proposal.summary} · ${state.patch_proposal.operations.length} 个文件操作`;
+      sec.appendChild(proposal);
+    }
+
+    const actions = ce('div', 'check-gate-summary');
+    if (plan.approval_state === 'draft' || plan.approval_state === 'rejected' || plan.approval_state === 'rolled_back') {
+      actions.appendChild(this.actionButton('生成补丁提案', () => bus.emit('repair:generate-proposal')));
+    }
+    if (plan.approval_state === 'waiting_approval') {
+      actions.appendChild(this.actionButton('审批修复', () => bus.emit('repair:request-approval')));
+    }
+    if (plan.approval_state === 'approved') {
+      actions.appendChild(this.actionButton('应用修复', () => bus.emit('repair:apply')));
+    }
+    if (plan.approval_state === 'applied') {
+      actions.appendChild(this.actionButton('回滚修复', () => bus.emit('repair:rollback')));
+    }
+    if (actions.childElementCount > 0) {
+      sec.appendChild(actions);
+    }
+
+    return sec;
+  }
+
+  private actionButton(label: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = 'check-ask-btn';
+    button.textContent = label;
+    button.style.width = 'auto';
+    button.style.padding = '6px 10px';
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  private refreshTabLabel(): void {
+    const totalViolations = this.lastResult
+      ? (this.lastResult.l5_violations?.length || 0)
+        + (this.lastResult.l4_violations?.length || 0)
+        + (this.lastResult.l3_violations?.length || 0)
+        + (this.lastResult.l2_violations?.length || 0)
+      : 0;
+    const auditCount = this.lastAuditRows.length;
+
+    if (totalViolations === 0 && auditCount === 0) {
+      this.tabLabelEl.textContent = '简报';
+      const reviewStatus = document.getElementById('status-review');
+      if (reviewStatus) reviewStatus.textContent = '';
+      document.title = '🔮 全息观测站 — HoloGram Observatory';
+      return;
+    }
+
+    this.tabLabelEl.textContent = `简报 ${totalViolations}风控 ${auditCount}审计`;
+    const reviewStatus = document.getElementById('status-review');
+    if (reviewStatus) reviewStatus.textContent = `风控${totalViolations} · 审计${auditCount}`;
+    document.title = `🔮 风控${totalViolations} 审计${auditCount} — 全息观测站`;
+  }
+
   private statItem(label: string, value: string): HTMLElement {
     const el = ce('div', 'check-stat');
     const lbl = ce('span', 'check-stat-label');
@@ -447,6 +719,21 @@ export class CheckPanel {
   }
 }
 
+function repairBadgeClass(state: CurrentReviewState['repair_plan']['approval_state']): string {
+  switch (state) {
+    case 'approved':
+    case 'applied':
+      return 'check-gate-low';
+    case 'waiting_approval':
+      return 'check-gate-mid';
+    case 'rejected':
+    case 'rolled_back':
+      return 'check-gate-high';
+    default:
+      return 'check-gate-mid';
+  }
+}
+
 // ── Gate data types ──
 
 interface GateModule {
@@ -494,4 +781,30 @@ function fmtTime(iso: string): string {
   } catch {
     return iso.slice(11, 19) || iso.slice(0, 19);
   }
+}
+
+function severityBadge(severity: 'info' | 'low' | 'medium' | 'high' | 'critical'): string {
+  switch (severity) {
+    case 'critical': return '高';
+    case 'high': return '高';
+    case 'medium': return '中';
+    case 'low': return '低';
+    default: return '提示';
+  }
+}
+
+function riskClassForSeverity(severity: 'info' | 'low' | 'medium' | 'high' | 'critical'): string {
+  return severity === 'critical' || severity === 'high'
+    ? 'check-gate-high'
+    : severity === 'medium'
+      ? 'check-gate-mid'
+      : 'check-gate-low';
+}
+
+function riskLabelClassForSeverity(severity: 'info' | 'low' | 'medium' | 'high' | 'critical'): string {
+  return severity === 'critical' || severity === 'high'
+    ? 'check-gate-risk-high'
+    : severity === 'medium'
+      ? 'check-gate-risk-mid'
+      : 'check-gate-risk-low';
 }

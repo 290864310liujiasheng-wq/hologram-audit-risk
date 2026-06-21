@@ -1,72 +1,66 @@
-# Agent 项目理解 — HoloGram
+# AGENTS.md
 
-> 生成：2026-06-18 · 供 Cursor/Claude 等 Agent 快速上手  
-> 详细历史与变更记录见 [PROJECT.md](PROJECT.md)
+本仓库当前推进方向是“AI 编码风控平台”。默认使用中文，除非用户明确要求英文。
 
-## 一句话
+## 当前主线
 
-把代码库变成可对话的 3D 依赖星图——18 语言统一 IR，46 个原生工具直查图，不是让 LLM 猜源码。
+- 产品不是通用代码星图演示页，也不是平台统一卖模型额度。
+- 核心能力是一边开发一边审查 AI 生成或修改的代码，发现风险、给出逐行白话解释、按规则拦截危险变更，并保留可审计证据。
+- 客户接入自己的模型 API。平台只做模型接入、审查编排、权限控制、风险解释、审计留痕和受控修复。
+- UI 风格按已确认的深色 IDE 工作台方向推进，不改成营销页、浅色 SaaS 首页或卡片拼盘。
+- 架构必须为后续多代理并行审计、主智能体汇总、受控自修复、不中断客户使用预留边界。
 
-## 目录结构
+## 当前仓库事实
 
-```
-HoloGramHG/
-├── engine/          Rust 分析引擎（287 tests, 25 MCP 工具）
-├── src-tauri/       Tauri 2 壳（命令桥接 + 安全沙箱）
-├── src-ui/          TypeScript 前端（Three.js + Agent + Monaco）
-├── tests/           遗留 Python 测试（引擎已 Rust 化，部分仍可用）
-├── assets/          图标、UI 原型
-├── .cursor/rules/   Agent 持久化规则（4 个 .mdc）
-├── PROJECT.md       现状说明（~100 行，禁止堆日记）
-├── BUGS.md          活 bug 清单（用户写，Agent 修）
-├── CLAUDE.md        Agent 工作指令
-└── V4_CONSTRUCTION_PLAN.md  v4 施工方案（已竣工）
-```
+- 现有代码仍保留 HoloGram 代码图谱/桌面 IDE 基座：`engine/` Rust 分析引擎、`src-tauri/` 桌面壳、`src-ui/` TypeScript 前端与 Agent 工具循环。
+- 可复用基座包括：代码图谱分析、Provider 抽象、Agent 工具注册、权限门禁、审计日志、深色工作台 UI、Tauri 本地能力。
+- 根 `README.md` 与 `docs/` 仍偏外部 HoloGram 说明；在用户确认迁移前，不把它们当作当前产品边界的最高真源。
+- 内部产品与架构真源以 `dev-docs/README.md` 索引的 active docs 为准，但当前源码、测试、脚本和 git 状态始终优先于文档。
 
-## 数据流
+## 工作规则
 
-```mermaid
-flowchart LR
-  UI[src-ui Three.js + Agent] -->|invoke| Tauri[src-tauri]
-  Tauri -->|TCP :9777| Engine[engine/]
-  Engine -->|tree-sitter| AST[18 语言 AST]
-  Engine -->|GraphStore| DB[(hologram.db + FTS5)]
-  MCP[Cursor MCP] -->|stdio serve| Engine
-```
+- 编码前先确认当前真源：读相关源码、接口、调用链、测试、脚本、`dev-docs/README.md` 和 git 状态。
+- 不要把本项目当空项目重写；已有代码可能语义陈旧，但仍是可审计证据。
+- 架构优先、设计优先、合同优先。跨 UI/API/Agent/引擎复用的语义必须进入共享合同或核心层。
+- UI、HTTP/Tauri 命令、MCP、CLI、prompt、mock、临时脚本只做适配和展示，不拥有核心业务语义。
+- 禁止补丁式开发：不得用散落 if、硬编码关键词、临时兼容分支、sleep、全局 flag、prompt 文案或 UI 条件绕过架构问题。
+- 禁止无意义向后兼容。旧字段、旧接口、旧产品残影若污染当前合同，先向用户提出取舍，不擅自保留双路径。
+- 用户明确否定的概念必须从代码、文档、计划和命名中删除，禁止换个名字继续保留。
+- 不要编造 API、配置项、文件路径、运行结果、模型能力或审计证据。不确定时先搜索或运行验证。
+- 不要写入密钥、Token、私钥、`.env` 内容或登录凭证。模型 key 只能通过本地设置、系统密钥存储或环境变量接入。
+- 每次行为变化、合同变化、架构边界变化、验收口径变化后，同步更新 `dev-docs/`。
 
-## 分析能力栈
+## 架构边界
 
-| 版本 | 能力 | 关键模块 |
-|------|------|----------|
-| V1 | 节点/边/社区/BFS/路径/diff | `graph/`, `community/` |
-| V2 | L1-L4 耦合、数据流环、线程冲突、盲点 | `analysis/` |
-| V3 | L5-L1 破坏信号、YAML 约束、变更简报 | `routing/` |
-| v4+ | 框架路由(8)、动态调度合成、NL explore | `framework_routes`, `dynamic_dispatch`, `explore` |
+- `engine/`：代码结构、依赖、变更影响、静态分析信号的候选 owner。
+- `src-ui/src/provider/`：客户自带模型 API 的 provider 适配边界。
+- `src-ui/src/agent/`：Agent 循环、工具调用、权限门禁、会话事件的现有前端 owner。
+- `src-tauri/src/`：本地文件、进程、凭证、审计、沙箱和桌面系统能力边界。
+- `dev-docs/contracts.md`：风险审查、规则命中、拦截决策、审计事件、自修复计划等产品合同的当前设计真源。
+- 新增核心语义时，先选择单一 owner；不要让同一概念同时散落在 UI、Tauri、engine 和 prompt 中。
 
-## 当前工作区状态（2026-06-18）
+## 多代理与自修复原则
 
-**未提交改动（12 文件）：** 引擎 adapter/synthesis 管线整合——`runner.rs` 新增 parse_cache 供 dataflow/dynamic_dispatch/framework_routes 复用 AST；`engine.rs` 统一 synthesis 调用；`src-tauri/main.rs` 桥接层同步。
+- 多代理只并行做独立审计面：静态结构、规则策略、依赖影响、权限/供应链、测试回归、修复候选等。
+- 主智能体负责汇总、去重、冲突裁决、严重级别校准和最终阻断/放行建议。
+- 自修复必须先生成修复计划，再经规则、diff、测试和用户/策略授权；禁止静默改代码。
+- 客户使用不中断是硬边界：审查和修复应尽量走旁路、增量、可取消、可回滚的流程。
 
-## Agent 操作手册
+## 验收
 
-1. **探索代码：** 优先 MCP `hologram_explore`（自然语言 query）
-2. **高风险模块：** `hologram_fragile` · `hologram_cycle`
-3. **改引擎：** `cd engine && cargo test --lib`
-4. **改前端：** `cd src-ui && npx tsc --noEmit`
-5. **打包：** `cargo tauri build`（前端改动需先 `npm run build`）
+- 文档改动：读回文档、检查 `dev-docs/README.md` 索引、用 `rg` 查旧语义冲突。
+- 代码改动：按风险面运行最小相关测试；Rust 优先 `cargo test`/`cargo check`，前端优先 `npm run build` 或 `npx tsc --noEmit`。
+- UI 改动：除构建外，必须实际预览或截图验证关键视图。
+- 结论必须说明已验证的 evidence plane 和未验证风险，不得用旧输出、记忆或猜测代替当前验证。
 
-## 持久化规则索引
+## 停止条件
 
-| 规则文件 | 作用域 |
-|----------|--------|
-| `.cursor/rules/hologram-overview.mdc` | 始终生效 — 产品/架构/用户 |
-| `.cursor/rules/hologram-engine.mdc` | `engine/**` |
-| `.cursor/rules/hologram-frontend.mdc` | `src-ui/**` |
-| `.cursor/rules/hologram-tauri.mdc` | `src-tauri/**` |
+- 文档阶段停止条件：`dev-docs/README.md` 索引齐全，active docs 相互一致，Sliver guardrail 检查通过或明确记录未通过原因。
+- 代码阶段停止条件：核心合同、owner 层、测试/构建命令、审计或 UI 验收全部有当前证据。
+- 若发现产品主线、合同或用户指令冲突，先停下来说明冲突，不继续补丁式推进。
 
-## 不要做的事
+## Git
 
-- 不要恢复 Python 引擎路径
-- 不要改 `graph.ts` layout3D 参数（除非用户明确要求）
-- 不要在程序层「推断 bug 根源」或「解释因果」——只呈现图数据
-- 不要用 `cargo build --release` 代替 `cargo tauri build`
+- 提交前确认 repo root、`git status --short`、ignored 文件和 staged file list。
+- 禁止 `git add .`；只 stage 明确路径。
+- 不要回滚用户已有改动。当前已知未跟踪项如 `src-ui/.npm-cache/` 与文档任务无关，默认忽略。

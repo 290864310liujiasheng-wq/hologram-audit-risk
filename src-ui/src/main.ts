@@ -300,10 +300,12 @@ function setupIcons(): void {
 // ── Init ──
 
 async function init(): Promise<void> {
-  setLang(loadSettings().display.language);
+  if (isMockMode()) {
+    statusText.textContent = 'MOCK 启动中…';
+    document.title = '🔮 Mock 启动中';
+  }
 
-  const { listen } = await import('@tauri-apps/api/event');
-  const { bus: eventBus } = await import('./ui/events');
+  setLang(loadSettings().display.language);
   const { FileViewer } = await import('./ui/file-viewer');
 
   await listen('unity-event', (event: any) => {
@@ -311,7 +313,7 @@ async function init(): Promise<void> {
     console.log('[Unity]', evt, payload);
     if (evt === 'node_double_clicked') {
       const parts = (payload as string).split('|');
-      if (parts.length > 1 && parts[1]) eventBus.emit('navigate:file', parts[1]);
+      if (parts.length > 1 && parts[1]) bus.emit('navigate:file', parts[1]);
     }
     if (evt === 'path_selected') {
       const parts = (payload as string).split('|');
@@ -399,6 +401,30 @@ async function init(): Promise<void> {
     if (ConstraintsPanel.get().isOpen()) ConstraintsPanel.get().close();
     chatPanel.ask(question);
     updateTabs();
+  });
+
+  bus.on('repair:generate-proposal', () => {
+    if (workspace?.path) workspace.generateRepairPatchProposal(checkPanel).catch((error) => {
+      console.error('repair generate proposal failed:', error);
+    });
+  });
+
+  bus.on('repair:request-approval', () => {
+    if (workspace?.path) workspace.requestRepairApproval(checkPanel).catch((error) => {
+      console.error('repair approval failed:', error);
+    });
+  });
+
+  bus.on('repair:apply', () => {
+    if (workspace?.path) workspace.applyRepairPatch(checkPanel).catch((error) => {
+      console.error('repair apply failed:', error);
+    });
+  });
+
+  bus.on('repair:rollback', () => {
+    if (workspace?.path) workspace.rollbackRepairPatch(checkPanel).catch((error) => {
+      console.error('repair rollback failed:', error);
+    });
   });
 
   bus.on('chat:turn-done', () => {
@@ -780,6 +806,14 @@ async function init(): Promise<void> {
   // ═══════════════════════════════════════════════════════════════
 
   try {
+    if (isMockMode()) {
+      await switchWorkspace('/mock/nebula-project');
+      statusText.textContent = '🎨 Mock 模式 — 风控工作台已加载';
+      checkPanel.open();
+      updateTabs();
+      return;
+    }
+
     let graph: any;
     try {
       const json = await invoke<string>('load_graph_json');
@@ -821,6 +855,10 @@ async function init(): Promise<void> {
       // Use unified switchWorkspace with cached graph
       await switchWorkspace(root, { skipAnalysis: true, cachedGraph: graph });
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
+      if (isMockMode()) {
+        checkPanel.open();
+        updateTabs();
+      }
       // Engine warm-up happens via runCheck → engine_init (SQLite cache). Do NOT fire
       // hologram_analyze here — it races with runCheck's analyze fallback and blocks workspace switches.
       return;

@@ -250,6 +250,7 @@ const MOCK_TOOL_RESPONSES: Record<string, any> = {
   hologram_run_check: JSON.stringify(buildMockCheck(false)),
   hologram_run_preflight: JSON.stringify({ risk: "medium", warnings: ["波及 7 个节点"], recommendations: ["建议拆分 middleware.ts"] }),
   hologram_run_health: JSON.stringify({ score: 72, trend: "declining", top_changed: ["middleware.ts", "cache.ts"], issues: ["L4 封装穿透增加"] }),
+  hologram_record_event: "ok",
   read_file_content: `// nebula/core/middleware.ts (mock)
 import { Request } from './request';
 import { Response } from './response';
@@ -375,9 +376,50 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     return JSON.stringify(buildMockGraph());
   }
 
+  if (cmd === 'workspace_activate' || cmd === 'workspace_deactivate' || cmd === 'workspace_start_watcher') {
+    return 'ok';
+  }
+
+  if (cmd === 'get_active_project') {
+    return '/mock/nebula-project';
+  }
+
   // Check
   if (cmd === 'hologram_run_check') {
     return JSON.stringify(buildMockCheck(false));
+  }
+
+  if (cmd === 'audit_append_review') {
+    return '(mock: review audit appended)';
+  }
+
+  if (cmd === 'audit_recent_reviews') {
+    return JSON.stringify({
+      entries: [
+        {
+          ts: new Date().toISOString(),
+          tool: 'review_check',
+          path: '/mock/nebula-project',
+          action: 'denied',
+          reason: 'Review check found 4 finding(s).',
+        },
+        {
+          ts: new Date(Date.now() - 15000).toISOString(),
+          tool: 'repair_apply',
+          path: '/mock/nebula-project',
+          action: 'allowed',
+          reason: 'Repair patch applied.',
+        },
+        {
+          ts: new Date(Date.now() - 30000).toISOString(),
+          tool: 'approval.write_file_content',
+          path: '/mock/nebula-project',
+          action: 'allowed',
+          reason: 'User approved tool execution.',
+          details: { subject: 'nebula/core/middleware.ts', remember: false },
+        },
+      ],
+    });
   }
 
   // Watcher (no-op)

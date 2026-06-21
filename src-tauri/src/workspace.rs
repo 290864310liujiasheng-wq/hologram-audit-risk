@@ -209,6 +209,7 @@ impl WorkspaceHandle {
             target_path: path.to_string(),
             action: "allowed".to_string(),
             reason: String::new(),
+            details: None,
         });
     }
 
@@ -219,6 +220,7 @@ impl WorkspaceHandle {
             target_path: path.to_string(),
             action: "denied".to_string(),
             reason: reason.to_string(),
+            details: None,
         });
     }
 }

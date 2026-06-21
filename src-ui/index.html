@@ -1711,6 +1711,7 @@
     }
     .check-gate-risk-high { background: rgba(217,68,68,0.15); color: var(--fail); }
     .check-gate-risk-mid { background: rgba(214,150,34,0.15); color: var(--warn); }
+    .check-gate-risk-low { background: rgba(61,165,93,0.14); color: var(--pass); }
     .check-gate-name {
       font-family: var(--font-mono); color: var(--starlight-dim);
       flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1720,6 +1721,7 @@
       font-size: 9px; color: var(--text-muted); padding-left: 26px; margin-top: 2px;
       line-height: 1.3;
     }
+    .check-risk-summary { margin-bottom: 6px; }
 
     /* ═══════════════════════════════════════════════════════════════
        TERMINAL — system console, bottom panel (multi-tab)
@@ -3115,6 +3117,7 @@
   <div id="status">
     <span class="left" id="status-text">◈ STATUS NOMINAL · 就绪</span>
     <span class="right">
+      <span id="status-review"></span>
       <span id="status-nodes"></span>
       <span id="status-edges"></span>
     </span>

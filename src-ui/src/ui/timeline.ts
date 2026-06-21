@@ -30,6 +30,8 @@ const TYPE_ICONS: Record<string, string> = {
   commit_violation: iconHtml('alert', 10),
   commit_clean: iconHtml('check-circle', 10),
   check: iconHtml('chart', 10),
+  approval_requested: iconHtml('agent', 10),
+  approval_resolved: iconHtml('check-circle', 10),
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -41,6 +43,8 @@ const TYPE_LABELS: Record<string, string> = {
   commit_violation: '变更风险',
   commit_clean: '变更通过',
   check: '简报',
+  approval_requested: '审批请求',
+  approval_resolved: '审批结果',
 };
 
 export class TimelinePanel {

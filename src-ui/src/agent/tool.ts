@@ -812,6 +812,34 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
       readOnly: () => true,
       execute: (args) => exec('read_constraints', args),
     },
+    {
+      name: () => 'audit_recent_reviews',
+      description: () =>
+        'Read recent review and approval audit records from .hologram/audit.jsonl. Returns the newest review_check and approval.* entries with action, reason, and details. Use when you need the latest risk-review trail, approval decisions, or audit evidence.',
+      parameters: () => ({
+        type: 'object',
+        properties: {
+          limit: {
+            type: 'integer',
+            description: 'Maximum number of recent review/approval audit entries to return (default: 10)',
+            default: 10,
+          },
+        },
+      }),
+      readOnly: () => true,
+      execute: (args) => exec('audit_recent_reviews', { limit: args.limit || 10 }),
+    },
+    {
+      name: () => 'current_review_summary',
+      description: () =>
+        'Read the latest in-memory review summary from the current check panel. Returns the newest check result transformed into finding counts and top findings. Use when you need the current risk state instead of historical audit records.',
+      parameters: () => ({
+        type: 'object',
+        properties: {},
+      }),
+      readOnly: () => true,
+      execute: () => exec('current_review_summary', {}),
+    },
 
     // ── Code Search ──
     {
