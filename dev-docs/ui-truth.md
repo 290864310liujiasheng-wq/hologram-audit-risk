@@ -96,11 +96,21 @@
 
 - `block` 必须明确显示阻断原因，不允许只给红点或图标
 - 必须能看到对应 rule 和 evidence
+- 当前 review 的 `gate decision` 应直接在工作台内可见，不能只在多代理或修复步骤之后间接推断
 
 ### 查看降级
 
 - provider 失败、子代理超时、审计失败等降级必须可见
 - 不允许静默失败后仍展示“全部正常”
+- 当前 active provider 是否 ready、来源是 inline / secure_store / missing，以及缺失原因，也必须在 `自修复闭环` 区块内可见，避免用户只能先点生成提案再被动收错误。
+- 若当前会话仍处于 browser mock / mock workspace，即使聊天助手可用，也必须在 `自修复闭环` 区块内明确提示“当前不具备真实 live repair 证据资格”。
+- 若当前 review 没有进入自修复闭环的风险，或风险没有收口到可编辑源码输入，`自修复闭环` 区块必须显示明确空状态，并把按钮改成不可自动修复，而不是继续允许点击后再报 provider/source-file 错误。
+- 若结构性风险可以通过当前 `changed_files` 收口到真实源码输入，系统应优先尝试这条回退路径；只有在 finding 路径和 changed_files 都无法提供可读源码时，才允许显示“当前不可自动修复”。
+- 若当前 repo 没有新的已识别风险，状态文案必须直接显示“当前无可修复风险”，而不是继续显示 draft/验证命令等会让用户误以为还能自动修复的中间态。
+- repair planner 的 provider/key/timeout/source-context 失败必须在 `自修复闭环` 区块内可见，并明确是否可重试
+- repair preflight 失败也必须在 `自修复闭环` 区块内可见，并保留原 proposal 上下文，不允许只剩一条瞬时状态栏报错
+- 若 preflight 已返回失败命令和阻断 rule，工作台应直接展示这些细节，而不是要求用户自己去 audit 原始 JSON 里猜
+- repair apply 执行中若已自动回滚，也必须在 `自修复闭环` 区块内明确展示 rollback 证据
 
 ## 第一版必须有的面板
 

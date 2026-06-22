@@ -167,11 +167,48 @@ export interface RepairRollbackSnapshot {
   created_at: string;
 }
 
+export interface ValidationCommandResult {
+  command: string;
+  passed: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+export interface RepairPreflightReport {
+  repair_plan_id: string;
+  findings: ReviewFinding[];
+  gate_decision: GateDecision;
+  test_results: ValidationCommandResult[];
+}
+
+export type RepairExecutionStage =
+  | 'proposal_generation'
+  | 'preflight'
+  | 'apply'
+  | 'rollback';
+
+export interface RepairIssue {
+  issue_id: string;
+  repair_plan_id: string;
+  stage: RepairExecutionStage;
+  summary: string;
+  error: ContractError;
+  created_at: string;
+}
+
 export interface ContractError {
   code:
     | 'invalid_request'
     | 'missing_evidence'
+    | 'provider_auth_invalid'
+    | 'provider_upstream_failed'
     | 'provider_unavailable'
+    | 'network_unreachable'
+    | 'tls_handshake_failed'
+    | 'tls_cert_revoked'
+    | 'proxy_rejected'
+    | 'connection_interrupted'
+    | 'rate_limited'
     | 'policy_blocked'
     | 'approval_required'
     | 'audit_write_failed'
@@ -198,6 +235,22 @@ const effectToDecision: Record<GateEffect, GateDecisionValue> = {
 
 export function validateReviewJobRequest(request: ReviewJobRequest): ContractError[] {
   const errors: ContractError[] = [];
+
+  if (!request.workspace_id.trim()) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'ReviewJobRequest requires a workspace id.',
+      retryable: false,
+    });
+  }
+
+  if (!request.change_id.trim()) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'ReviewJobRequest requires a change id.',
+      retryable: false,
+    });
+  }
 
   if (!request.policy_profile_id.trim()) {
     errors.push({
@@ -269,6 +322,59 @@ export function validateReviewFinding(finding: ReviewFinding): ContractError[] {
     });
   }
 
+  if (finding.locations.some((location) =>
+    !location.file_path.trim()
+    || location.start_line < 1
+    || location.end_line < location.start_line,
+  )) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'ReviewFinding source locations must use positive, ordered line ranges.',
+      retryable: false,
+      evidence_ids: finding.evidence_ids,
+    });
+  }
+
+  const explanation = finding.plain_explanation.trim();
+  if (
+    explanation.length < 6
+    || explanation === finding.rule_id
+    || /^[A-Za-z0-9_.-]+$/.test(explanation)
+  ) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'ReviewFinding plain explanation must be human-readable, not just an identifier.',
+      retryable: false,
+      evidence_ids: finding.evidence_ids,
+    });
+  }
+
+  const impact = finding.impact.trim();
+  if (
+    impact.length < 8
+    || /^[A-Za-z0-9_.-]+$/.test(impact)
+  ) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'ReviewFinding impact must describe the user-visible or system impact in plain language.',
+      retryable: false,
+      evidence_ids: finding.evidence_ids,
+    });
+  }
+
+  const recommendation = finding.recommendation.trim();
+  if (
+    recommendation.length < 8
+    || /^[A-Za-z0-9_.-]+$/.test(recommendation)
+  ) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'ReviewFinding recommendation must contain a concrete human-readable action.',
+      retryable: false,
+      evidence_ids: finding.evidence_ids,
+    });
+  }
+
   return errors;
 }
 
@@ -309,6 +415,54 @@ export function deriveGateDecision(input: {
     policy_snapshot_id: input.policy_snapshot_id,
     decided_at: input.decided_at,
   };
+}
+
+export function validateGateDecision(decision: GateDecision): ContractError[] {
+  const errors: ContractError[] = [];
+
+  if (!decision.subject_ref.trim()) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'GateDecision requires a subject reference.',
+      retryable: false,
+      evidence_ids: decision.finding_ids,
+    });
+  }
+
+  if (!decision.policy_snapshot_id.trim()) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'GateDecision requires a policy snapshot id.',
+      retryable: false,
+      evidence_ids: decision.finding_ids,
+    });
+  }
+
+  if (
+    (decision.decision === 'block' || decision.decision === 'require_approval')
+    && !decision.reason.trim()
+  ) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'Blocking or approval decisions require a human-readable reason.',
+      retryable: false,
+      evidence_ids: decision.finding_ids,
+    });
+  }
+
+  if (
+    (decision.decision === 'block' || decision.decision === 'require_approval')
+    && decision.finding_ids.length === 0
+  ) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'Blocking or approval decisions require at least one finding id.',
+      retryable: false,
+      evidence_ids: decision.finding_ids,
+    });
+  }
+
+  return errors;
 }
 
 export function finalizeReviewJobResult(input: {

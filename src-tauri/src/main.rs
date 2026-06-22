@@ -22,9 +22,9 @@ use unity_manager::UnityManager;
 use sandbox::Sandbox;
 use audit::{AuditEntry, AuditLogger, now_iso};
 use std::collections::HashMap;
+use std::process::Command;
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread;
 use std::time::Duration;
@@ -380,6 +380,46 @@ fn run_engine_analysis(project_path: &str, _changed_files: &[String]) -> Option<
             None
         }
     }
+}
+
+fn git_changed_files(project_path: &str) -> Vec<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .arg("status")
+        .arg("--short")
+        .output();
+
+    let output = match output {
+        Ok(v) if v.status.success() => v,
+        _ => return Vec::new(),
+    };
+
+    parse_git_status_changed_files(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_git_status_changed_files(raw: &str) -> Vec<String> {
+    let mut files = Vec::new();
+
+    for line in raw.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let path_part = line[3..].trim();
+        if path_part.is_empty() {
+            continue;
+        }
+        let normalized = if let Some((_, to)) = path_part.split_once("->") {
+            to.trim()
+        } else {
+            path_part
+        };
+        if !normalized.is_empty() {
+            files.push(normalized.replace('\\', "/"));
+        }
+    }
+
+    files
 }
 
 // ═══════════════════════════════════════════════════════
@@ -821,8 +861,11 @@ async fn hologram_run_check(path: Option<String>) -> Result<String, String> {
                 }
             }
         };
-        let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
+        let mut changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
             .map(|f| f.clone()).unwrap_or_default();
+        if changed_files.is_empty() {
+            changed_files = git_changed_files(&target);
+        }
         // Clear immediately so next check gets a fresh set
         if let Ok(mut last) = LAST_CHANGED_FILES.lock() {
             last.clear();
@@ -1077,8 +1120,11 @@ async fn hologram_gate_check(
     tokio::task::spawn_blocking(move || {
         use engine::routing::preflight::run_full_check;
         let after = engine_api::engine_read_graph(|g| g.clone()).unwrap_or_default();
-        let changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
+        let mut changed_files: Vec<String> = LAST_CHANGED_FILES.lock()
             .map(|f| f.clone()).unwrap_or_default();
+        if changed_files.is_empty() {
+            changed_files = git_changed_files(&target);
+        }
         let result = run_full_check(&after, &after, &changed_files, &target);
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }).await.map_err(|e| format!("任务失败: {e}"))?
@@ -2712,6 +2758,11 @@ fn credential_get(provider: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn credential_has(provider: String) -> Result<bool, String> {
+    credential::has_api_key(&provider)
+}
+
+#[tauri::command]
 fn credential_clear() -> Result<(), String> {
     credential::clear_credentials()
 }
@@ -2875,6 +2926,7 @@ fn main() {
             engine_impact,
             credential_store,
             credential_get,
+            credential_has,
             credential_clear,
         ])
         .setup(|app| {
@@ -2948,5 +3000,18 @@ mod tests {
         let val = ACTIVE_PROJECT.lock().unwrap().clone();
         assert!(val == "/a" || val == "/b");
         reset_active_project_for_test();
+    }
+
+    #[test]
+    fn parse_git_status_changed_files_handles_modified_untracked_and_rename_lines() {
+        let files = parse_git_status_changed_files(
+            " M src-ui/src/workspace.ts\n?? migrations/0001_init.py\nR  old/name.ts -> new/name.ts\n",
+        );
+
+        assert_eq!(files, vec![
+            "src-ui/src/workspace.ts",
+            "migrations/0001_init.py",
+            "new/name.ts",
+        ]);
     }
 }

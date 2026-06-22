@@ -73,14 +73,14 @@ ReviewJob
 Finding
   -> RepairPlan
   -> PatchProposal
-  -> Rule Re-check
-  -> Test Gate
   -> User/Policy Approval
+  -> Apply-time Rule Re-check
+  -> Apply-time Test Gate
   -> Apply Patch
   -> AuditTrail
 ```
 
-自动修复默认不静默落盘。没有修复计划、diff、测试结果和审批记录时，不允许进入 apply。
+自动修复默认不静默落盘。没有修复计划、diff、审批记录，以及 apply-time 的规则复检 / 测试结果时，不允许进入 apply。
 
 ## 不中断客户使用
 
@@ -114,10 +114,12 @@ Finding
 - 当前已实现 UI 读接线：`src-ui/src/ui/check.ts` 会消费 `check-adapter` 的摘要模型，在简报面板内渲染 `风控摘要` 区块。
 - 当前已实现审计落盘接线：`src-ui/src/risk/audit-bridge.ts` 生成 review audit payload，`Workspace.runCheck()` 会调用 Tauri `audit_append_review` 追加到 `.hologram/audit.jsonl`。
 - 当前已实现审批写路径：`Workspace` 的 approver 回调会为 `approval_requested / approval_resolved` 写审计并写入时间轴。
-- 当前已实现 Agent 审计消费：新增 `audit_recent_reviews` 与 `current_review_summary` 只读工具。
+- 当前已实现 Agent 审计消费：新增 `audit_recent_reviews`、`current_review_summary` 与 `active_provider_readiness` 只读工具。
 - 当前已实现强运行态信号：窗口标题、状态栏、`CheckPanel` 均会暴露风险与审计计数。
 - 当前已实现多代理 owner：`src-ui/src/risk/multi-agent.ts` 负责 specialist agent runs、去重、冲突和 degraded reason 聚合。
 - 当前已实现自修复 owner：`src-ui/src/risk/self-heal.ts` 负责 repair plan、patch proposal、审批状态、apply/rollback 纯逻辑。
+- 当前已实现 repair preflight owner：`src-ui/src/risk/rule-package.ts` 与 `self-heal.ts` 会在 apply 前校验 patch scope、敏感路径、重复写、波及面，并强制执行 `required_tests`。
+- 当前已实现 repair degrade owner：`self-heal.ts` 会把 live provider / timeout / source-context 缺失归一成 `RepairIssue`；`current-review.ts` 负责把 issue 收口进工作台读模型；`Workspace` 只负责 audit 和状态适配。
 - 当前已实现 current review owner：`src-ui/src/risk/current-review.ts` 负责把 check 结果收口为 summary / multi-agent / repair plan 的单一读模型。
 - 当前已实现 UI/controller 接线：`Workspace` 拥有 current review state 与 repair state；`CheckPanel` 只展示并发出 repair 事件，不拥有风控/修复语义。
-- 当前仍待后续补强：live provider 生成 patch proposal 的运行态证据，以及 apply 前真实 rule re-check / test gate 编排质量。
+- 当前仍待后续补强：live provider 生成 patch proposal 的真实运行态证据、真实模型输出上的 proposal 业务语义证明，以及 provider 代理重写/证书链路径的更多真实报错样本。

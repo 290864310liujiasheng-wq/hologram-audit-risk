@@ -1,0 +1,1735 @@
+{
+  "generated_at": "2026-06-22T07:47:50.171Z",
+  "live_provider_blockers": {
+    "environment": {
+      "ANTHROPIC_API_KEY": false,
+      "OPENAI_API_KEY": false,
+      "DEEPSEEK_API_KEY": false
+    },
+    "keychain": {
+      "anthropic": false,
+      "deepseek": true
+    },
+    "note": "Current shell does not expose a live provider key; live evidence must therefore come from recoverable secure-store credentials when available."
+  },
+  "live_provider_attempt": {
+    "status": "success",
+    "provider_name": "deepseek",
+    "model": "deepseek-v4-pro",
+    "current_review": {
+      "status": "ok",
+      "review": {
+        "check": {
+          "api_signature_changes": 0,
+          "blast_radius": 0,
+          "changed_files": [
+            "config.yaml"
+          ],
+          "coupling_l4": 0,
+          "cross_community_edges": 0,
+          "cycles_detected": 0,
+          "l2_violations": [],
+          "l3_violations": [],
+          "l4_violations": [],
+          "l5_violations": [
+            {
+              "level": 5,
+              "signal": {
+                "affected_nodes": [],
+                "description": "Configuration file changed — may alter runtime behavior globally.",
+                "file_path": "config.yaml",
+                "level": 5,
+                "line": 0
+              }
+            }
+          ],
+          "new_cycles": 0,
+          "new_thread_conflicts": 0,
+          "one_line": "1 violations: L5=1 L4=0 L3=0 L2=0 (coupling_L4=0 cycles=0)",
+          "passed": false,
+          "passed_checks": [],
+          "signals_count": 1,
+          "timestamp": "2026-06-22T07:47:51Z",
+          "total_changed_files": 1,
+          "violation_count": 1
+        },
+        "findings": [
+          {
+            "finding_id": "check:2026-06-22T07:47:51Z:l5:0",
+            "job_id": "check:2026-06-22T07:47:51Z",
+            "rule_id": "check.l5",
+            "severity": "critical",
+            "category": "data_integrity",
+            "locations": [
+              {
+                "file_path": "config.yaml",
+                "start_line": 1,
+                "end_line": 1
+              }
+            ],
+            "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+            "impact": "Configuration file changed — may alter runtime behavior globally.",
+            "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+            "evidence_ids": [
+              "check:l5:0"
+            ],
+            "confidence": 0.8,
+            "status": "open"
+          }
+        ],
+        "summary": {
+          "total": 1,
+          "counts": {
+            "critical": 1,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0
+          },
+          "topFindings": [
+            {
+              "finding_id": "check:2026-06-22T07:47:51Z:l5:0",
+              "severity": "critical",
+              "category": "data_integrity",
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "locationLabel": "config.yaml:1"
+            }
+          ]
+        },
+        "gate_decision": {
+          "decision_id": "check:2026-06-22T07:47:51Z:file_write:/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-live-provider-QEubWK:block",
+          "job_id": "check:2026-06-22T07:47:51Z",
+          "subject_type": "file_write",
+          "subject_ref": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-live-provider-QEubWK",
+          "decision": "block",
+          "reason": "L5 不可逆风险默认阻断",
+          "finding_ids": [
+            "check:2026-06-22T07:47:51Z:l5:0"
+          ],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "decided_at": "2026-06-22T07:47:51Z"
+        },
+        "multi_agent_review": {
+          "job_id": "check:2026-06-22T07:47:51Z",
+          "requested_agents": [
+            "static",
+            "security",
+            "test_regression",
+            "dependency",
+            "repair_planner"
+          ],
+          "agent_results": [
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-22T07:47:51Z:static",
+                "job_id": "check:2026-06-22T07:47:51Z",
+                "agent_type": "static",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0"
+                ],
+                "finding_ids": [
+                  "check:2026-06-22T07:47:51Z:l5:0"
+                ],
+                "started_at": "2026-06-22T07:47:51Z",
+                "completed_at": "2026-06-22T07:47:51Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-22T07:47:51Z:l5:0",
+                  "job_id": "check:2026-06-22T07:47:51Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "config.yaml",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:0"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-22T07:47:51Z:security",
+                "job_id": "check:2026-06-22T07:47:51Z",
+                "agent_type": "security",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0"
+                ],
+                "finding_ids": [
+                  "check:2026-06-22T07:47:51Z:l5:0"
+                ],
+                "started_at": "2026-06-22T07:47:51Z",
+                "completed_at": "2026-06-22T07:47:51Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-22T07:47:51Z:l5:0",
+                  "job_id": "check:2026-06-22T07:47:51Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "config.yaml",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:0"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-22T07:47:51Z:test_regression",
+                "job_id": "check:2026-06-22T07:47:51Z",
+                "agent_type": "test_regression",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0"
+                ],
+                "finding_ids": [],
+                "started_at": "2026-06-22T07:47:51Z",
+                "completed_at": "2026-06-22T07:47:51Z"
+              },
+              "findings": [],
+              "suggested_decision": "allow"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-22T07:47:51Z:dependency",
+                "job_id": "check:2026-06-22T07:47:51Z",
+                "agent_type": "dependency",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0"
+                ],
+                "finding_ids": [],
+                "started_at": "2026-06-22T07:47:51Z",
+                "completed_at": "2026-06-22T07:47:51Z"
+              },
+              "findings": [],
+              "suggested_decision": "allow"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-22T07:47:51Z:repair_planner",
+                "job_id": "check:2026-06-22T07:47:51Z",
+                "agent_type": "repair_planner",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0"
+                ],
+                "finding_ids": [
+                  "check:2026-06-22T07:47:51Z:l5:0"
+                ],
+                "started_at": "2026-06-22T07:47:51Z",
+                "completed_at": "2026-06-22T07:47:51Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-22T07:47:51Z:l5:0",
+                  "job_id": "check:2026-06-22T07:47:51Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "config.yaml",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:0"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            }
+          ],
+          "merged_findings": [
+            {
+              "finding_id": "check:2026-06-22T07:47:51Z:l5:0",
+              "job_id": "check:2026-06-22T07:47:51Z",
+              "rule_id": "check.l5",
+              "severity": "critical",
+              "category": "data_integrity",
+              "locations": [
+                {
+                  "file_path": "config.yaml",
+                  "start_line": 1,
+                  "end_line": 1
+                }
+              ],
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "impact": "Configuration file changed — may alter runtime behavior globally.",
+              "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+              "evidence_ids": [
+                "check:l5:0"
+              ],
+              "confidence": 0.8,
+              "status": "open"
+            }
+          ],
+          "aggregation": {
+            "job_id": "check:2026-06-22T07:47:51Z",
+            "lead_agent_run_id": "check:2026-06-22T07:47:51Z:lead-reviewer",
+            "merged_finding_ids": [
+              "check:2026-06-22T07:47:51Z:l5:0"
+            ],
+            "dropped_duplicates": [
+              "check:2026-06-22T07:47:51Z:l5:0",
+              "check:2026-06-22T07:47:51Z:l5:0"
+            ],
+            "conflicts": []
+          },
+          "degraded_reasons": []
+        },
+        "repair_plan": {
+          "repair_plan_id": "check:2026-06-22T07:47:51Z:repair",
+          "job_id": "check:2026-06-22T07:47:51Z",
+          "finding_ids": [
+            "check:2026-06-22T07:47:51Z:l5:0"
+          ],
+          "strategy": "Prioritize the highest-risk finding first, keep blast radius narrow, and re-run the strongest local gates before any apply.",
+          "patch_proposal_ref": "check:2026-06-22T07:47:51Z:repair:proposal",
+          "required_tests": [
+            "git diff --check"
+          ],
+          "risk_note": "CRITICAL finding requires explicit review: Configuration file changed — may alter runtime behavior globally.",
+          "approval_state": "waiting_approval"
+        },
+        "patch_proposal": {
+          "patch_proposal_id": "check:2026-06-22T07:47:51Z:repair:proposal",
+          "repair_plan_id": "check:2026-06-22T07:47:51Z:repair",
+          "summary": "回滚 config.yaml 中 featureFlag=true 的变更",
+          "rationale": "检测到配置文件被修改为 featureFlag: true，可能全局改变运行时行为。为阻断风险，应立即回滚到修改前状态，并补齐审计与回滚证据。",
+          "operations": [
+            {
+              "operation_id": "check:2026-06-22T07:47:51Z:repair:op:0",
+              "file_path": "config.yaml",
+              "new_content": "",
+              "summary": "移除新增的 featureFlag 配置项"
+            }
+          ],
+          "generated_at": "2026-06-22T07:47:51.243Z"
+        },
+        "repair_generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:47:51Z:repair",
+          "provider_name": "deepseek",
+          "model": "deepseek-v4-pro",
+          "file_count": 1,
+          "focus_file_paths": [
+            "config.yaml"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:47:51Z:l5:0"
+          ],
+          "generated_at": "2026-06-22T07:47:51.243Z"
+        }
+      }
+    },
+    "check_panel": {
+      "approval_state": "waiting_approval",
+      "required_tests": [
+        "git diff --check"
+      ],
+      "summary_status": "ok",
+      "generation": {
+        "provider_name": "deepseek",
+        "model": "deepseek-v4-pro",
+        "file_count": 1,
+        "high_severity_finding_ids": [
+          "check:2026-06-22T07:47:51Z:l5:0"
+        ]
+      }
+    },
+    "audit": {
+      "repair_plan": {
+        "tool": "repair_plan",
+        "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-live-provider-QEubWK",
+        "action": "allowed",
+        "reason": "Repair proposal generated.",
+        "details": {
+          "timestamp": "2026-06-22T07:47:51.243Z",
+          "approval_state": "waiting_approval",
+          "patch_proposal_id": "check:2026-06-22T07:47:51Z:repair:proposal",
+          "operation_count": 1,
+          "required_tests": [
+            "git diff --check"
+          ],
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:47:51Z:repair",
+            "provider_name": "deepseek",
+            "model": "deepseek-v4-pro",
+            "file_count": 1,
+            "focus_file_paths": [
+              "config.yaml"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:47:51Z:l5:0"
+            ],
+            "generated_at": "2026-06-22T07:47:51.243Z"
+          }
+        }
+      },
+      "repair_apply": {
+        "tool": "repair_apply",
+        "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-live-provider-QEubWK",
+        "action": "allowed",
+        "reason": "Repair patch applied.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:06.266Z",
+          "approval_state": "applied",
+          "rollback_id": "check:2026-06-22T07:47:51Z:repair:rollback",
+          "operation_count": 1,
+          "gate_decision": "allow",
+          "preflight_findings": [],
+          "validation_results": [
+            {
+              "command": "git diff --check",
+              "passed": true,
+              "stdout": "",
+              "stderr": ""
+            }
+          ]
+        }
+      }
+    },
+    "semantic_recheck": {
+      "changed_files_before": [
+        "config.yaml"
+      ],
+      "changed_files_after": [
+        "config.yaml"
+      ],
+      "findings_before": 1,
+      "findings_after": 1,
+      "passed_after": false,
+      "one_line_after": "1 violations: L5=1 L4=0 L3=0 L2=0 (coupling_L4=0 cycles=0)"
+    }
+  },
+  "semantic_repair_samples": {
+    "critical_config_revert": {
+      "finding_source": "engine.run_full_check",
+      "workspace": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-config-R07eDT",
+      "file_path": "config.yaml",
+      "before_review": {
+        "gate_decision": {
+          "decision_id": "check:2026-06-22T07:48:07Z:file_write:/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-config-R07eDT:block",
+          "job_id": "check:2026-06-22T07:48:07Z",
+          "subject_type": "file_write",
+          "subject_ref": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-config-R07eDT",
+          "decision": "block",
+          "reason": "L5 不可逆风险默认阻断",
+          "finding_ids": [
+            "check:2026-06-22T07:48:07Z:l5:0"
+          ],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "decided_at": "2026-06-22T07:48:07Z"
+        },
+        "findings": [
+          {
+            "finding_id": "check:2026-06-22T07:48:07Z:l5:0",
+            "job_id": "check:2026-06-22T07:48:07Z",
+            "rule_id": "check.l5",
+            "severity": "critical",
+            "category": "data_integrity",
+            "locations": [
+              {
+                "file_path": "config.yaml",
+                "start_line": 1,
+                "end_line": 1
+              }
+            ],
+            "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+            "impact": "Configuration file changed — may alter runtime behavior globally.",
+            "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+            "evidence_ids": [
+              "check:l5:0"
+            ],
+            "confidence": 0.8,
+            "status": "open"
+          }
+        ],
+        "audit": {
+          "tool": "review_check",
+          "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-config-R07eDT",
+          "action": "denied",
+          "reason": "L5 不可逆风险默认阻断",
+          "details": {
+            "timestamp": "2026-06-22T07:48:07Z",
+            "finding_ids": [
+              "check:2026-06-22T07:48:07Z:l5:0"
+            ],
+            "evidence_ids": [
+              "check:l5:0"
+            ],
+            "counts": {
+              "critical": 1,
+              "high": 0,
+              "medium": 0,
+              "low": 0,
+              "info": 0
+            },
+            "gate_decision": {
+              "decision": "block",
+              "reason": "L5 不可逆风险默认阻断",
+              "finding_ids": [
+                "check:2026-06-22T07:48:07Z:l5:0"
+              ]
+            },
+            "policy_snapshot_id": "policy:review-default:v1"
+          }
+        }
+      },
+      "proposal_generation": {
+        "proposal": {
+          "patch_proposal_id": "check:2026-06-22T07:48:07Z:repair:proposal",
+          "repair_plan_id": "check:2026-06-22T07:48:07Z:repair",
+          "summary": "恢复 config.yaml 到安全基线",
+          "rationale": "撤回当前高风险改动，让当前 review 集合不再包含这次 critical 变更。",
+          "operations": [
+            {
+              "operation_id": "check:2026-06-22T07:48:07Z:repair:op:0",
+              "file_path": "config.yaml",
+              "new_content": "featureFlag: false\n",
+              "summary": "恢复 config.yaml 的安全内容"
+            }
+          ],
+          "generated_at": "2026-06-22T07:48:07.026Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:07Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "config.yaml"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:07Z:l5:0"
+          ],
+          "generated_at": "2026-06-22T07:48:07.026Z"
+        },
+        "audit": {
+          "tool": "repair_plan",
+          "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-config-R07eDT",
+          "action": "allowed",
+          "reason": "Repair proposal generated.",
+          "details": {
+            "timestamp": "2026-06-22T07:48:07.026Z",
+            "approval_state": "waiting_approval",
+            "patch_proposal_id": "check:2026-06-22T07:48:07Z:repair:proposal",
+            "operation_count": 1,
+            "required_tests": [
+              "git diff --check"
+            ],
+            "generation_meta": {
+              "repair_plan_id": "check:2026-06-22T07:48:07Z:repair",
+              "provider_name": "fixture-provider",
+              "model": "phase3-fixture-v1",
+              "file_count": 1,
+              "focus_file_paths": [
+                "config.yaml"
+              ],
+              "high_severity_finding_ids": [
+                "check:2026-06-22T07:48:07Z:l5:0"
+              ],
+              "generated_at": "2026-06-22T07:48:07.026Z"
+            }
+          }
+        },
+        "check_panel": {
+          "approval_state": "waiting_approval",
+          "required_tests": [
+            "git diff --check"
+          ],
+          "summary_status": "ok",
+          "generation": {
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:07Z:l5:0"
+            ]
+          }
+        }
+      },
+      "apply_success": {
+        "preflight": {
+          "repair_plan_id": "check:2026-06-22T07:48:07Z:repair",
+          "findings": [],
+          "gate_decision": {
+            "decision_id": "check:2026-06-22T07:48:07Z:repair_apply:check:2026-06-22T07:48:07Z:repair:proposal:allow",
+            "job_id": "check:2026-06-22T07:48:07Z",
+            "subject_type": "repair_apply",
+            "subject_ref": "check:2026-06-22T07:48:07Z:repair:proposal",
+            "decision": "allow",
+            "reason": "No enabled rule requires intervention.",
+            "finding_ids": [],
+            "policy_snapshot_id": "policy:repair-apply:v1",
+            "decided_at": "2026-06-22T07:48:07.026Z"
+          },
+          "test_results": [
+            {
+              "command": "git diff --check",
+              "passed": true,
+              "stdout": "",
+              "stderr": ""
+            }
+          ]
+        },
+        "audit": {
+          "tool": "repair_apply",
+          "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-config-R07eDT",
+          "action": "allowed",
+          "reason": "Repair patch applied.",
+          "details": {
+            "timestamp": "2026-06-22T07:48:07.577Z",
+            "approval_state": "applied",
+            "rollback_id": "check:2026-06-22T07:48:07Z:repair:rollback",
+            "operation_count": 1,
+            "gate_decision": "allow",
+            "preflight_findings": [],
+            "validation_results": [
+              {
+                "command": "git diff --check",
+                "passed": true,
+                "stdout": "",
+                "stderr": ""
+              }
+            ]
+          }
+        }
+      },
+      "semantic_recheck": {
+        "changed_files_before": [
+          "config.yaml"
+        ],
+        "changed_files_after": [],
+        "findings_before": 1,
+        "findings_after": 0,
+        "passed_after": true,
+        "one_line_after": "无新变更"
+      }
+    },
+    "critical_migration_revert": {
+      "finding_source": "engine.run_full_check",
+      "workspace": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-migration-fITJgO",
+      "file_path": "migrations/0001_init.sql",
+      "before_review": {
+        "gate_decision": {
+          "decision_id": "check:2026-06-22T07:48:08Z:file_write:/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-migration-fITJgO:block",
+          "job_id": "check:2026-06-22T07:48:08Z",
+          "subject_type": "file_write",
+          "subject_ref": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-migration-fITJgO",
+          "decision": "block",
+          "reason": "L5 不可逆风险默认阻断",
+          "finding_ids": [
+            "check:2026-06-22T07:48:08Z:l5:0"
+          ],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "decided_at": "2026-06-22T07:48:08Z"
+        },
+        "findings": [
+          {
+            "finding_id": "check:2026-06-22T07:48:08Z:l5:0",
+            "job_id": "check:2026-06-22T07:48:08Z",
+            "rule_id": "check.l5",
+            "severity": "critical",
+            "category": "data_integrity",
+            "locations": [
+              {
+                "file_path": "migrations/0001_init.sql",
+                "start_line": 1,
+                "end_line": 1
+              }
+            ],
+            "plain_explanation": "Migration file changed — may irreversibly alter data schema. Requires manual review.",
+            "impact": "Migration file changed — may irreversibly alter data schema. Requires manual review.",
+            "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+            "evidence_ids": [
+              "check:l5:0"
+            ],
+            "confidence": 0.8,
+            "status": "open"
+          }
+        ],
+        "audit": {
+          "tool": "review_check",
+          "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-migration-fITJgO",
+          "action": "denied",
+          "reason": "L5 不可逆风险默认阻断",
+          "details": {
+            "timestamp": "2026-06-22T07:48:08Z",
+            "finding_ids": [
+              "check:2026-06-22T07:48:08Z:l5:0"
+            ],
+            "evidence_ids": [
+              "check:l5:0"
+            ],
+            "counts": {
+              "critical": 1,
+              "high": 0,
+              "medium": 0,
+              "low": 0,
+              "info": 0
+            },
+            "gate_decision": {
+              "decision": "block",
+              "reason": "L5 不可逆风险默认阻断",
+              "finding_ids": [
+                "check:2026-06-22T07:48:08Z:l5:0"
+              ]
+            },
+            "policy_snapshot_id": "policy:review-default:v1"
+          }
+        }
+      },
+      "proposal_generation": {
+        "proposal": {
+          "patch_proposal_id": "check:2026-06-22T07:48:08Z:repair:proposal",
+          "repair_plan_id": "check:2026-06-22T07:48:08Z:repair",
+          "summary": "恢复 migrations/0001_init.sql 到安全基线",
+          "rationale": "撤回当前高风险改动，让当前 review 集合不再包含这次 critical 变更。",
+          "operations": [
+            {
+              "operation_id": "check:2026-06-22T07:48:08Z:repair:op:0",
+              "file_path": "migrations/0001_init.sql",
+              "new_content": "-- baseline migration\nCREATE TABLE widgets (id INTEGER PRIMARY KEY);\n",
+              "summary": "恢复 migrations/0001_init.sql 的安全内容"
+            }
+          ],
+          "generated_at": "2026-06-22T07:48:08.330Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:08Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "migrations/0001_init.sql"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:08Z:l5:0"
+          ],
+          "generated_at": "2026-06-22T07:48:08.330Z"
+        },
+        "audit": {
+          "tool": "repair_plan",
+          "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-migration-fITJgO",
+          "action": "allowed",
+          "reason": "Repair proposal generated.",
+          "details": {
+            "timestamp": "2026-06-22T07:48:08.330Z",
+            "approval_state": "waiting_approval",
+            "patch_proposal_id": "check:2026-06-22T07:48:08Z:repair:proposal",
+            "operation_count": 1,
+            "required_tests": [
+              "git diff --check"
+            ],
+            "generation_meta": {
+              "repair_plan_id": "check:2026-06-22T07:48:08Z:repair",
+              "provider_name": "fixture-provider",
+              "model": "phase3-fixture-v1",
+              "file_count": 1,
+              "focus_file_paths": [
+                "migrations/0001_init.sql"
+              ],
+              "high_severity_finding_ids": [
+                "check:2026-06-22T07:48:08Z:l5:0"
+              ],
+              "generated_at": "2026-06-22T07:48:08.330Z"
+            }
+          }
+        },
+        "check_panel": {
+          "approval_state": "waiting_approval",
+          "required_tests": [
+            "git diff --check"
+          ],
+          "summary_status": "ok",
+          "generation": {
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:08Z:l5:0"
+            ]
+          }
+        }
+      },
+      "apply_success": {
+        "preflight": {
+          "repair_plan_id": "check:2026-06-22T07:48:08Z:repair",
+          "findings": [],
+          "gate_decision": {
+            "decision_id": "check:2026-06-22T07:48:08Z:repair_apply:check:2026-06-22T07:48:08Z:repair:proposal:allow",
+            "job_id": "check:2026-06-22T07:48:08Z",
+            "subject_type": "repair_apply",
+            "subject_ref": "check:2026-06-22T07:48:08Z:repair:proposal",
+            "decision": "allow",
+            "reason": "No enabled rule requires intervention.",
+            "finding_ids": [],
+            "policy_snapshot_id": "policy:repair-apply:v1",
+            "decided_at": "2026-06-22T07:48:08.330Z"
+          },
+          "test_results": [
+            {
+              "command": "git diff --check",
+              "passed": true,
+              "stdout": "",
+              "stderr": ""
+            }
+          ]
+        },
+        "audit": {
+          "tool": "repair_apply",
+          "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-critical-migration-fITJgO",
+          "action": "allowed",
+          "reason": "Repair patch applied.",
+          "details": {
+            "timestamp": "2026-06-22T07:48:08.881Z",
+            "approval_state": "applied",
+            "rollback_id": "check:2026-06-22T07:48:08Z:repair:rollback",
+            "operation_count": 1,
+            "gate_decision": "allow",
+            "preflight_findings": [],
+            "validation_results": [
+              {
+                "command": "git diff --check",
+                "passed": true,
+                "stdout": "",
+                "stderr": ""
+              }
+            ]
+          }
+        }
+      },
+      "semantic_recheck": {
+        "changed_files_before": [
+          "migrations/0001_init.sql"
+        ],
+        "changed_files_after": [],
+        "findings_before": 1,
+        "findings_after": 0,
+        "passed_after": true,
+        "one_line_after": "无新变更"
+      }
+    }
+  },
+  "preflight_block_sample": {
+    "finding_source": "engine.run_full_check",
+    "workspace": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-preflight-blocked-icIGPi",
+    "file_path": "config.yaml",
+    "preflight": {
+      "repair_plan_id": "check:2026-06-22T07:48:09Z:repair",
+      "findings": [
+        {
+          "finding_id": "check:2026-06-22T07:48:09Z:repair:repair.test.required_command_failed:git diff --check",
+          "job_id": "check:2026-06-22T07:48:09Z",
+          "rule_id": "repair.test.required_command_failed",
+          "severity": "critical",
+          "category": "repair_gate",
+          "locations": [
+            {
+              "file_path": "git diff --check",
+              "start_line": 1,
+              "end_line": 1,
+              "symbol": "repair_preflight"
+            }
+          ],
+          "plain_explanation": "必跑验证命令失败：git diff --check\nCommand failed: /bin/zsh -lc git diff --check\nconfig.yaml:1: trailing whitespace.\n+featureFlag: true",
+          "impact": "当前 patch proposal 无法证明它在 apply 前仍满足最小安全门。",
+          "recommendation": "先修复命令失败原因，再重新执行 git diff --check。",
+          "evidence_ids": [
+            "repair-test:check:2026-06-22T07:48:09Z:repair:git diff --check"
+          ],
+          "confidence": 0.99,
+          "status": "open"
+        }
+      ],
+      "gate_decision": {
+        "decision_id": "check:2026-06-22T07:48:09Z:repair_apply:check:2026-06-22T07:48:09Z:repair:proposal:block",
+        "job_id": "check:2026-06-22T07:48:09Z",
+        "subject_type": "repair_apply",
+        "subject_ref": "check:2026-06-22T07:48:09Z:repair:proposal",
+        "decision": "block",
+        "reason": "修复前验证命令必须全部通过",
+        "finding_ids": [
+          "check:2026-06-22T07:48:09Z:repair:repair.test.required_command_failed:git diff --check"
+        ],
+        "policy_snapshot_id": "policy:repair-apply:v1",
+        "decided_at": "2026-06-22T07:48:09.635Z"
+      },
+      "test_results": [
+        {
+          "command": "git diff --check",
+          "passed": false,
+          "stdout": "config.yaml:1: trailing whitespace.\n+featureFlag: true",
+          "stderr": "Command failed: /bin/zsh -lc git diff --check"
+        }
+      ]
+    },
+    "current_review": {
+      "repair_issue": {
+        "issue_id": "check:2026-06-22T07:48:09Z:repair:preflight:2026-06-22T07:48:09.655Z",
+        "repair_plan_id": "check:2026-06-22T07:48:09Z:repair",
+        "stage": "preflight",
+        "summary": "修复前复检失败：修复前验证命令必须全部通过",
+        "error": {
+          "code": "policy_blocked",
+          "message": "修复前验证命令必须全部通过",
+          "retryable": false,
+          "evidence_ids": [
+            "repair-test:check:2026-06-22T07:48:09Z:repair:git diff --check"
+          ]
+        },
+        "created_at": "2026-06-22T07:48:09.655Z"
+      },
+      "repair_preflight": {
+        "repair_plan_id": "check:2026-06-22T07:48:09Z:repair",
+        "findings": [
+          {
+            "finding_id": "check:2026-06-22T07:48:09Z:repair:repair.test.required_command_failed:git diff --check",
+            "job_id": "check:2026-06-22T07:48:09Z",
+            "rule_id": "repair.test.required_command_failed",
+            "severity": "critical",
+            "category": "repair_gate",
+            "locations": [
+              {
+                "file_path": "git diff --check",
+                "start_line": 1,
+                "end_line": 1,
+                "symbol": "repair_preflight"
+              }
+            ],
+            "plain_explanation": "必跑验证命令失败：git diff --check\nCommand failed: /bin/zsh -lc git diff --check\nconfig.yaml:1: trailing whitespace.\n+featureFlag: true",
+            "impact": "当前 patch proposal 无法证明它在 apply 前仍满足最小安全门。",
+            "recommendation": "先修复命令失败原因，再重新执行 git diff --check。",
+            "evidence_ids": [
+              "repair-test:check:2026-06-22T07:48:09Z:repair:git diff --check"
+            ],
+            "confidence": 0.99,
+            "status": "open"
+          }
+        ],
+        "gate_decision": {
+          "decision_id": "check:2026-06-22T07:48:09Z:repair_apply:check:2026-06-22T07:48:09Z:repair:proposal:block",
+          "job_id": "check:2026-06-22T07:48:09Z",
+          "subject_type": "repair_apply",
+          "subject_ref": "check:2026-06-22T07:48:09Z:repair:proposal",
+          "decision": "block",
+          "reason": "修复前验证命令必须全部通过",
+          "finding_ids": [
+            "check:2026-06-22T07:48:09Z:repair:repair.test.required_command_failed:git diff --check"
+          ],
+          "policy_snapshot_id": "policy:repair-apply:v1",
+          "decided_at": "2026-06-22T07:48:09.635Z"
+        },
+        "test_results": [
+          {
+            "command": "git diff --check",
+            "passed": false,
+            "stdout": "config.yaml:1: trailing whitespace.\n+featureFlag: true",
+            "stderr": "Command failed: /bin/zsh -lc git diff --check"
+          }
+        ]
+      }
+    },
+    "check_panel": {
+      "approval_state": "waiting_approval",
+      "required_tests": [
+        "git diff --check"
+      ],
+      "summary_status": "ok",
+      "generation": {
+        "provider_name": "fixture-provider",
+        "model": "phase3-fixture-v1",
+        "file_count": 1,
+        "high_severity_finding_ids": [
+          "check:2026-06-22T07:48:09Z:l5:0"
+        ]
+      },
+      "issue": {
+        "badge": "提案失败，需修正",
+        "stage": "阶段 preflight",
+        "summary": "修复前复检失败：修复前验证命令必须全部通过",
+        "code": "policy_blocked",
+        "retryable": false
+      },
+      "preflight": {
+        "reason": "修复前验证命令必须全部通过",
+        "failed_commands": [
+          "git diff --check"
+        ],
+        "blocking_rule_ids": [
+          "repair.test.required_command_failed"
+        ],
+        "decision": "block"
+      }
+    },
+    "audit": {
+      "tool": "repair_apply",
+      "target_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase3-preflight-blocked-icIGPi",
+      "action": "denied",
+      "reason": "Repair preflight failed.",
+      "details": {
+        "timestamp": "2026-06-22T07:48:09.655Z",
+        "approval_state": "approved",
+        "gate_decision": "block",
+        "gate_reason": "修复前验证命令必须全部通过",
+        "error_code": "policy_blocked",
+        "error_stage": "preflight",
+        "error_retryable": false,
+        "preflight_findings": [
+          {
+            "finding_id": "check:2026-06-22T07:48:09Z:repair:repair.test.required_command_failed:git diff --check",
+            "rule_id": "repair.test.required_command_failed"
+          }
+        ],
+        "validation_results": [
+          {
+            "command": "git diff --check",
+            "passed": false,
+            "stdout": "config.yaml:1: trailing whitespace.\n+featureFlag: true",
+            "stderr": "Command failed: /bin/zsh -lc git diff --check"
+          }
+        ]
+      }
+    }
+  },
+  "provider_failure_samples": {
+    "auth_invalid": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：authentication failed for \"anthropic\" (HTTP 401): API key is invalid or expired 需要先修正输入或配置。",
+          "error": {
+            "code": "provider_auth_invalid",
+            "message": "authentication failed for \"anthropic\" (HTTP 401): API key is invalid or expired",
+            "retryable": false
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案失败，需修正",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：authentication failed for \"anthropic\" (HTTP 401): API key is invalid or expired 需要先修正输入或配置。",
+          "code": "provider_auth_invalid",
+          "retryable": false
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "provider_auth_invalid",
+          "error_stage": "proposal_generation",
+          "error_retryable": false,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "rate_limit": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：deepseek: status 429: rate limit exceeded 可重试。",
+          "error": {
+            "code": "rate_limited",
+            "message": "deepseek: status 429: rate limit exceeded",
+            "retryable": true
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案降级，可重试",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：deepseek: status 429: rate limit exceeded 可重试。",
+          "code": "rate_limited",
+          "retryable": true
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "rate_limited",
+          "error_stage": "proposal_generation",
+          "error_retryable": true,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "timeout": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：anthropic: request timed out after 30000ms 可重试。",
+          "error": {
+            "code": "timeout",
+            "message": "anthropic: request timed out after 30000ms",
+            "retryable": true
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案降级，可重试",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：anthropic: request timed out after 30000ms 可重试。",
+          "code": "timeout",
+          "retryable": true
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "timeout",
+          "error_stage": "proposal_generation",
+          "error_retryable": true,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "upstream_5xx": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：anthropic: status 503: service unavailable 可重试。",
+          "error": {
+            "code": "provider_upstream_failed",
+            "message": "anthropic: status 503: service unavailable",
+            "retryable": true
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案降级，可重试",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：anthropic: status 503: service unavailable 可重试。",
+          "code": "provider_upstream_failed",
+          "retryable": true
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "provider_upstream_failed",
+          "error_stage": "proposal_generation",
+          "error_retryable": true,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "proxy_407": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：deepseek: status 407: proxy authentication required 可重试。",
+          "error": {
+            "code": "proxy_rejected",
+            "message": "deepseek: status 407: proxy authentication required",
+            "retryable": true
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案降级，可重试",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：deepseek: status 407: proxy authentication required 可重试。",
+          "code": "proxy_rejected",
+          "retryable": true
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "proxy_rejected",
+          "error_stage": "proposal_generation",
+          "error_retryable": true,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "tls_handshake_failed": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：request failed: unable to get local issuer certificate 需要先修正输入或配置。",
+          "error": {
+            "code": "tls_handshake_failed",
+            "message": "request failed: unable to get local issuer certificate",
+            "retryable": false
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案失败，需修正",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：request failed: unable to get local issuer certificate 需要先修正输入或配置。",
+          "code": "tls_handshake_failed",
+          "retryable": false
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "tls_handshake_failed",
+          "error_stage": "proposal_generation",
+          "error_retryable": false,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "tls_cert_revoked": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：x509: certificate has been revoked 需要先修正输入或配置。",
+          "error": {
+            "code": "tls_cert_revoked",
+            "message": "x509: certificate has been revoked",
+            "retryable": false
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案失败，需修正",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：x509: certificate has been revoked 需要先修正输入或配置。",
+          "code": "tls_cert_revoked",
+          "retryable": false
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "tls_cert_revoked",
+          "error_stage": "proposal_generation",
+          "error_retryable": false,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "connection_reset": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：anthropic: request failed: read ECONNRESET 可重试。",
+          "error": {
+            "code": "connection_interrupted",
+            "message": "anthropic: request failed: read ECONNRESET",
+            "retryable": true
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案降级，可重试",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：anthropic: request failed: read ECONNRESET 可重试。",
+          "code": "connection_interrupted",
+          "retryable": true
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "connection_interrupted",
+          "error_stage": "proposal_generation",
+          "error_retryable": true,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    },
+    "socket_hang_up": {
+      "current_review": {
+        "issue": {
+          "issue_id": "check:2026-06-22T07:48:10Z:repair:proposal_generation:2026-06-22T07:48:10.310Z",
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "stage": "proposal_generation",
+          "summary": "修复提案已降级：request failed: socket hang up 可重试。",
+          "error": {
+            "code": "connection_interrupted",
+            "message": "request failed: socket hang up",
+            "retryable": true
+          },
+          "created_at": "2026-06-22T07:48:10.310Z"
+        },
+        "generation_meta": {
+          "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "focus_file_paths": [
+            "src-ui/src/risk/phase3-evidence.ts"
+          ],
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ],
+          "generated_at": "2026-06-22T07:48:10.310Z"
+        }
+      },
+      "check_panel": {
+        "approval_state": "draft",
+        "required_tests": [
+          "npx tsc --noEmit",
+          "npm run test:risk"
+        ],
+        "summary_status": "ok",
+        "generation": {
+          "provider_name": "fixture-provider",
+          "model": "phase3-fixture-v1",
+          "file_count": 1,
+          "high_severity_finding_ids": [
+            "check:2026-06-22T07:48:10Z:l4:0"
+          ]
+        },
+        "issue": {
+          "badge": "提案降级，可重试",
+          "stage": "阶段 proposal_generation",
+          "summary": "修复提案已降级：request failed: socket hang up 可重试。",
+          "code": "connection_interrupted",
+          "retryable": true
+        }
+      },
+      "audit": {
+        "tool": "repair_plan",
+        "target_path": "/tmp/phase3-provider-evidence",
+        "action": "denied",
+        "reason": "Repair proposal generation degraded.",
+        "details": {
+          "timestamp": "2026-06-22T07:48:10.310Z",
+          "approval_state": "draft",
+          "error_code": "connection_interrupted",
+          "error_stage": "proposal_generation",
+          "error_retryable": true,
+          "generation_meta": {
+            "repair_plan_id": "check:2026-06-22T07:48:10Z:repair",
+            "provider_name": "fixture-provider",
+            "model": "phase3-fixture-v1",
+            "file_count": 1,
+            "focus_file_paths": [
+              "src-ui/src/risk/phase3-evidence.ts"
+            ],
+            "high_severity_finding_ids": [
+              "check:2026-06-22T07:48:10Z:l4:0"
+            ],
+            "generated_at": "2026-06-22T07:48:10.310Z"
+          }
+        }
+      }
+    }
+  }
+}

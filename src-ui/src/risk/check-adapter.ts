@@ -1,4 +1,5 @@
 import type { ReviewFinding, Severity } from './review-core';
+import { getReviewBucketDefinition, type ReviewBucket } from './rule-package';
 
 export interface RiskViolation {
   signal?: {
@@ -97,6 +98,7 @@ function adaptBucket(
   input: { jobId: string; evidencePrefix: string },
   changedFiles: string[],
 ): ReviewFinding[] {
+  const definition = getReviewBucketDefinition(bucket as ReviewBucket);
   return violations.map((violation, index) => {
     const filePath = violation.signal?.file_path || changedFiles[0] || 'unknown';
     const line = violation.signal?.line || 1;
@@ -108,7 +110,7 @@ function adaptBucket(
       job_id: input.jobId,
       rule_id: `check.${bucket}`,
       severity: severityByBucket[bucket],
-      category: 'architecture',
+      category: definition.category,
       locations: [{
         file_path: filePath,
         start_line: line,
@@ -116,7 +118,7 @@ function adaptBucket(
       }],
       plain_explanation: description,
       impact: message,
-      recommendation: `Review ${bucket.toUpperCase()} violation before continuing.`,
+      recommendation: definition.recommendation,
       evidence_ids: [`${input.evidencePrefix}:${bucket}:${index}`],
       confidence: 0.8,
       status: 'open',

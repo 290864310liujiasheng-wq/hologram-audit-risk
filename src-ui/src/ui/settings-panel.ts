@@ -2,7 +2,7 @@
 // Provider | Agent | 显示 三个标签页
 // 读写 settings.ts 的 localStorage，保存后触发 Agent 重新初始化
 
-import { loadSettings, saveSettings, persistSecrets, updateProvider } from '../settings';
+import { loadSettings, saveSettings, persistSecretsWithReport, updateProvider } from '../settings';
 import type { AppSettings, AgentSettings } from '../settings';
 import { setLang } from '../i18n';
 import type { Lang } from '../i18n';
@@ -490,7 +490,7 @@ export class SettingsPanel {
 
   // ── Save ──
 
-  private doSave(): void {
+  private async doSave(): Promise<void> {
     const s = this.workingSettings;
     const active = s.providers.find((p) => p.name === s.activeProvider);
     if (!active) return;
@@ -532,16 +532,20 @@ export class SettingsPanel {
 
     // Save to localStorage
     saveSettings(s);
-    // Also persist API keys to system encrypted storage (DPAPI)
-    persistSecrets(s).catch(() => {});
+    // Also persist API keys to secure storage and surface failures explicitly.
+    const secretReport = await persistSecretsWithReport(s);
     const rawLS2 = (typeof localStorage !== 'undefined') ? localStorage.getItem('hologram_settings') : null;
     let verifyLen = '?';
     if (rawLS2) {
       try { const p2 = JSON.parse(rawLS2); const ap = p2.providers?.find((pp:any) => pp.name === active.name); verifyLen = String((ap?.apiKey || '').length); } catch { verifyLen = 'parseErr'; }
     }
-    console.error('[DIAG] saved. verify localStorage keyLen=', verifyLen);
+    console.error('[DIAG] saved. verify localStorage keyLen=', verifyLen, 'secureStore=', JSON.stringify(secretReport));
     const st = document.getElementById('status-text');
-    if (st) st.textContent = `[settings] saved, ls verify=${verifyLen}`;
+    if (st) {
+      st.textContent = secretReport.failedProviders.length > 0
+        ? `[settings] saved to localStorage, secure store failed for ${secretReport.failedProviders.map((item) => item.provider).join(', ')}`
+        : `[settings] saved, ls verify=${verifyLen}, secure store ok`;
+    }
     setLang(s.display.language);
     bus.emit('lang:changed', { lang: s.display.language });
     this.originalSettings = JSON.parse(JSON.stringify(s));
@@ -550,11 +554,15 @@ export class SettingsPanel {
     // Flash save button
     const btn = this.panel.querySelector('.sp-btn-save') as HTMLElement;
     if (btn) {
-      btn.innerHTML = `${iconHtml('check-circle', 11)} 已保存`;
-      btn.classList.add('sp-btn-ok');
+      const failed = secretReport.failedProviders.length > 0;
+      btn.innerHTML = failed
+        ? `${iconHtml('alert', 11)} 已保存但未持久化`
+        : `${iconHtml('check-circle', 11)} 已保存`;
+      btn.classList.add(failed ? 'sp-btn-warn' : 'sp-btn-ok');
       setTimeout(() => {
         btn.innerHTML = `${iconHtml('save', 11)} 保存`;
         btn.classList.remove('sp-btn-ok');
+        btn.classList.remove('sp-btn-warn');
       }, 1500);
     }
 

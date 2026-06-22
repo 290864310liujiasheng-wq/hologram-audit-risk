@@ -1,7 +1,7 @@
 // Bridge — detects Tauri vs browser, routes invoke/listen to real or mock
 // Import this instead of '@tauri-apps/api/core' / '@tauri-apps/api/event'
 
-const IS_TAURI = '__TAURI_INTERNALS__' in window;
+const IS_TAURI = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 // ── Mock invoke ──
 import { mockInvoke } from './mock-data';

@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:mock": "vite",
     "test:risk": "node --import tsx src/risk/test-risk.ts",
+    "phase3:evidence": "node --import tsx scripts/phase3-evidence.ts",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

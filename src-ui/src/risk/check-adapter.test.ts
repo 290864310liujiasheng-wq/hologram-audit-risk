@@ -66,7 +66,9 @@ test('adaptCheckResultToFindings converts violations into ReviewFinding records'
   assert.equal(findings.length, 2);
   assert.equal(findings[0]?.severity, 'critical');
   assert.equal(findings[0]?.rule_id, 'check.l5');
+  assert.equal(findings[0]?.category, 'data_integrity');
   assert.equal(findings[1]?.severity, 'high');
+  assert.equal(findings[1]?.category, 'security');
 });
 
 test('adaptCheckResultToFindings creates stable evidence ids from violation groups', () => {
@@ -106,4 +108,28 @@ test('buildCheckRiskSummary orders critical findings first and exposes display l
   assert.equal(summary.topFindings[0]?.severity, 'critical');
   assert.equal(summary.topFindings[0]?.locationLabel, 'auth.ts:42');
   assert.equal(summary.topFindings[1]?.locationLabel, 'auth.ts:18');
+});
+
+test('adaptCheckResultToFindings uses bucket-specific recommendations', () => {
+  const findings = adaptCheckResultToFindings({
+    ...sample,
+    l5_violations: [],
+    l4_violations: [],
+    l3_violations: [{
+      signal: { description: '回归风险扩大', file_path: 'src/test.ts', line: 7 },
+      message: '可能缺少验证',
+      level: 3,
+    }],
+    l2_violations: [{
+      signal: { description: '波及面扩大', file_path: 'src/runtime.ts', line: 3 },
+      message: '需要控制 blast radius',
+      level: 2,
+    }],
+  }, {
+    jobId: 'job-2',
+    evidencePrefix: 'check',
+  });
+
+  assert.equal(findings[0]?.recommendation, '补充最小验证并确认回归风险已收口。');
+  assert.equal(findings[1]?.recommendation, '收窄波及面并确认不会影响客户当前流程。');
 });

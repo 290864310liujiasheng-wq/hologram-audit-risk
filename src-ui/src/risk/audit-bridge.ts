@@ -1,4 +1,5 @@
-import type { ReviewFinding, Severity } from './review-core';
+import type { GateDecision, RepairPlan, ReviewFinding, Severity, ValidationCommandResult } from './review-core';
+import type { RepairGenerationMetadata } from './self-heal';
 import type { RiskCheckResult } from './check-adapter';
 import { summarizeSeverityCounts } from './check-adapter';
 
@@ -12,6 +13,12 @@ export interface ReviewAuditPayload {
     finding_ids: string[];
     evidence_ids: string[];
     counts: Record<Severity, number>;
+    gate_decision?: {
+      decision: GateDecision['decision'];
+      reason: string;
+      finding_ids: string[];
+    };
+    policy_snapshot_id?: string;
   };
 }
 
@@ -23,6 +30,33 @@ export interface ApprovalAuditPayload {
   details: {
     subject: string;
     remember: boolean;
+  };
+}
+
+export interface RepairAuditPayload {
+  tool: string;
+  target_path: string;
+  action: 'allowed' | 'denied';
+  reason: string;
+  details: {
+    timestamp: string;
+    approval_state?: RepairPlan['approval_state'];
+    patch_proposal_id?: string;
+    operation_count?: number;
+    required_tests?: string[];
+    generation_meta?: RepairGenerationMetadata;
+    remember?: boolean;
+    rollback_id?: string;
+    gate_decision?: string;
+    gate_reason?: string;
+    error_code?: string;
+    error_stage?: 'proposal_generation' | 'preflight' | 'apply' | 'rollback';
+    error_retryable?: boolean;
+    preflight_findings?: Array<{
+      finding_id: string;
+      rule_id: string;
+    }>;
+    validation_results?: ValidationCommandResult[];
   };
 }
 
@@ -47,14 +81,19 @@ export function buildReviewAuditPayload(
   result: RiskCheckResult,
   findings: ReviewFinding[],
   targetPath: string,
+  gateDecision?: GateDecision,
 ): ReviewAuditPayload {
   const counts = summarizeSeverityCounts(findings);
   const evidenceIds = Array.from(new Set(findings.flatMap((finding) => finding.evidence_ids)));
   const findingIds = findings.map((finding) => finding.finding_id);
-  const action = result.passed ? 'allowed' : 'denied';
-  const reason = result.passed
-    ? 'Review check passed without blocking findings.'
-    : `Review check found ${findings.length} finding(s).`;
+  const action = gateDecision
+    ? (gateDecision.decision === 'block' || gateDecision.decision === 'require_approval' ? 'denied' : 'allowed')
+    : (result.passed ? 'allowed' : 'denied');
+  const reason = gateDecision
+    ? gateDecision.reason
+    : result.passed
+      ? 'Review check passed without blocking findings.'
+      : `Review check found ${findings.length} finding(s).`;
 
   return {
     tool: 'review_check',
@@ -66,6 +105,14 @@ export function buildReviewAuditPayload(
       finding_ids: findingIds,
       evidence_ids: evidenceIds,
       counts,
+      gate_decision: gateDecision
+        ? {
+            decision: gateDecision.decision,
+            reason: gateDecision.reason,
+            finding_ids: gateDecision.finding_ids,
+          }
+        : undefined,
+      policy_snapshot_id: gateDecision?.policy_snapshot_id,
     },
   };
 }
@@ -89,6 +136,26 @@ export function buildApprovalAuditPayload(input: {
   };
 }
 
+export function buildRepairAuditPayload(input: {
+  tool: string;
+  workspacePath: string;
+  action: 'allowed' | 'denied';
+  reason: string;
+  now: string;
+  details: Omit<RepairAuditPayload['details'], 'timestamp'>;
+}): RepairAuditPayload {
+  return {
+    tool: input.tool,
+    target_path: input.workspacePath,
+    action: input.action,
+    reason: input.reason,
+    details: {
+      timestamp: input.now,
+      ...input.details,
+    },
+  };
+}
+
 export function summarizeRecentAuditEntries(entries: RecentAuditEntry[]): AuditDisplayRow[] {
   return entries
     .filter((entry) =>
@@ -105,8 +172,30 @@ export function summarizeRecentAuditEntries(entries: RecentAuditEntry[]): AuditD
         : entry.tool.startsWith('approval.')
           ? '审批'
           : '修复',
-      actionLabel: entry.action === 'allowed' ? '允许' : '拒绝',
+      actionLabel: (entry.tool === 'review_check' && typeof entry.details?.gate_decision === 'object')
+        || (entry.tool.startsWith('repair_') && typeof entry.details?.gate_decision === 'string')
+        ? gateDecisionActionLabel(
+            entry.tool === 'review_check'
+              ? String((entry.details?.gate_decision as Record<string, unknown>).decision || '')
+              : String(entry.details?.gate_decision || ''),
+          )
+        : entry.action === 'allowed'
+          ? '允许'
+          : '拒绝',
       subject: String(entry.details?.subject || entry.path || ''),
       reason: entry.reason,
     }));
+}
+
+function gateDecisionActionLabel(decision: string): string {
+  switch (decision) {
+    case 'block':
+      return '阻断';
+    case 'require_approval':
+      return '需审批';
+    case 'warn':
+      return '警告';
+    default:
+      return '允许';
+  }
 }

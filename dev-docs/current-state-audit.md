@@ -1,12 +1,12 @@
 # 当前状态审计
 
-生成日期：2026-06-20
+生成日期：2026-06-22
 
 ## Existing Truth Inventory
 
 This section records the current truth for the adopted repo.
 
-本仓库是半路接管项目：已有 HoloGram 代码图谱与桌面 IDE 基座，当前产品方向已切换为“AI 编码风控平台”。本阶段目标是建立内部真源和架构边界，不进行业务代码改造。
+本仓库是半路接管项目：已有 HoloGram 代码图谱与桌面 IDE 基座，当前产品方向已切换为“AI 编码风控平台”。本阶段目标已从“建立内部真源和架构边界”推进到“补齐第三阶段剩余运行态证据并完成阶段收口”。
 
 ## 已确认事实
 
@@ -71,6 +71,26 @@ This section records the current truth for the adopted repo.
 - 已取得强运行态证据：Chrome 真实窗口标题显示 `风控4 审计2`，状态栏显示 `风控4 · 审计2`，简报面板可见 `最近审计` 与 `风控摘要`。
 - 已新增多代理 owner：`src-ui/src/risk/multi-agent.ts` 与对应测试，支持 specialist runs、去重、冲突记录和 degraded reasons。
 - 已新增自修复 owner：`src-ui/src/risk/self-heal.ts` 与对应测试，支持 repair plan、patch proposal 解析/生成、审批状态流转、apply 与 rollback。
+- 已新增 repair preflight owner：`src-ui/src/risk/rule-package.ts` 与 `self-heal.ts` 的 apply-time gate，支持默认 repair 规则包、patch scope 复检与 `required_tests` 强制执行。
+- 已新增 current review gate owner：`src-ui/src/risk/rule-package.ts` 已补默认 review 规则包，`current-review.ts` 会把 `check.l5/l4/l3/l2` 收口成结构化 `gate_decision`，`CheckPanel` 已展示门禁决策区块。
+- 已新增 repair degrade owner：provider 层已补 `ProviderRequestError` / `classifyProviderFailure`；`self-heal.ts` 会在此基础上把 live provider 失败归一成 `RepairIssue`，当前至少区分 key/auth/rate-limit/timeout/upstream-5xx/network/TLS/proxy/source-context，并进一步区分 407 代理拒绝、证书吊销与 `ECONNRESET`/socket hang up 等连接中断；`current-review.ts` 与 `CheckPanel` 会暴露可见降级状态，`Workspace` 会把失败写入 repair audit。
+- 已新增 repair generation evidence owner：`self-heal.ts` 会产出 `RepairGenerationMetadata`；`current-review.ts`、`CheckPanel` 与 repair audit 都可读取 provider/model/file_count/high-severity focus；proposal generation degrade 的 audit 还会额外保留 `error_stage` 与 `error_retryable`。
+- 已新增 preflight failure summary owner：`buildRepairPreflightSummary` 会收口 `gate_reason`、失败命令、阻断 rule；`Workspace` 在 preflight 阻断时会把这些证据写进 repair audit。
+- 已新增 preflight failure owner：`self-heal.ts` 会在 apply 前阻断时抛出结构化 `RepairApplyError`，`current-review.ts` 会把 preflight issue 收口到当前 review state，`Workspace` 会把 `gate_reason / validation_results / preflight_findings` 写入 repair audit。
+- 已新增 apply execution failure owner：`self-heal.ts` 会在部分写入失败时自动回滚并抛出 `RepairApplyExecutionError`；`current-review.ts` 与 `CheckPanel` 会保留 rollback evidence，`Workspace` 会把执行失败写入 repair audit。
+- 已新增 macOS provider secret owner：`src-tauri/src/credential.rs` 现已支持通过 macOS Keychain 存取 provider key，并用 manifest 记录已持久化 provider，避免桌面壳在 macOS 上永远无法恢复 live provider 凭证。
+- 已新增 provider readiness owner：前端可通过 `active_provider_readiness` 查询当前 active provider 是否能跑 live repair planner；后端以 `credential_has` 提供只读存在性检查，不再把“没有 key”与“恢复链断裂”混在一起；`current-review.ts` 与 `CheckPanel` 也会直接暴露 readiness/source/reason。
+- 已新增 live repair readiness owner：系统会显式区分“provider key 已就绪”与“当前会话仍处于 browser mock / mock workspace，因此不具备真实 repair 证据资格”；避免把聊天可用误判成 phase3 live repair 已就绪。
+- 已新增 repair generation readiness owner：`runCheck` 后就会计算当前 review 是否具备自动修复输入；当 finding 数为 0 或没有可读源码文件时，`CheckPanel` 会显示空状态/阻断原因，并直接禁用 proposal 按钮，不再把这类场景误报成 provider 生成失败。
+- 已新增 non-code repair test gate owner：`self-heal.ts` 现会为 config / migration / serialization 等非代码高风险 repair 自动补 `git diff --check`，避免 critical repair 因 `required_tests` 为空而永远无法形成通过样本。
+- 已新增 repair file fallback owner：当结构性 finding 本身没有稳定 file path 时，repair planner 会回退到当前 `changed_files` 作为候选文件输入，尽量把可修复风险收口到真实源码文件，而不是直接退化成 `0 files`。
+- 已新增 check changed-files fallback owner：`hologram_run_check` 在 watcher 没有提供 `LAST_CHANGED_FILES` 时，会回退读取当前 git 工作区的变更文件，避免工作台在真实 repo 上把“明明有未提交修改”误判成“无新变更”。
+- 已新增 patch proposal path guard：`self-heal.ts` 会校验 live model 返回的文件路径必须属于本轮提供的 repair files，防止提案越权扩张到未提供文件。
+- 已新增 patch proposal content guard：`self-heal.ts` 会拒绝 no-op rewrite，并要求提案覆盖全部高风险 finding 文件、实际触达其行范围，且高风险行上的改动不能只是空白/格式变化或纯注释改写；直接删除高风险行则被视为合法修复，减少“看起来生成了 patch，实际上只修了边角料”的情况。
+- 已新增 patch proposal narrative guard：`self-heal.ts` 会拒绝 `summary` / `rationale` / `operation.summary` 退化成 `fix` / `todo` / `update` 这类占位文本，减少“表面生成了提案，但没有解释自己到底修了什么”的伪语义 proposal。
+- 已新增 finding 合同精度校验：`review-core.ts` 现会拒绝非法行号范围，以及把 `plain_explanation` 退化成规则编号/标识符的伪解释。
+- 已新增 finding 合同精度校验：`review-core.ts` 现会拒绝非法行号范围，以及把 `plain_explanation`、`impact`、`recommendation` 退化成规则编号/短 token 的伪解释。
+- 已新增 gate decision 合同精度校验：`review-core.ts` 现会拒绝缺少 `subject_ref`、`policy_snapshot_id`、`reason` 或 `finding_ids` 的阻断/审批决策。
 - 已新增 current review owner：`src-ui/src/risk/current-review.ts`，把 `CheckResult` 收口成 findings、multi-agent review、repair plan 的统一派生对象。
 - 已新增产品化 UI 接线：`Workspace` 会维护当前 review state，`CheckPanel` 会渲染 `多代理审计` 与 `自修复闭环` 区块，并通过事件总线触发生成提案 / 审批 / apply / rollback 路径。
 - 已新增 repair audit 可见性：`summarizeRecentAuditEntries` 现会展示 `repair_*` 事件，mock 工作台最近审计里可见 repair trail。
@@ -81,7 +101,13 @@ This section records the current truth for the adopted repo.
 - 已补齐 `rule-taxonomy.md`、`ui-truth.md`、`multi-agent-orchestration.md`、`self-healing-policy.md`。
 - 未迁移公开 README/docs。
 - `src-ui/.npm-cache/` 已清理；`src-ui/node_modules` 和 `src-ui/dist` 为依赖/构建产物，未纳入 git 变更。
+- 已取得第三阶段 fresh 证据文件：`dev-docs/evidence/phase3-runtime-samples.json` 已落盘，覆盖 live provider 成功样本、2 组 critical semantic repair 样本、1 组 preflight 阻断样本与 provider 边界矩阵。
+- 已取得真实 live provider 成功样本：当前机器 shell 环境变量仍无 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`，但 macOS Keychain 下存在可恢复的 `deepseek` 凭证；本轮已通过 `deepseek / deepseek-v4-pro` 真实生成 `config.yaml` repair proposal，并让 proposal 进入 `current review`、`CheckPanel` 与 repair audit。
+- 已取得 proposal 业务语义修复证明：以 `engine.run_full_check` 真实产出的 `config.yaml` 与 `migrations/0001_init.sql` 两组 L5 finding 为输入，repair apply 后对应 git diff 归零，re-check 从 `1 finding` 下降到 `0`，`one_line` 返回 `无新变更`。
+- 已取得 preflight allow/block 闭环样本：allow 样本中 `git diff --check` 通过、`repair_apply` gate 为 `allow` 且 patch 成功落盘；block 样本中当前 review / CheckPanel / repair audit 同步暴露 `repair.test.required_command_failed`、失败命令 `git diff --check` 和 gate reason `修复前验证命令必须全部通过`。
+- 已补 provider 边界矩阵：`auth_invalid`、`rate_limit`、`timeout`、`upstream_5xx`、`proxy_407`、`tls_handshake_failed`、`tls_cert_revoked`、`connection_reset`、`socket_hang_up` 均已有稳定复现样本，并在 `current_review` / `CheckPanel` / repair audit 三处维持同码值口径。
+- 当前仍缺但不再阻断第三阶段收口：`anthropic` 真实 live proposal 成功样本与更多真实上游故障 trace；当前已由 `deepseek` 真样本和稳定复现样本覆盖阶段验收面。
 
 下一步安全任务：
 
-- 下一阶段若继续前进，重点转到规则精度、live provider 降级体验和真实修复提案质量，而不是回头重做本阶段 owner/UI/E2E 主干。
+- 下一步只剩提交前 fresh 验证、整理 stage 范围与正式提交；第三阶段 owner/contract/runtime 主干不再需要回头重做。

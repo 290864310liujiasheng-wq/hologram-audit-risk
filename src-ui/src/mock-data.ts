@@ -422,6 +422,95 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
     });
   }
 
+  if (cmd === 'current_review_summary') {
+    return JSON.stringify({
+      status: 'ok',
+      review: {
+        check: buildMockCheck(false),
+        findings: [
+          {
+            finding_id: 'check:mock:l5:0',
+            job_id: 'check:mock',
+            rule_id: 'check.l5',
+            severity: 'critical',
+            category: 'data_integrity',
+            locations: [{ file_path: 'nebula/core/middleware.ts', start_line: 42, end_line: 42 }],
+            plain_explanation: 'API 签名变更会导致下游调用方拿到不兼容返回值。',
+            impact: '如果直接放行，调用链上的响应处理可能在运行时静默失效。',
+            recommendation: '先恢复兼容返回值，或补齐完整迁移与审批证据。',
+            evidence_ids: ['check:l5:0'],
+            confidence: 0.92,
+            status: 'open',
+          },
+        ],
+        summary: {
+          total: 1,
+          counts: { critical: 1, high: 0, medium: 0, low: 0, info: 0 },
+          topFindings: [
+            {
+              finding_id: 'check:mock:l5:0',
+              severity: 'critical',
+              category: 'data_integrity',
+              plain_explanation: 'API 签名变更会导致下游调用方拿到不兼容返回值。',
+              locationLabel: 'middleware.ts:42',
+            },
+          ],
+        },
+        gate_decision: {
+          decision_id: 'check:mock:file_write:/mock/nebula-project:block',
+          job_id: 'check:mock',
+          subject_type: 'file_write',
+          subject_ref: '/mock/nebula-project',
+          decision: 'block',
+          reason: 'L5 不可逆风险默认阻断',
+          finding_ids: ['check:mock:l5:0'],
+          policy_snapshot_id: 'policy:review-default:v1',
+          decided_at: new Date().toISOString(),
+        },
+        multi_agent_review: {
+          job_id: 'check:mock',
+          started_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          merged_findings: [],
+          aggregation: { job_id: 'check:mock', lead_agent_run_id: 'lead', merged_finding_ids: [], dropped_duplicates: [], conflicts: [] },
+          agent_results: [],
+          degraded_reasons: [],
+        },
+        repair_plan: {
+          repair_plan_id: 'check:mock:repair',
+          job_id: 'check:mock',
+          finding_ids: ['check:mock:l5:0'],
+          strategy: '先处理最高风险 finding，再执行最小验证。',
+          patch_proposal_ref: '/mock/nebula-project/.hologram/repair-plans/check:mock:repair.json',
+          required_tests: ['npm run test:risk', 'npx tsc --noEmit'],
+          risk_note: 'CRITICAL finding requires explicit review.',
+          approval_state: 'draft',
+        },
+        provider_readiness: {
+          provider_name: 'deepseek',
+          model: 'deepseek-v4-pro',
+          source: 'missing',
+          ready: false,
+          reason: 'No provider API key available in settings or secure storage.',
+          has_inline_key: false,
+          has_secure_store_key: false,
+        },
+      },
+    });
+  }
+
+  if (cmd === 'active_provider_readiness') {
+    return JSON.stringify({
+      provider_name: 'deepseek',
+      model: 'deepseek-v4-pro',
+      source: 'missing',
+      ready: false,
+      reason: 'No provider API key available in settings or secure storage.',
+      has_inline_key: false,
+      has_secure_store_key: false,
+    });
+  }
+
   // Watcher (no-op)
   if (cmd === 'start_watching' || cmd === 'stop_watching') {
     return '(mock: watcher not available in browser)';

@@ -21,22 +21,42 @@ import { HookRegistry, createGraphContextHook, createGraphContext, buildFileNode
 import { loadSettings, saveSettings, getActiveProvider, defaultPricing, CHAT_MODES, restoreSecrets, persistSecrets } from './settings';
 import { createAnthropicProvider } from './provider/anthropic';
 import { createOpenAIProvider } from './provider/openai';
+import { inspectActiveProviderReadiness, inspectLiveRepairReadiness } from './provider/provider-readiness';
 import type { Provider } from './provider/types';
 import { bus } from './ui/events';
 import { dbg } from './ui/debug';
 import { adaptCheckResultToFindings, buildCheckRiskSummary } from './risk/check-adapter';
-import { buildApprovalAuditPayload, buildReviewAuditPayload } from './risk/audit-bridge';
-import { buildCurrentReviewState, type CurrentReviewState } from './risk/current-review';
+import { buildApprovalAuditPayload, buildRepairAuditPayload, buildReviewAuditPayload } from './risk/audit-bridge';
+import {
+  attachLiveRepairReadinessToCurrentReview,
+  attachProviderReadinessToCurrentReview,
+  attachRepairGenerationReadinessToCurrentReview,
+  attachRepairExecutionIssueToCurrentReview,
+  attachRepairIssueToCurrentReview,
+  attachRepairPreflightIssueToCurrentReview,
+  attachRepairProposalToCurrentReview,
+  buildCurrentReviewSummaryResponse,
+  buildCurrentReviewState,
+  type CurrentReviewState,
+} from './risk/current-review';
 import {
   applyRepairPlan as applyRepairPlanState,
+  buildRepairGenerationReadiness,
+  buildRepairGenerationMetadata,
+  buildRepairIssueFromPreflight,
+  createRepairIssue,
+  deriveRepairFilePaths,
   approveRepairPlan,
   attachPatchProposal,
   generatePatchProposalFromModel,
+  getRepairGenerationBlocker,
+  RepairApplyError,
+  RepairApplyExecutionError,
   rejectRepairPlan,
   rollbackRepairPlan as rollbackRepairPlanState,
   type RepairGenerationInput,
 } from './risk/self-heal';
-import type { PatchProposal, RepairRollbackSnapshot } from './risk/review-core';
+import type { PatchProposal, RepairRollbackSnapshot, ValidationCommandResult } from './risk/review-core';
 
 // ── Path util ──────────────────────────────────────────────────────
 
@@ -355,13 +375,10 @@ export class Workspace {
     // Coding tools
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
       if (name === 'current_review_summary') {
-        if (!this.currentReviewState) {
-          return JSON.stringify({ status: 'empty', message: 'No review result available yet.' });
-        }
-        return JSON.stringify({
-          status: 'ok',
-          review: this.currentReviewState,
-        });
+        return JSON.stringify(buildCurrentReviewSummaryResponse(this.currentReviewState));
+      }
+      if (name === 'active_provider_readiness') {
+        return JSON.stringify(await inspectActiveProviderReadiness(await restoreSecrets(loadSettings())));
       }
       if (name === 'run_shell' && args['runInBackground']) {
         const taskId = await invoke<string>('run_shell', args);
@@ -453,13 +470,10 @@ export class Workspace {
         const r = new ToolRegistry();
         const factoryExec: ToolExecutor = async (name, args) => {
           if (name === 'current_review_summary') {
-            if (!this.currentReviewState) {
-              return JSON.stringify({ status: 'empty', message: 'No review result available yet.' });
-            }
-            return JSON.stringify({
-              status: 'ok',
-              review: this.currentReviewState,
-            });
+            return JSON.stringify(buildCurrentReviewSummaryResponse(this.currentReviewState));
+          }
+          if (name === 'active_provider_readiness') {
+            return JSON.stringify(await inspectActiveProviderReadiness(await restoreSecrets(loadSettings())));
           }
           const result = await invoke<string>(name, args);
           return typeof result === 'string' ? result : JSON.stringify(result);
@@ -512,6 +526,21 @@ export class Workspace {
           result,
           workspace_path: this.path,
         });
+        const restoredSettings = await restoreSecrets(loadSettings());
+        this.currentReviewState = attachLiveRepairReadinessToCurrentReview(
+          this.currentReviewState,
+          await inspectLiveRepairReadiness({
+            settings: restoredSettings,
+            workspacePath: this.path,
+          }),
+        );
+        this.currentReviewState = attachRepairGenerationReadinessToCurrentReview(
+          this.currentReviewState,
+          buildRepairGenerationReadiness({
+            findings: this.currentReviewState.multi_agent_review.merged_findings.slice(0, 5),
+            files: await this.loadRepairFiles(this.currentReviewState),
+          }),
+        );
         this.currentPatchProposal = this.currentReviewState.patch_proposal || null;
         if (this.currentReviewState.repair_plan.approval_state !== 'applied') {
           this.currentRollbackSnapshot = null;
@@ -567,7 +596,12 @@ export class Workspace {
       jobId: `check:${result.timestamp || 'current'}`,
       evidencePrefix: 'check',
     });
-    const payload = buildReviewAuditPayload(result, findings, this.path);
+    const payload = buildReviewAuditPayload(
+      result,
+      findings,
+      this.path,
+      this.currentReviewState?.gate_decision,
+    );
     await invoke('audit_append_review', {
       tool: payload.tool,
       targetPath: payload.target_path,
@@ -626,30 +660,108 @@ export class Workspace {
     if (!this.currentReviewState) return;
 
     this.onStatusChange?.('正在生成修复提案…');
+    this.currentReviewState = attachLiveRepairReadinessToCurrentReview(
+      this.currentReviewState,
+      await inspectLiveRepairReadiness({
+        settings: await restoreSecrets(loadSettings()),
+        workspacePath: this.path,
+      }),
+    );
 
     try {
+      const generatedAt = new Date().toISOString();
+      const repairFiles = await this.loadRepairFiles(this.currentReviewState);
+      const repairFindings = this.currentReviewState.multi_agent_review.merged_findings.slice(0, 5);
+      const generationBlocker = getRepairGenerationBlocker({
+        findings: repairFindings,
+        files: repairFiles,
+      });
+      this.currentReviewState = attachRepairGenerationReadinessToCurrentReview(
+        this.currentReviewState,
+        buildRepairGenerationReadiness({
+          findings: repairFindings,
+          files: repairFiles,
+        }),
+      );
+      if (generationBlocker) {
+        throw generationBlocker;
+      }
       const proposal = isMockMode()
         ? buildMockRepairProposal(this.currentReviewState)
-        : await this.generateLiveRepairProposal(this.currentReviewState);
+        : await this.generateLiveRepairProposal(this.currentReviewState, generatedAt);
+      const generationMeta = buildRepairGenerationMetadata({
+        repair_plan_id: this.currentReviewState.repair_plan.repair_plan_id,
+        provider_name: isMockMode() ? 'mock' : getActiveProvider(await restoreSecrets(loadSettings())).name,
+        model: isMockMode() ? 'mock-repair-planner' : getActiveProvider(await restoreSecrets(loadSettings())).model,
+        files: repairFiles,
+        findings: repairFindings,
+        generated_at: generatedAt,
+      });
       const repairPlan = attachPatchProposal(this.currentReviewState.repair_plan, proposal);
       this.currentPatchProposal = proposal;
-      this.currentReviewState = {
-        ...this.currentReviewState,
+      this.currentReviewState = attachRepairProposalToCurrentReview(this.currentReviewState, {
         repair_plan: repairPlan,
         patch_proposal: proposal,
-      };
-      checkPanel.update(this.currentReviewState.check, this.currentReviewState);
-      await this.appendRepairAudit('repair_plan', 'allowed', 'Repair proposal generated.', {
-        approval_state: repairPlan.approval_state,
-        patch_proposal_id: proposal.patch_proposal_id,
-        operation_count: proposal.operations.length,
-        required_tests: repairPlan.required_tests,
+        repair_generation_meta: generationMeta,
       });
+      checkPanel.update(this.currentReviewState.check, this.currentReviewState);
+      await this.appendRepairAudit(buildRepairAuditPayload({
+        tool: 'repair_plan',
+        workspacePath: this.path,
+        action: 'allowed',
+        reason: 'Repair proposal generated.',
+        now: generatedAt,
+        details: {
+          approval_state: repairPlan.approval_state,
+          patch_proposal_id: proposal.patch_proposal_id,
+          operation_count: proposal.operations.length,
+          required_tests: repairPlan.required_tests,
+          generation_meta: generationMeta,
+        },
+      }));
       await this.recordApprovalTimeline('repair_plan', this.path, 'approval_requested', '已生成修复提案，等待审批').catch(() => {});
       this.onStatusChange?.(`修复提案已生成 · ${proposal.operations.length} 个文件操作`);
     } catch (error) {
       console.error('[repair] generate proposal failed:', error);
-      this.onStatusChange?.(`修复提案生成失败: ${String((error as Error).message || error)}`);
+      const issue = createRepairIssue({
+        stage: 'proposal_generation',
+        repair_plan_id: this.currentReviewState.repair_plan.repair_plan_id,
+        error,
+        now: new Date().toISOString(),
+      });
+      const generationMeta = buildRepairGenerationMetadata({
+        repair_plan_id: this.currentReviewState.repair_plan.repair_plan_id,
+        provider_name: isMockMode() ? 'mock' : getActiveProvider(await restoreSecrets(loadSettings())).name,
+        model: isMockMode() ? 'mock-repair-planner' : getActiveProvider(await restoreSecrets(loadSettings())).model,
+        files: await this.loadRepairFiles(this.currentReviewState),
+        findings: this.currentReviewState.multi_agent_review.merged_findings.slice(0, 5),
+        generated_at: issue.created_at,
+      });
+      this.currentPatchProposal = null;
+      this.currentReviewState = attachRepairIssueToCurrentReview(this.currentReviewState, {
+        issue,
+        repair_generation_meta: generationMeta,
+      });
+      checkPanel.update(this.currentReviewState.check, this.currentReviewState);
+      await this.appendRepairAudit(buildRepairAuditPayload({
+        tool: 'repair_plan',
+        workspacePath: this.path,
+        action: 'denied',
+        reason: 'Repair proposal generation degraded.',
+        now: issue.created_at,
+        details: {
+          approval_state: this.currentReviewState.repair_plan.approval_state,
+          error_code: issue.error.code,
+          error_stage: issue.stage,
+          error_retryable: issue.error.retryable,
+          generation_meta: generationMeta,
+        },
+      })).catch(() => {});
+      this.onStatusChange?.(
+        issue.error.code === 'missing_evidence'
+          ? '修复提案已阻断：当前风险没有可编辑源码输入'
+          : issue.summary,
+      );
     }
   }
 
@@ -673,11 +785,18 @@ export class Workspace {
       repair_plan: repairPlan,
     };
     checkPanel.update(this.currentReviewState.check, this.currentReviewState);
-    await this.appendRepairAudit('repair_approval', result.allow ? 'allowed' : 'denied', result.allow ? 'Repair apply approved.' : 'Repair apply rejected.', {
-      approval_state: repairPlan.approval_state,
-      remember: result.remember,
-      patch_proposal_id: this.currentPatchProposal.patch_proposal_id,
-    });
+    await this.appendRepairAudit(buildRepairAuditPayload({
+      tool: 'repair_approval',
+      workspacePath: this.path,
+      action: result.allow ? 'allowed' : 'denied',
+      reason: result.allow ? 'Repair apply approved.' : 'Repair apply rejected.',
+      now: new Date().toISOString(),
+      details: {
+        approval_state: repairPlan.approval_state,
+        remember: result.remember,
+        patch_proposal_id: this.currentPatchProposal.patch_proposal_id,
+      },
+    }));
     this.onStatusChange?.(result.allow ? '修复审批已通过' : '修复审批已拒绝');
   }
 
@@ -685,32 +804,116 @@ export class Workspace {
     if (!this.currentReviewState || !this.currentPatchProposal) return;
     if (this.currentReviewState.repair_plan.approval_state !== 'approved') return;
 
-    const applied = await applyRepairPlanState({
-      plan: this.currentReviewState.repair_plan,
-      proposal: this.currentPatchProposal,
-      now: new Date().toISOString(),
-      readFile: async (filePath) => invoke<string>('read_file_content', {
-        filePath: this.resolveWorkspacePath(filePath),
-      }),
-      writeFile: async (filePath, content) => invoke('write_file_content', {
-        filePath: this.resolveWorkspacePath(filePath),
-        content,
-      }),
-    });
+    this.onStatusChange?.('正在执行修复前复检…');
 
-    this.currentRollbackSnapshot = applied.rollback;
-    this.currentReviewState = {
-      ...this.currentReviewState,
-      repair_plan: applied.plan,
-      rollback: applied.rollback,
-    };
-    checkPanel.update(this.currentReviewState.check, this.currentReviewState);
-    await this.appendRepairAudit('repair_apply', 'allowed', 'Repair patch applied.', {
-      approval_state: applied.plan.approval_state,
-      rollback_id: applied.rollback.rollback_id,
-      operation_count: this.currentPatchProposal.operations.length,
-    });
-    this.onStatusChange?.('修复已应用，可继续执行验证或回滚');
+    try {
+      const applied = await applyRepairPlanState({
+        plan: this.currentReviewState.repair_plan,
+        proposal: this.currentPatchProposal,
+        findings: this.currentReviewState.multi_agent_review.merged_findings,
+        policy_snapshot_id: 'policy:repair-apply:v1',
+        now: new Date().toISOString(),
+        runTest: (command) => this.runRepairValidationCommand(command),
+        readFile: async (filePath) => invoke<string>('read_file_content', {
+          filePath: this.resolveWorkspacePath(filePath),
+        }),
+        writeFile: async (filePath, content) => invoke('write_file_content', {
+          filePath: this.resolveWorkspacePath(filePath),
+          content,
+        }),
+      });
+
+      this.currentRollbackSnapshot = applied.rollback;
+      this.currentReviewState = {
+        ...this.currentReviewState,
+        repair_plan: applied.plan,
+        rollback: applied.rollback,
+      };
+      checkPanel.update(this.currentReviewState.check, this.currentReviewState);
+      await this.appendRepairAudit(buildRepairAuditPayload({
+        tool: 'repair_apply',
+        workspacePath: this.path,
+        action: 'allowed',
+        reason: 'Repair patch applied.',
+        now: new Date().toISOString(),
+        details: {
+          approval_state: applied.plan.approval_state,
+          rollback_id: applied.rollback.rollback_id,
+          operation_count: this.currentPatchProposal.operations.length,
+          gate_decision: applied.preflight.gate_decision.decision,
+          preflight_findings: applied.preflight.findings.map((finding) => ({
+            finding_id: finding.finding_id,
+            rule_id: finding.rule_id,
+          })),
+          validation_results: applied.preflight.test_results,
+        },
+      }));
+      this.onStatusChange?.('修复已应用，可继续执行验证或回滚');
+    } catch (error) {
+      if (error instanceof RepairApplyError) {
+        const issue = buildRepairIssueFromPreflight({
+          repair_plan_id: this.currentReviewState.repair_plan.repair_plan_id,
+          preflight: error.preflight,
+          now: new Date().toISOString(),
+        });
+        this.currentReviewState = attachRepairPreflightIssueToCurrentReview(this.currentReviewState, {
+          issue,
+          preflight: error.preflight,
+        });
+        checkPanel.update(this.currentReviewState.check, this.currentReviewState);
+        await this.appendRepairAudit(buildRepairAuditPayload({
+          tool: 'repair_apply',
+          workspacePath: this.path,
+          action: 'denied',
+          reason: 'Repair preflight failed.',
+          now: issue.created_at,
+          details: {
+            approval_state: this.currentReviewState.repair_plan.approval_state,
+            gate_decision: error.preflight.gate_decision.decision,
+            gate_reason: error.preflight.gate_decision.reason,
+            error_code: issue.error.code,
+            error_stage: issue.stage,
+            error_retryable: issue.error.retryable,
+            preflight_findings: error.preflight.findings.map((finding) => ({
+              finding_id: finding.finding_id,
+              rule_id: finding.rule_id,
+            })),
+            validation_results: error.preflight.test_results,
+          },
+        })).catch(() => {});
+      } else if (error instanceof RepairApplyExecutionError) {
+        const issue = createRepairIssue({
+          stage: 'apply',
+          repair_plan_id: this.currentReviewState.repair_plan.repair_plan_id,
+          error,
+          now: new Date().toISOString(),
+        });
+        this.currentRollbackSnapshot = error.rollback;
+        this.currentReviewState = attachRepairExecutionIssueToCurrentReview(this.currentReviewState, {
+          issue,
+          rollback: error.rollback,
+        });
+        checkPanel.update(this.currentReviewState.check, this.currentReviewState);
+        await this.appendRepairAudit(buildRepairAuditPayload({
+          tool: 'repair_apply',
+          workspacePath: this.path,
+          action: 'denied',
+          reason: 'Repair apply failed after partial write.',
+          now: issue.created_at,
+          details: {
+            approval_state: this.currentReviewState.repair_plan.approval_state,
+            error_code: issue.error.code,
+            error_stage: issue.stage,
+            error_retryable: issue.error.retryable,
+            rollback_id: error.rollback.rollback_id,
+          },
+        })).catch(() => {});
+        this.onStatusChange?.(issue.summary);
+        throw error;
+      }
+      this.onStatusChange?.(`修复前复检失败: ${String((error as Error).message || error)}`);
+      throw error;
+    }
   }
 
   async rollbackRepairPatch(checkPanel: CheckPanel): Promise<void> {
@@ -731,19 +934,27 @@ export class Workspace {
       repair_plan: rolledBack,
     };
     checkPanel.update(this.currentReviewState.check, this.currentReviewState);
-    await this.appendRepairAudit('repair_rollback', 'allowed', 'Repair patch rolled back.', {
-      approval_state: rolledBack.approval_state,
-      rollback_id: this.currentRollbackSnapshot.rollback_id,
-    });
+    await this.appendRepairAudit(buildRepairAuditPayload({
+      tool: 'repair_rollback',
+      workspacePath: this.path,
+      action: 'allowed',
+      reason: 'Repair patch rolled back.',
+      now: new Date().toISOString(),
+      details: {
+        approval_state: rolledBack.approval_state,
+        rollback_id: this.currentRollbackSnapshot.rollback_id,
+      },
+    }));
     this.onStatusChange?.('修复已回滚');
   }
 
-  private async generateLiveRepairProposal(state: CurrentReviewState): Promise<PatchProposal> {
+  private async generateLiveRepairProposal(state: CurrentReviewState, generatedAt: string): Promise<PatchProposal> {
     const settings = await restoreSecrets(loadSettings());
-    const active = getActiveProvider(settings);
-    if (!active.apiKey || active.apiKey.trim() === '') {
-      throw new Error('No provider API key available for repair planner.');
+    const readiness = await inspectActiveProviderReadiness(settings);
+    if (!readiness.ready) {
+      throw new Error(readiness.reason);
     }
+    const active = getActiveProvider(settings);
 
     const provider =
       active.kind === 'anthropic'
@@ -770,16 +981,15 @@ export class Workspace {
       repair_plan_id: state.repair_plan.repair_plan_id,
       files,
       findings: state.multi_agent_review.merged_findings.slice(0, 5),
-      generated_at: new Date().toISOString(),
+      generated_at: generatedAt,
     });
   }
 
   private async loadRepairFiles(state: CurrentReviewState): Promise<RepairGenerationInput['files']> {
-    const uniquePaths = Array.from(new Set(
-      state.multi_agent_review.merged_findings
-        .flatMap((finding) => finding.locations.map((location) => location.file_path))
-        .slice(0, 3),
-    ));
+    const uniquePaths = deriveRepairFilePaths({
+      findings: state.multi_agent_review.merged_findings.slice(0, 5),
+      changed_files: state.check.changed_files,
+    }).slice(0, 3);
 
     const files: RepairGenerationInput['files'] = [];
     for (const filePath of uniquePaths) {
@@ -803,19 +1013,36 @@ export class Workspace {
     return `${this.path.replace(/[\\/]$/, '')}/${filePath.replace(/^[\\/]+/, '')}`;
   }
 
-  private async appendRepairAudit(
-    tool: string,
-    action: 'allowed' | 'denied',
-    reason: string,
-    details: Record<string, unknown>,
-  ): Promise<void> {
+  private async appendRepairAudit(payload: ReturnType<typeof buildRepairAuditPayload>): Promise<void> {
     await invoke('audit_append_review', {
-      tool,
-      targetPath: this.path,
-      action,
-      reason,
-      detailsJson: JSON.stringify(details),
+      tool: payload.tool,
+      targetPath: payload.target_path,
+      action: payload.action,
+      reason: payload.reason,
+      detailsJson: JSON.stringify(payload.details),
     });
+  }
+
+  private async runRepairValidationCommand(command: string): Promise<ValidationCommandResult> {
+    try {
+      const stdout = await invoke<string>('exec_command', {
+        command,
+        cwd: this.path,
+      });
+      return {
+        command,
+        passed: true,
+        stdout,
+        stderr: '',
+      };
+    } catch (error) {
+      return {
+        command,
+        passed: false,
+        stdout: '',
+        stderr: String((error as Error).message || error),
+      };
+    }
   }
 }
 

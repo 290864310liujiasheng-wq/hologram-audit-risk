@@ -103,8 +103,25 @@ export function saveSettings(s: AppSettings): void {
   }
 }
 
+export interface SecretPersistenceReport {
+  storedProviders: string[];
+  failedProviders: Array<{
+    provider: string;
+    reason: string;
+  }>;
+}
+
 /** 将 API Key 持久化到系统加密存储（DPAPI on Windows），防止 localStorage 被清丢 Key。 */
 export async function persistSecrets(s: AppSettings): Promise<void> {
+  await persistSecretsWithReport(s);
+}
+
+export async function persistSecretsWithReport(s: AppSettings): Promise<SecretPersistenceReport> {
+  const report: SecretPersistenceReport = {
+    storedProviders: [],
+    failedProviders: [],
+  };
+
   try {
     const { invoke } = await import('./bridge');
     for (const p of s.providers) {
@@ -112,10 +129,23 @@ export async function persistSecrets(s: AppSettings): Promise<void> {
       if (key) {
         try {
           await invoke('credential_store', { provider: p.name, key });
-        } catch { /* non-critical — localStorage still has the key */ }
+          report.storedProviders.push(p.name);
+        } catch (error) {
+          report.failedProviders.push({
+            provider: p.name,
+            reason: String((error as Error)?.message || error || 'unknown error'),
+          });
+        }
       }
     }
-  } catch { /* dynamic import failed — non-critical */ }
+  } catch (error) {
+    report.failedProviders.push({
+      provider: 'all',
+      reason: String((error as Error)?.message || error || 'failed to load bridge'),
+    });
+  }
+
+  return report;
 }
 
 /** 从系统加密存储恢复 API Key（仅填充 apiKey 为空的 provider）。loadSettings 后用。 */

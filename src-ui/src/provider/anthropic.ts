@@ -1,6 +1,6 @@
 // Anthropic Messages API provider — 手写 fetch() + SSE 解析，零第三方 SDK
 
-import { Chunk, ChunkType, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
+import { Chunk, ChunkType, classifyProviderFailure, Message, Provider, Request, Role, sanitizeToolPairing } from './types';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
@@ -229,7 +229,10 @@ async function sendWithRetry(
       });
     } catch (err: any) {
       if (err.name === 'AbortError') throw new Error(`${name}: aborted`);
-      lastErr = new Error(`${name}: request failed: ${err.message}`);
+      lastErr = classifyProviderFailure({
+        provider_name: name,
+        message: `${name}: request failed: ${err.message}`,
+      });
       continue;
     }
 
@@ -237,13 +240,17 @@ async function sendWithRetry(
 
     const msg = await resp.text().catch(() => '');
     if (resp.status === 401 || resp.status === 403) {
-      throw new Error(
-        `authentication failed for "${name}" (HTTP ${resp.status}): API key is invalid or expired`,
-      );
+      throw classifyProviderFailure({
+        provider_name: name,
+        message: `authentication failed for "${name}" (HTTP ${resp.status}): API key is invalid or expired`,
+        status: resp.status,
+      });
     }
-    const statusErr = new Error(
-      `${name}: status ${resp.status}: ${msg.slice(0, 500)}`,
-    );
+    const statusErr = classifyProviderFailure({
+      provider_name: name,
+      message: `${name}: status ${resp.status}: ${msg.slice(0, 500)}`,
+      status: resp.status,
+    });
     if (!isRetryableStatus(resp.status)) throw statusErr;
     lastErr = statusErr;
   }

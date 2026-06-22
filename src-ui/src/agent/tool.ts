@@ -832,13 +832,24 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'current_review_summary',
       description: () =>
-        'Read the latest in-memory review summary from the current check panel. Returns the newest check result transformed into finding counts and top findings. Use when you need the current risk state instead of historical audit records.',
+        'Read the latest in-memory current review object from the check panel. Returns the newest transformed review state, including findings, gate decision, multi-agent review, repair plan, and any repair degradation state. Use when you need the current risk state instead of historical audit records.',
       parameters: () => ({
         type: 'object',
         properties: {},
       }),
       readOnly: () => true,
       execute: () => exec('current_review_summary', {}),
+    },
+    {
+      name: () => 'active_provider_readiness',
+      description: () =>
+        'Read whether the active provider is ready for live repair proposal generation. Returns the active provider name/model, whether a key is available from settings or secure storage, and the concrete missing reason when live provider execution is not currently possible.',
+      parameters: () => ({
+        type: 'object',
+        properties: {},
+      }),
+      readOnly: () => true,
+      execute: () => exec('active_provider_readiness', {}),
     },
 
     // ── Code Search ──

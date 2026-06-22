@@ -7,6 +7,7 @@ import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import { adaptCheckResultToFindings, buildCheckRiskSummary } from '../risk/check-adapter';
 import { summarizeRecentAuditEntries, type RecentAuditEntry } from '../risk/audit-bridge';
+import { buildRepairPreflightSummary } from '../risk/self-heal';
 import type { CurrentReviewState } from '../risk/current-review';
 
 export interface Violation {
@@ -200,6 +201,7 @@ export class CheckPanel {
     }
 
     if (!isHistory && this.currentReviewState) {
+      this.content.appendChild(this.renderCurrentGateDecision(this.currentReviewState));
       this.content.appendChild(this.renderMultiAgentReview(this.currentReviewState));
       this.content.appendChild(this.renderRepairPlan(this.currentReviewState));
     }
@@ -547,6 +549,29 @@ export class CheckPanel {
     return sec;
   }
 
+  private renderCurrentGateDecision(state: CurrentReviewState): HTMLElement {
+    const sec = ce('div', 'check-section check-risk-summary');
+    const title = ce('div', 'check-section-title');
+    title.innerHTML = `${iconHtml('block', 11)} 门禁决策`;
+    sec.appendChild(title);
+
+    const summary = ce('div', 'check-gate-summary');
+    const decisionBadge = ce('span', `check-gate-badge ${gateDecisionBadgeClass(state.gate_decision.decision)}`);
+    decisionBadge.textContent = gateDecisionLabel(state.gate_decision.decision);
+    summary.appendChild(decisionBadge);
+    sec.appendChild(summary);
+
+    const reason = ce('div', 'check-gate-rec');
+    reason.textContent = state.gate_decision.reason;
+    sec.appendChild(reason);
+
+    const policy = ce('div', 'check-vmore');
+    policy.textContent = `策略快照: ${state.gate_decision.policy_snapshot_id} · finding ${state.gate_decision.finding_ids.length} 条`;
+    sec.appendChild(policy);
+
+    return sec;
+  }
+
   private renderRepairPlan(state: CurrentReviewState): HTMLElement {
     const sec = ce('div', 'check-section check-risk-summary');
     const title = ce('div', 'check-section-title');
@@ -554,26 +579,73 @@ export class CheckPanel {
     sec.appendChild(title);
 
     const plan = state.repair_plan;
+    const noRepairCandidate = (state.repair_generation_readiness?.finding_count ?? plan.finding_ids.length) === 0
+      && !state.patch_proposal
+      && !state.repair_issue;
     const statusRow = ce('div', 'check-gate-summary');
     const status = ce('span', `check-gate-badge ${repairBadgeClass(plan.approval_state)}`);
-    status.textContent = `状态 ${plan.approval_state}`;
+    status.textContent = noRepairCandidate ? '当前无可修复风险' : `状态 ${plan.approval_state}`;
     statusRow.appendChild(status);
-    const tests = ce('span', 'check-gate-badge check-gate-low');
-    tests.textContent = `${plan.required_tests.length} 个验证命令`;
-    statusRow.appendChild(tests);
+    if (!noRepairCandidate) {
+      const tests = ce('span', 'check-gate-badge check-gate-low');
+      tests.textContent = `${plan.required_tests.length} 个验证命令`;
+      statusRow.appendChild(tests);
+    }
     sec.appendChild(statusRow);
 
     const strategy = ce('div', 'check-gate-rec');
-    strategy.textContent = plan.strategy;
+    strategy.textContent = noRepairCandidate
+      ? '当前 review 没有进入自修复闭环的风险，等待新的可修复 finding 后再生成提案。'
+      : plan.strategy;
     sec.appendChild(strategy);
 
-    const risk = ce('div', 'check-vchange');
-    risk.textContent = plan.risk_note;
-    sec.appendChild(risk);
+    if (!noRepairCandidate) {
+      const risk = ce('div', 'check-vchange');
+      risk.textContent = plan.risk_note;
+      sec.appendChild(risk);
+    }
 
-    const commandList = ce('div', 'check-vaffect');
-    commandList.textContent = `验证: ${plan.required_tests.join(' · ')}`;
-    sec.appendChild(commandList);
+    if (plan.required_tests.length > 0) {
+      const commandList = ce('div', 'check-vaffect');
+      commandList.textContent = `验证: ${plan.required_tests.join(' · ')}`;
+      sec.appendChild(commandList);
+    }
+
+    if (state.repair_generation_readiness) {
+      const generationReady = ce('div', 'check-vmore');
+      generationReady.textContent = `Repair input: ${state.repair_generation_readiness.finding_count} findings · ${state.repair_generation_readiness.file_count} files · ${state.repair_generation_readiness.eligible ? 'eligible' : 'blocked'}`;
+      sec.appendChild(generationReady);
+
+      if (!state.repair_generation_readiness.eligible) {
+        const generationReason = ce('div', 'check-vmore');
+        generationReason.textContent = state.repair_generation_readiness.reason;
+        sec.appendChild(generationReason);
+      }
+    }
+
+    if (state.provider_readiness) {
+      const readiness = ce('div', 'check-vmore');
+      readiness.textContent = `Provider: ${state.provider_readiness.provider_name} / ${state.provider_readiness.model} · ${state.provider_readiness.ready ? 'ready' : 'not ready'} · ${state.provider_readiness.source}`;
+      sec.appendChild(readiness);
+
+      if (!state.provider_readiness.ready) {
+        const readinessReason = ce('div', 'check-vmore');
+        readinessReason.textContent = state.provider_readiness.reason;
+        sec.appendChild(readinessReason);
+      }
+    }
+
+    if (state.live_repair_readiness && !state.live_repair_readiness.eligible) {
+      const liveReason = ce('div', 'check-vmore');
+      liveReason.textContent = `Live repair: ${state.live_repair_readiness.reason}`;
+      sec.appendChild(liveReason);
+    }
+
+    if (state.repair_generation_meta) {
+      const meta = ce('div', 'check-vmore');
+      meta.textContent = `生成: ${state.repair_generation_meta.provider_name} / ${state.repair_generation_meta.model} · 文件 ${state.repair_generation_meta.file_count} 个 · 高风险 ${state.repair_generation_meta.high_severity_finding_ids.length} 条`;
+      sec.appendChild(meta);
+    }
 
     if (state.patch_proposal) {
       const proposal = ce('div', 'check-vaffect');
@@ -581,9 +653,65 @@ export class CheckPanel {
       sec.appendChild(proposal);
     }
 
+    if (state.repair_issue) {
+      const degraded = ce('div', 'check-gate-summary');
+      const issueBadge = ce('span', `check-gate-badge ${state.repair_issue.error.retryable ? 'check-gate-mid' : 'check-gate-high'}`);
+      issueBadge.textContent = state.repair_issue.error.retryable ? '提案降级，可重试' : '提案失败，需修正';
+      degraded.appendChild(issueBadge);
+      const stageBadge = ce('span', 'check-gate-badge check-gate-low');
+      stageBadge.textContent = `阶段 ${state.repair_issue.stage}`;
+      degraded.appendChild(stageBadge);
+      sec.appendChild(degraded);
+
+      const issueText = ce('div', 'check-vmore');
+      issueText.textContent = state.repair_issue.summary;
+      sec.appendChild(issueText);
+
+      if (state.repair_issue.error.code === 'missing_evidence') {
+        const note = ce('div', 'check-vmore');
+        note.textContent = '当前风险已识别，但还没有收口到可直接修改的源码文件；这不是 provider/key 故障。';
+        sec.appendChild(note);
+      }
+
+      if (state.repair_preflight) {
+        const preflightSummary = buildRepairPreflightSummary(state.repair_preflight);
+        const preflight = ce('div', 'check-vmore');
+        preflight.textContent = `复检: ${preflightSummary.reason} · finding ${state.repair_preflight.findings.length} 条 · 验证 ${state.repair_preflight.test_results.length} 条`;
+        sec.appendChild(preflight);
+
+        if (preflightSummary.failed_commands.length > 0) {
+          const commands = ce('div', 'check-vmore');
+          commands.textContent = `失败命令: ${preflightSummary.failed_commands.join(' · ')}`;
+          sec.appendChild(commands);
+        }
+
+        if (preflightSummary.blocking_rule_ids.length > 0) {
+          const rules = ce('div', 'check-vmore');
+          rules.textContent = `阻断规则: ${preflightSummary.blocking_rule_ids.join(' · ')}`;
+          sec.appendChild(rules);
+        }
+      }
+
+      if (state.repair_issue.stage === 'apply' && state.rollback) {
+        const rollback = ce('div', 'check-vmore');
+        rollback.textContent = `已自动回滚: ${state.rollback.rollback_id}`;
+        sec.appendChild(rollback);
+      }
+    }
+
     const actions = ce('div', 'check-gate-summary');
     if (plan.approval_state === 'draft' || plan.approval_state === 'rejected' || plan.approval_state === 'rolled_back') {
-      actions.appendChild(this.actionButton('生成补丁提案', () => bus.emit('repair:generate-proposal')));
+      const disabledReason = state.repair_generation_readiness && !state.repair_generation_readiness.eligible
+        ? state.repair_generation_readiness.reason
+        : null;
+      actions.appendChild(this.actionButton(
+        disabledReason
+          ? (state.repair_generation_readiness?.finding_count === 0 ? '当前无可修复风险' : '当前不可自动修复')
+          : '生成补丁提案',
+        () => bus.emit('repair:generate-proposal'),
+        !disabledReason,
+        disabledReason || undefined,
+      ));
     }
     if (plan.approval_state === 'waiting_approval') {
       actions.appendChild(this.actionButton('审批修复', () => bus.emit('repair:request-approval')));
@@ -601,13 +729,16 @@ export class CheckPanel {
     return sec;
   }
 
-  private actionButton(label: string, onClick: () => void): HTMLButtonElement {
+  private actionButton(label: string, onClick: () => void, enabled = true, title?: string): HTMLButtonElement {
     const button = document.createElement('button');
     button.className = 'check-ask-btn';
     button.textContent = label;
     button.style.width = 'auto';
     button.style.padding = '6px 10px';
+    button.disabled = !enabled;
+    if (title) button.title = title;
     button.addEventListener('click', (event) => {
+      if (!enabled) return;
       event.stopPropagation();
       onClick();
     });
@@ -731,6 +862,32 @@ function repairBadgeClass(state: CurrentReviewState['repair_plan']['approval_sta
       return 'check-gate-high';
     default:
       return 'check-gate-mid';
+  }
+}
+
+function gateDecisionBadgeClass(decision: CurrentReviewState['gate_decision']['decision']): string {
+  switch (decision) {
+    case 'allow':
+      return 'check-gate-low';
+    case 'warn':
+      return 'check-gate-mid';
+    case 'require_approval':
+      return 'check-gate-mid';
+    case 'block':
+      return 'check-gate-high';
+  }
+}
+
+function gateDecisionLabel(decision: CurrentReviewState['gate_decision']['decision']): string {
+  switch (decision) {
+    case 'allow':
+      return '允许';
+    case 'warn':
+      return '警告';
+    case 'require_approval':
+      return '需审批';
+    case 'block':
+      return '阻断';
   }
 }
 

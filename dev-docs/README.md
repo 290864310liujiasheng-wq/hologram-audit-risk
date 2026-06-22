@@ -1,15 +1,15 @@
 # dev-docs 真源索引
 
-生成日期：2026-06-20
+生成日期：2026-06-22
 
 本目录记录“AI 编码风控平台”的内部产品、架构、合同和验收真源。它用于约束后续 agent，不替代当前源码、测试、脚本和 git 状态。
 
 ## 当前阶段
 
-- 阶段：第二阶段，多代理审计 + 自修复闭环 + 产品化 UI 路径。
-- 当前状态：已完成。owner 层、控制器接线、产品化 UI 路径、真实当前 repo workspace 的桌面态审查与审计证据均已落地。
-- 已完成交付：真源文档、`Review Core` 最小 owner、`CheckPanel` 风控摘要、审批写路径、审计读写链路、Agent 对当前审查/最近审计的读取能力、多代理聚合 owner、自修复 plan/proposal/apply/rollback owner、`current_review_summary` 扩展对象、CheckPanel 的多代理/自修复区块、repair audit 读路径。
-- 本阶段真实项目证据：当前 repo 已生成 `hologram_graph.json`（`5017` 节点 / `9525` 边）、`.last_project`、`.hologram/audit.jsonl`；Tauri 桌面壳冷启动后已加载真实 repo 并写入 review audit。
+- 阶段：第二阶段已完成；第三阶段 owner / contract 主干与剩余运行态证据已收口，当前进入提交与阶段结束判断。
+- 当前状态：现有修复链除 apply-time preflight、provider degrade、provider readiness、repair generation readiness 与结构性风险空状态外，已补齐 live provider 成功样本、proposal 业务语义修复证明、preflight allow/block 闭环样本与 provider 边界样本矩阵。
+- 已完成交付：真源文档、`Review Core` 最小 owner、`CheckPanel` 风控摘要、审批写路径、审计读写链路、Agent 对当前审查/最近审计的读取能力、多代理聚合 owner、自修复 plan/proposal/apply/rollback owner、`current_review_summary` 扩展对象、`active_provider_readiness` 只读链路、CheckPanel 的多代理/自修复区块、repair audit 读路径、`rule-package` 默认 repair 规则包、apply-time preflight gate、provider failure -> repair issue 降级路径，以及非代码高风险 repair 的最小 `git diff --check` gate。
+- 本阶段真实项目证据：当前 repo 已生成 `hologram_graph.json`（`5017` 节点 / `9525` 边）、`.last_project`、`.hologram/audit.jsonl`；新增 [evidence/phase3-runtime-samples.json](evidence/phase3-runtime-samples.json) 记录 live deepseek proposal 成功样本、config/migration 语义修复样本、preflight 阻断样本与 provider 边界矩阵。
 - 当前 UI 方向：深色 IDE 工作台。
 - 当前模型策略：客户接入自己的模型 API，平台不统一提供模型服务。
 
@@ -21,6 +21,7 @@
 - [domain-model.md](domain-model.md)：领域对象、状态流转、身份与审计关系。
 - [contracts.md](contracts.md)：审查任务、规则命中、拦截决策、审计事件、自修复计划等合同草案。
 - [acceptance.md](acceptance.md)：文档阶段验收、后续代码验收口径和漂移锁。
+- [evidence/phase3-runtime-samples.json](evidence/phase3-runtime-samples.json)：第三阶段 fresh 运行态证据，包含 live provider、semantic repair、preflight 与 provider failure 样本。
 - [rule-taxonomy.md](rule-taxonomy.md)：规则分类、严重级别、拦截语义和误报处理口径。
 - [ui-truth.md](ui-truth.md)：深色 IDE 工作台的信息架构、主视图和关键交互真源。
 - [multi-agent-orchestration.md](multi-agent-orchestration.md)：多代理角色、编排、去重、冲突和降级规则。

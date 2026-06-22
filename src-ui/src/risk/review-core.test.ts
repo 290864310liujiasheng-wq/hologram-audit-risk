@@ -2,6 +2,7 @@ import {
   createAuditEvent,
   deriveGateDecision,
   finalizeReviewJobResult,
+  validateGateDecision,
   validateRule,
   validateReviewFinding,
   validateReviewJobRequest,
@@ -101,6 +102,42 @@ test('validateReviewFinding rejects findings without source locations', () => {
   assert.equal(errors[0]?.message, 'ReviewFinding requires at least one source location.');
 });
 
+test('validateReviewFinding rejects invalid source line ranges', () => {
+  const errors = validateReviewFinding(baseFinding({
+    locations: [{ file_path: 'src/app.ts', start_line: 12, end_line: 10 }],
+  }));
+
+  assert.equal(errors[0]?.code, 'invalid_request');
+  assert.equal(errors[0]?.message, 'ReviewFinding source locations must use positive, ordered line ranges.');
+});
+
+test('validateReviewFinding rejects plain explanations that are only rule identifiers', () => {
+  const errors = validateReviewFinding(baseFinding({
+    plain_explanation: 'rule-critical',
+  }));
+
+  assert.equal(errors[0]?.code, 'invalid_request');
+  assert.equal(errors[0]?.message, 'ReviewFinding plain explanation must be human-readable, not just an identifier.');
+});
+
+test('validateReviewFinding rejects impact that is not human-readable', () => {
+  const errors = validateReviewFinding(baseFinding({
+    impact: 'impact.high',
+  }));
+
+  assert.equal(errors[0]?.code, 'invalid_request');
+  assert.equal(errors[0]?.message, 'ReviewFinding impact must describe the user-visible or system impact in plain language.');
+});
+
+test('validateReviewFinding rejects empty recommendations', () => {
+  const errors = validateReviewFinding(baseFinding({
+    recommendation: 'fix',
+  }));
+
+  assert.equal(errors[0]?.code, 'invalid_request');
+  assert.equal(errors[0]?.message, 'ReviewFinding recommendation must contain a concrete human-readable action.');
+});
+
 test('validateReviewJobRequest rejects missing policy and provider profiles', () => {
   const errors = validateReviewJobRequest(baseReviewJobRequest({
     policy_profile_id: '',
@@ -108,6 +145,18 @@ test('validateReviewJobRequest rejects missing policy and provider profiles', ()
   }));
 
   assert.deepEqual(errors.map((error) => error.code), ['invalid_request', 'invalid_request']);
+});
+
+test('validateReviewJobRequest rejects missing workspace and change ids', () => {
+  const errors = validateReviewJobRequest(baseReviewJobRequest({
+    workspace_id: '',
+    change_id: '',
+  }));
+
+  assert.deepEqual(errors.map((error) => error.message), [
+    'ReviewJobRequest requires a workspace id.',
+    'ReviewJobRequest requires a change id.',
+  ]);
 });
 
 test('validateRule rejects block rules without scope', () => {
@@ -159,6 +208,27 @@ test('deriveGateDecision keeps every matched finding id even when block is the s
 
   assert.deepEqual(decision.finding_ids, ['finding-1', 'finding-2']);
   assert.equal(decision.decision, 'block');
+});
+
+test('validateGateDecision rejects block decisions without reason or findings', () => {
+  const errors = validateGateDecision({
+    decision_id: 'decision-1',
+    job_id: 'job-1',
+    subject_type: 'file_write',
+    subject_ref: '',
+    decision: 'block',
+    reason: '',
+    finding_ids: [],
+    policy_snapshot_id: '',
+    decided_at: '2026-06-20T00:00:00Z',
+  });
+
+  assert.deepEqual(errors.map((error) => error.message), [
+    'GateDecision requires a subject reference.',
+    'GateDecision requires a policy snapshot id.',
+    'Blocking or approval decisions require a human-readable reason.',
+    'Blocking or approval decisions require at least one finding id.',
+  ]);
 });
 
 test('finalizeReviewJobResult becomes blocked when gate decision blocks', () => {
