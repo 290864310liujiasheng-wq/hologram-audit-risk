@@ -17,6 +17,7 @@ import {
   buildCurrentReviewSummaryResponse,
   type CurrentReviewState,
 } from '../src/risk/current-review';
+import { buildRulePolicySnapshotId } from '../src/risk/rule-package';
 import {
   applyRepairPlan,
   approveRepairPlan,
@@ -285,7 +286,7 @@ async function runCriticalRevertScenario(input: {
       plan: approvedPlan,
       proposal,
       findings,
-      policy_snapshot_id: 'policy:repair-apply:v1',
+      policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
       now: new Date().toISOString(),
       runTest: async (command) => {
         const result = runShell(command, repo.root);
@@ -404,7 +405,7 @@ async function runBlockedPreflightScenario(): Promise<Record<string, unknown>> {
         plan: approvedPlan,
         proposal,
         findings,
-        policy_snapshot_id: 'policy:repair-apply:v1',
+        policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
         now: new Date().toISOString(),
         runTest: async (command) => {
           const result = runShell(command, repo.root);
@@ -596,7 +597,7 @@ async function runLiveProviderScenario(): Promise<Record<string, unknown>> {
         plan: approvedPlan,
         proposal,
         findings,
-        policy_snapshot_id: 'policy:repair-apply:v1',
+        policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
         now: new Date().toISOString(),
         runTest: async (command) => {
           const result = runShell(command, repo.root);

@@ -6,9 +6,8 @@ import { bus } from './events';
 import { iconHtml } from './icons';
 import { askAgent } from './agent-visualizer';
 import { adaptCheckResultToFindings, buildCheckRiskSummary } from '../risk/check-adapter';
-import { summarizeRecentAuditEntries, type RecentAuditEntry } from '../risk/audit-bridge';
-import { buildRepairPreflightSummary } from '../risk/self-heal';
-import type { CurrentReviewState } from '../risk/current-review';
+import { buildRepairHistory, parseAuditQueryResult, summarizeRecentAuditEntries, type AuditRecord } from '../risk/audit-bridge';
+import { buildRepairWorkbenchSnapshot, buildWorkbenchQueue, type CurrentReviewState } from '../risk/current-review';
 
 export interface Violation {
   signal?: {
@@ -55,6 +54,7 @@ export class CheckPanel {
   private viewingHistory = false;
   private historyTimestamp = '';
   private lastAuditRows: ReturnType<typeof summarizeRecentAuditEntries> = [];
+  private lastAuditRecords: AuditRecord[] = [];
   private currentReviewState: CurrentReviewState | null = null;
 
   constructor(container: HTMLElement) {
@@ -201,6 +201,7 @@ export class CheckPanel {
     }
 
     if (!isHistory && this.currentReviewState) {
+      this.content.appendChild(this.renderWorkbenchQueue(this.currentReviewState));
       this.content.appendChild(this.renderCurrentGateDecision(this.currentReviewState));
       this.content.appendChild(this.renderMultiAgentReview(this.currentReviewState));
       this.content.appendChild(this.renderRepairPlan(this.currentReviewState));
@@ -297,8 +298,9 @@ export class CheckPanel {
   private async loadRecentAudit(): Promise<void> {
     const { invoke } = await import('../bridge');
     const json = await invoke<string>('audit_recent_reviews', { limit: 6 });
-    const data = JSON.parse(json) as { entries?: RecentAuditEntry[] };
-    this.lastAuditRows = summarizeRecentAuditEntries(data.entries || []);
+    const data = parseAuditQueryResult(JSON.parse(json) as { entries?: any[]; records?: any[] });
+    this.lastAuditRecords = data.records;
+    this.lastAuditRows = summarizeRecentAuditEntries(data.records);
     this.refreshTabLabel();
     if (this.lastResult && !this.viewingHistory) {
       this.renderResult(this.lastResult);
@@ -336,12 +338,46 @@ export class CheckPanel {
     return sec;
   }
 
+  private renderWorkbenchQueue(state: CurrentReviewState): HTMLElement {
+    const sec = ce('div', 'check-section check-risk-summary');
+    const title = ce('div', 'check-section-title');
+    title.innerHTML = `${iconHtml('list', 11)} Review Queue`;
+    sec.appendChild(title);
+
+    const items = buildWorkbenchQueue(state, this.lastAuditRecords);
+    for (const item of items) {
+      const row = ce('div', `check-gate-item ${queueToneClass(item.state)}`);
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', () => this.scrollToSection(item.section_id));
+      const head = ce('div', 'check-gate-item-head');
+      const tag = ce('span', `check-gate-risk ${queueRiskClass(item.state)}`);
+      tag.textContent = `${item.title} · ${queueStateLabel(item.state)}`;
+      head.appendChild(tag);
+
+      const name = ce('span', 'check-gate-name');
+      name.textContent = item.summary;
+      head.appendChild(name);
+      row.appendChild(head);
+
+      if (item.detail) {
+        const detail = ce('div', 'check-gate-rec');
+        detail.textContent = item.detail;
+        row.appendChild(detail);
+      }
+
+      sec.appendChild(row);
+    }
+
+    return sec;
+  }
+
   private renderViolationGroup(
     label: string,
     level: string,
     violations: Violation[],
   ): HTMLElement {
     const group = ce('div', 'check-vgroup');
+    group.dataset['checkSection'] = 'risk-summary';
     const head = ce('div', `check-vhead check-vhead-${level}`);
     head.textContent = `${label} (${violations.length})`;
     group.appendChild(head);
@@ -439,6 +475,7 @@ export class CheckPanel {
     const summary = buildCheckRiskSummary(findings);
 
     const sec = ce('div', 'check-section check-risk-summary');
+    sec.dataset['checkSection'] = 'risk-summary';
     const title = ce('div', 'check-section-title');
     title.innerHTML = `${iconHtml('alert', 11)} 风控摘要 (${summary.total})`;
     sec.appendChild(title);
@@ -551,6 +588,7 @@ export class CheckPanel {
 
   private renderCurrentGateDecision(state: CurrentReviewState): HTMLElement {
     const sec = ce('div', 'check-section check-risk-summary');
+    sec.dataset['checkSection'] = 'gate-decision';
     const title = ce('div', 'check-section-title');
     title.innerHTML = `${iconHtml('block', 11)} 门禁决策`;
     sec.appendChild(title);
@@ -574,128 +612,145 @@ export class CheckPanel {
 
   private renderRepairPlan(state: CurrentReviewState): HTMLElement {
     const sec = ce('div', 'check-section check-risk-summary');
+    sec.dataset['checkSection'] = 'repair-workbench';
     const title = ce('div', 'check-section-title');
     title.innerHTML = `${iconHtml('tool', 11)} 自修复闭环`;
     sec.appendChild(title);
 
     const plan = state.repair_plan;
-    const noRepairCandidate = (state.repair_generation_readiness?.finding_count ?? plan.finding_ids.length) === 0
-      && !state.patch_proposal
-      && !state.repair_issue;
+    const snapshot = buildRepairWorkbenchSnapshot(state, this.lastAuditRecords);
+    const noRepairCandidate = snapshot.status_state === 'not_required';
     const statusRow = ce('div', 'check-gate-summary');
     const status = ce('span', `check-gate-badge ${repairBadgeClass(plan.approval_state)}`);
-    status.textContent = noRepairCandidate ? '当前无可修复风险' : `状态 ${plan.approval_state}`;
+    status.textContent = snapshot.status_label;
     statusRow.appendChild(status);
     if (!noRepairCandidate) {
       const tests = ce('span', 'check-gate-badge check-gate-low');
-      tests.textContent = `${plan.required_tests.length} 个验证命令`;
+      tests.textContent = `${snapshot.test_count} 个验证命令`;
       statusRow.appendChild(tests);
     }
     sec.appendChild(statusRow);
 
     const strategy = ce('div', 'check-gate-rec');
-    strategy.textContent = noRepairCandidate
-      ? '当前 review 没有进入自修复闭环的风险，等待新的可修复 finding 后再生成提案。'
-      : plan.strategy;
+    strategy.textContent = snapshot.strategy;
     sec.appendChild(strategy);
 
-    if (!noRepairCandidate) {
+    if (!noRepairCandidate && snapshot.risk_note) {
       const risk = ce('div', 'check-vchange');
-      risk.textContent = plan.risk_note;
+      risk.textContent = snapshot.risk_note;
       sec.appendChild(risk);
     }
 
-    if (plan.required_tests.length > 0) {
+    if (snapshot.required_tests.length > 0) {
       const commandList = ce('div', 'check-vaffect');
-      commandList.textContent = `验证: ${plan.required_tests.join(' · ')}`;
+      commandList.textContent = `验证: ${snapshot.required_tests.join(' · ')}`;
       sec.appendChild(commandList);
     }
 
-    if (state.repair_generation_readiness) {
+    if (snapshot.generation_input) {
       const generationReady = ce('div', 'check-vmore');
-      generationReady.textContent = `Repair input: ${state.repair_generation_readiness.finding_count} findings · ${state.repair_generation_readiness.file_count} files · ${state.repair_generation_readiness.eligible ? 'eligible' : 'blocked'}`;
+      generationReady.textContent = `Repair input: ${snapshot.generation_input.finding_count} findings · ${snapshot.generation_input.file_count} files · ${snapshot.generation_input.eligible ? 'eligible' : 'blocked'}`;
       sec.appendChild(generationReady);
 
-      if (!state.repair_generation_readiness.eligible) {
+      if (snapshot.generation_input.reason) {
         const generationReason = ce('div', 'check-vmore');
-        generationReason.textContent = state.repair_generation_readiness.reason;
+        generationReason.textContent = snapshot.generation_input.reason;
         sec.appendChild(generationReason);
       }
     }
 
-    if (state.provider_readiness) {
+    if (snapshot.provider) {
       const readiness = ce('div', 'check-vmore');
-      readiness.textContent = `Provider: ${state.provider_readiness.provider_name} / ${state.provider_readiness.model} · ${state.provider_readiness.ready ? 'ready' : 'not ready'} · ${state.provider_readiness.source}`;
+      readiness.textContent = snapshot.provider.summary;
       sec.appendChild(readiness);
 
-      if (!state.provider_readiness.ready) {
+      if (snapshot.provider.reason) {
         const readinessReason = ce('div', 'check-vmore');
-        readinessReason.textContent = state.provider_readiness.reason;
+        readinessReason.textContent = snapshot.provider.reason;
         sec.appendChild(readinessReason);
       }
     }
 
-    if (state.live_repair_readiness && !state.live_repair_readiness.eligible) {
+    if (snapshot.live_repair_reason) {
       const liveReason = ce('div', 'check-vmore');
-      liveReason.textContent = `Live repair: ${state.live_repair_readiness.reason}`;
+      liveReason.textContent = snapshot.live_repair_reason;
       sec.appendChild(liveReason);
     }
 
-    if (state.repair_generation_meta) {
+    if (snapshot.generation_meta) {
       const meta = ce('div', 'check-vmore');
-      meta.textContent = `生成: ${state.repair_generation_meta.provider_name} / ${state.repair_generation_meta.model} · 文件 ${state.repair_generation_meta.file_count} 个 · 高风险 ${state.repair_generation_meta.high_severity_finding_ids.length} 条`;
+      meta.textContent = snapshot.generation_meta;
       sec.appendChild(meta);
     }
 
-    if (state.patch_proposal) {
+    if (snapshot.proposal) {
       const proposal = ce('div', 'check-vaffect');
-      proposal.textContent = `补丁提案: ${state.patch_proposal.summary} · ${state.patch_proposal.operations.length} 个文件操作`;
+      proposal.textContent = snapshot.proposal;
       sec.appendChild(proposal);
     }
 
-    if (state.repair_issue) {
+    if (snapshot.issue_badge && snapshot.issue_stage && snapshot.issue_summary) {
       const degraded = ce('div', 'check-gate-summary');
-      const issueBadge = ce('span', `check-gate-badge ${state.repair_issue.error.retryable ? 'check-gate-mid' : 'check-gate-high'}`);
-      issueBadge.textContent = state.repair_issue.error.retryable ? '提案降级，可重试' : '提案失败，需修正';
+      const issueBadge = ce('span', `check-gate-badge ${snapshot.status_state === 'degraded' ? 'check-gate-mid' : 'check-gate-high'}`);
+      issueBadge.textContent = snapshot.issue_badge;
       degraded.appendChild(issueBadge);
       const stageBadge = ce('span', 'check-gate-badge check-gate-low');
-      stageBadge.textContent = `阶段 ${state.repair_issue.stage}`;
+      stageBadge.textContent = `阶段 ${snapshot.issue_stage}`;
       degraded.appendChild(stageBadge);
       sec.appendChild(degraded);
 
       const issueText = ce('div', 'check-vmore');
-      issueText.textContent = state.repair_issue.summary;
+      issueText.textContent = snapshot.issue_summary;
       sec.appendChild(issueText);
 
-      if (state.repair_issue.error.code === 'missing_evidence') {
+      if (snapshot.issue_note) {
         const note = ce('div', 'check-vmore');
-        note.textContent = '当前风险已识别，但还没有收口到可直接修改的源码文件；这不是 provider/key 故障。';
+        note.textContent = snapshot.issue_note;
         sec.appendChild(note);
       }
 
-      if (state.repair_preflight) {
-        const preflightSummary = buildRepairPreflightSummary(state.repair_preflight);
+      if (snapshot.preflight) {
         const preflight = ce('div', 'check-vmore');
-        preflight.textContent = `复检: ${preflightSummary.reason} · finding ${state.repair_preflight.findings.length} 条 · 验证 ${state.repair_preflight.test_results.length} 条`;
+        preflight.textContent = snapshot.preflight.summary;
         sec.appendChild(preflight);
 
-        if (preflightSummary.failed_commands.length > 0) {
+        if (snapshot.preflight.failed_commands.length > 0) {
           const commands = ce('div', 'check-vmore');
-          commands.textContent = `失败命令: ${preflightSummary.failed_commands.join(' · ')}`;
+          commands.textContent = `失败命令: ${snapshot.preflight.failed_commands.join(' · ')}`;
           sec.appendChild(commands);
         }
 
-        if (preflightSummary.blocking_rule_ids.length > 0) {
+        if (snapshot.preflight.blocking_rule_ids.length > 0) {
           const rules = ce('div', 'check-vmore');
-          rules.textContent = `阻断规则: ${preflightSummary.blocking_rule_ids.join(' · ')}`;
+          rules.textContent = `阻断规则: ${snapshot.preflight.blocking_rule_ids.join(' · ')}`;
           sec.appendChild(rules);
         }
       }
 
-      if (state.repair_issue.stage === 'apply' && state.rollback) {
+      if (snapshot.rollback) {
         const rollback = ce('div', 'check-vmore');
-        rollback.textContent = `已自动回滚: ${state.rollback.rollback_id}`;
+        rollback.textContent = snapshot.rollback;
         sec.appendChild(rollback);
+      }
+    }
+
+    if (snapshot.repair_history.length > 0) {
+      const trace = ce('div', 'check-vmore');
+      trace.textContent = `Evidence trace: finding ${snapshot.evidence_trace.finding_count} 条 · evidence ${snapshot.evidence_trace.evidence_count} 个 · repair history ${snapshot.evidence_trace.repair_history_count} 条`;
+      sec.appendChild(trace);
+
+      const historyTitle = ce('div', 'check-vmore');
+      historyTitle.textContent = 'Repair 历史';
+      sec.appendChild(historyTitle);
+
+      for (const item of snapshot.repair_history.slice(0, 3)) {
+        const row = ce('div', 'check-vmore');
+        const stateChange = item.state_change?.from_state || item.state_change?.to_state
+          ? ` · ${item.state_change?.from_state || '?'} -> ${item.state_change?.to_state || '?'}`
+          : '';
+        const retryable = item.error?.retryable === true ? ' · 可重试' : item.error?.retryable === false ? ' · 需修正' : '';
+        row.textContent = `${fmtTime(item.timestamp)} · ${item.stage} · ${item.status}${stateChange}${retryable} · ${item.reason}`;
+        sec.appendChild(row);
       }
     }
 
@@ -743,6 +798,11 @@ export class CheckPanel {
       onClick();
     });
     return button;
+  }
+
+  private scrollToSection(sectionId: 'risk-summary' | 'gate-decision' | 'repair-workbench'): void {
+    const target = this.content.querySelector<HTMLElement>(`[data-check-section="${sectionId}"]`);
+    target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
   private refreshTabLabel(): void {
@@ -862,6 +922,57 @@ function repairBadgeClass(state: CurrentReviewState['repair_plan']['approval_sta
       return 'check-gate-high';
     default:
       return 'check-gate-mid';
+  }
+}
+
+function queueStateLabel(state: string): string {
+  switch (state) {
+    case 'needs_attention': return '待处理';
+    case 'clean': return '已清空';
+    case 'ready': return '已就绪';
+    case 'waiting_approval': return '待审批';
+    case 'require_approval': return '需审批';
+    case 'block': return '已阻断';
+    case 'warn': return '警告';
+    case 'approved': return '已批准';
+    case 'applied': return '已应用';
+    case 'rolled_back': return '已回滚';
+    case 'failed': return '失败';
+    case 'degraded': return '降级';
+    case 'draft': return '草稿';
+    default: return state;
+  }
+}
+
+function queueToneClass(state: string): string {
+  switch (state) {
+    case 'block':
+    case 'failed':
+      return 'check-gate-high';
+    case 'warn':
+    case 'needs_attention':
+    case 'degraded':
+    case 'require_approval':
+    case 'waiting_approval':
+      return 'check-gate-mid';
+    default:
+      return 'check-gate-low';
+  }
+}
+
+function queueRiskClass(state: string): string {
+  switch (state) {
+    case 'block':
+    case 'failed':
+      return 'check-gate-risk-high';
+    case 'warn':
+    case 'needs_attention':
+    case 'degraded':
+    case 'require_approval':
+    case 'waiting_approval':
+      return 'check-gate-risk-mid';
+    default:
+      return 'check-gate-risk-low';
   }
 }
 

@@ -25,8 +25,8 @@ Workspace / Git Diff / AI Tool Event
 | Review Core | 审查任务、finding、规则命中、风险聚合、拦截决策 | `src-ui/src/risk/` 起步，合同见 `dev-docs/contracts.md` |
 | Provider Plane | 客户模型 API、base URL、模型名、流式输出、用量 | `src-ui/src/provider/`，后续可下沉到共享合同 |
 | Agent Plane | 工具调用、多轮审查、多代理并行、主代理汇总 | `src-ui/src/agent/` 起步，核心语义不得只留在 prompt |
-| Policy Plane | 规则包、严重级别、审批、禁止/询问/允许策略 | `src-ui/src/agent/permission.ts` 起步，需产品化合同 |
-| Audit Plane | append-only 审计事件、证据引用、决策记录 | `src-tauri/src/audit.rs` 起步 |
+| Policy Plane | 规则包、严重级别、审批、禁止/询问/允许策略 | `src-ui/src/risk/rule-package.ts` 为当前统一 registry owner，`src-ui/src/agent/permission.ts` 只保留工具权限适配 |
+| Audit Plane | append-only 审计事件、证据引用、决策记录，以及统一审计查询读模型 | `src-tauri/src/audit.rs` 负责落盘，`src-ui/src/risk/audit-bridge.ts` 负责 normalized query truth |
 | UI Plane | 深色 IDE 工作台，展示风险、解释、证据、审批 | `src-ui/src/ui/` |
 
 ## Forbidden Paths
@@ -119,6 +119,8 @@ Finding
 - 当前已实现多代理 owner：`src-ui/src/risk/multi-agent.ts` 负责 specialist agent runs、去重、冲突和 degraded reason 聚合。
 - 当前已实现自修复 owner：`src-ui/src/risk/self-heal.ts` 负责 repair plan、patch proposal、审批状态、apply/rollback 纯逻辑。
 - 当前已实现 repair preflight owner：`src-ui/src/risk/rule-package.ts` 与 `self-heal.ts` 会在 apply 前校验 patch scope、敏感路径、重复写、波及面，并强制执行 `required_tests`。
+- 2026-06-22：Policy Plane 已补统一 `RulePackage` registry，默认 review / repair package、扩展包合并、禁用 rule 与 `policy_snapshot_id` 生成都收口在 `src-ui/src/risk/rule-package.ts`；`current-review.ts` 与 `self-heal.ts` 只消费解析后的 active policy。
+- 2026-06-22：Audit Plane 已补统一 `AuditQueryResult` / `AuditRecord`；`workspace.ts` 的只读工具返回值与 `CheckPanel` 最近审计视图都通过同一个 normalized query 入口解释 append-only audit。
 - 当前已实现 repair degrade owner：`self-heal.ts` 会把 live provider / timeout / source-context 缺失归一成 `RepairIssue`；`current-review.ts` 负责把 issue 收口进工作台读模型；`Workspace` 只负责 audit 和状态适配。
 - 当前已实现 current review owner：`src-ui/src/risk/current-review.ts` 负责把 check 结果收口为 summary / multi-agent / repair plan 的单一读模型。
 - 当前已实现 UI/controller 接线：`Workspace` 拥有 current review state 与 repair state；`CheckPanel` 只展示并发出 repair 事件，不拥有风控/修复语义。

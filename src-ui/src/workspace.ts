@@ -26,7 +26,7 @@ import type { Provider } from './provider/types';
 import { bus } from './ui/events';
 import { dbg } from './ui/debug';
 import { adaptCheckResultToFindings, buildCheckRiskSummary } from './risk/check-adapter';
-import { buildApprovalAuditPayload, buildRepairAuditPayload, buildReviewAuditPayload } from './risk/audit-bridge';
+import { buildApprovalAuditPayload, buildAuditQueryResult, buildRepairAuditPayload, buildReviewAuditPayload, type AuditRecord } from './risk/audit-bridge';
 import {
   attachLiveRepairReadinessToCurrentReview,
   attachProviderReadinessToCurrentReview,
@@ -39,6 +39,7 @@ import {
   buildCurrentReviewState,
   type CurrentReviewState,
 } from './risk/current-review';
+import { buildRulePolicySnapshotId } from './risk/rule-package';
 import {
   applyRepairPlan as applyRepairPlanState,
   buildRepairGenerationReadiness,
@@ -374,8 +375,15 @@ export class Workspace {
 
     // Coding tools
     const codingExec: ToolExecutor = async (name, args, onProgress) => {
+      const limit = typeof args['limit'] === 'number' ? args['limit'] : 10;
       if (name === 'current_review_summary') {
-        return JSON.stringify(buildCurrentReviewSummaryResponse(this.currentReviewState));
+        return JSON.stringify(buildCurrentReviewSummaryResponse(
+          this.currentReviewState,
+          await this.loadAuditRecords(limit),
+        ));
+      }
+      if (name === 'audit_recent_reviews') {
+        return JSON.stringify(await this.loadAuditQueryResult(limit));
       }
       if (name === 'active_provider_readiness') {
         return JSON.stringify(await inspectActiveProviderReadiness(await restoreSecrets(loadSettings())));
@@ -469,8 +477,15 @@ export class Workspace {
             : createOpenAIProvider({ name: act.name, apiKey: act.apiKey, baseUrl: act.baseUrl, model: act.model });
         const r = new ToolRegistry();
         const factoryExec: ToolExecutor = async (name, args) => {
+          const limit = typeof args['limit'] === 'number' ? args['limit'] : 10;
           if (name === 'current_review_summary') {
-            return JSON.stringify(buildCurrentReviewSummaryResponse(this.currentReviewState));
+            return JSON.stringify(buildCurrentReviewSummaryResponse(
+              this.currentReviewState,
+              await this.loadAuditRecords(limit),
+            ));
+          }
+          if (name === 'audit_recent_reviews') {
+            return JSON.stringify(await this.loadAuditQueryResult(limit));
           }
           if (name === 'active_provider_readiness') {
             return JSON.stringify(await inspectActiveProviderReadiness(await restoreSecrets(loadSettings())));
@@ -611,6 +626,18 @@ export class Workspace {
     });
   }
 
+  private async loadAuditQueryResult(limit = 10) {
+    const json = await invoke<string>('audit_recent_reviews', { limit });
+    const data = JSON.parse(json) as { entries?: Array<any> };
+    return buildAuditQueryResult({
+      entries: data.entries || [],
+    });
+  }
+
+  private async loadAuditRecords(limit = 10): Promise<AuditRecord[]> {
+    return (await this.loadAuditQueryResult(limit)).records;
+  }
+
   private createApprover() {
     return async (toolName: string, description: string, args: Record<string, unknown>) => {
       const subject = extractApprovalSubject(args);
@@ -717,6 +744,12 @@ export class Workspace {
           operation_count: proposal.operations.length,
           required_tests: repairPlan.required_tests,
           generation_meta: generationMeta,
+          finding_ids: repairFindings.map((finding) => finding.finding_id),
+          evidence_ids: Array.from(new Set(repairFindings.flatMap((finding) => finding.evidence_ids))),
+          state_change: {
+            from_state: 'draft',
+            to_state: repairPlan.approval_state,
+          },
         },
       }));
       await this.recordApprovalTimeline('repair_plan', this.path, 'approval_requested', '已生成修复提案，等待审批').catch(() => {});
@@ -755,6 +788,8 @@ export class Workspace {
           error_stage: issue.stage,
           error_retryable: issue.error.retryable,
           generation_meta: generationMeta,
+          finding_ids: this.currentReviewState.multi_agent_review.merged_findings.map((finding) => finding.finding_id),
+          evidence_ids: Array.from(new Set(this.currentReviewState.multi_agent_review.merged_findings.flatMap((finding) => finding.evidence_ids))),
         },
       })).catch(() => {});
       this.onStatusChange?.(
@@ -795,6 +830,12 @@ export class Workspace {
         approval_state: repairPlan.approval_state,
         remember: result.remember,
         patch_proposal_id: this.currentPatchProposal.patch_proposal_id,
+        finding_ids: this.currentReviewState.multi_agent_review.merged_findings.map((finding) => finding.finding_id),
+        evidence_ids: Array.from(new Set(this.currentReviewState.multi_agent_review.merged_findings.flatMap((finding) => finding.evidence_ids))),
+        state_change: {
+          from_state: 'waiting_approval',
+          to_state: repairPlan.approval_state,
+        },
       },
     }));
     this.onStatusChange?.(result.allow ? '修复审批已通过' : '修复审批已拒绝');
@@ -811,7 +852,9 @@ export class Workspace {
         plan: this.currentReviewState.repair_plan,
         proposal: this.currentPatchProposal,
         findings: this.currentReviewState.multi_agent_review.merged_findings,
-        policy_snapshot_id: 'policy:repair-apply:v1',
+        policy_snapshot_id: buildRulePolicySnapshotId({
+          plane: 'repair',
+        }),
         now: new Date().toISOString(),
         runTest: (command) => this.runRepairValidationCommand(command),
         readFile: async (filePath) => invoke<string>('read_file_content', {
@@ -841,6 +884,13 @@ export class Workspace {
           rollback_id: applied.rollback.rollback_id,
           operation_count: this.currentPatchProposal.operations.length,
           gate_decision: applied.preflight.gate_decision.decision,
+          gate_reason: applied.preflight.gate_decision.reason,
+          finding_ids: applied.preflight.findings.map((finding) => finding.finding_id),
+          evidence_ids: Array.from(new Set(applied.preflight.findings.flatMap((finding) => finding.evidence_ids))),
+          state_change: {
+            from_state: 'approved',
+            to_state: applied.plan.approval_state,
+          },
           preflight_findings: applied.preflight.findings.map((finding) => ({
             finding_id: finding.finding_id,
             rule_id: finding.rule_id,
@@ -874,6 +924,8 @@ export class Workspace {
             error_code: issue.error.code,
             error_stage: issue.stage,
             error_retryable: issue.error.retryable,
+            finding_ids: error.preflight.findings.map((finding) => finding.finding_id),
+            evidence_ids: Array.from(new Set(error.preflight.findings.flatMap((finding) => finding.evidence_ids))),
             preflight_findings: error.preflight.findings.map((finding) => ({
               finding_id: finding.finding_id,
               rule_id: finding.rule_id,
@@ -906,6 +958,12 @@ export class Workspace {
             error_stage: issue.stage,
             error_retryable: issue.error.retryable,
             rollback_id: error.rollback.rollback_id,
+            finding_ids: this.currentReviewState.multi_agent_review.merged_findings.map((finding) => finding.finding_id),
+            evidence_ids: Array.from(new Set(this.currentReviewState.multi_agent_review.merged_findings.flatMap((finding) => finding.evidence_ids))),
+            state_change: {
+              from_state: 'approved',
+              to_state: this.currentReviewState.repair_plan.approval_state,
+            },
           },
         })).catch(() => {});
         this.onStatusChange?.(issue.summary);
@@ -943,6 +1001,12 @@ export class Workspace {
       details: {
         approval_state: rolledBack.approval_state,
         rollback_id: this.currentRollbackSnapshot.rollback_id,
+        finding_ids: this.currentReviewState.multi_agent_review.merged_findings.map((finding) => finding.finding_id),
+        evidence_ids: Array.from(new Set(this.currentReviewState.multi_agent_review.merged_findings.flatMap((finding) => finding.evidence_ids))),
+        state_change: {
+          from_state: 'applied',
+          to_state: rolledBack.approval_state,
+        },
       },
     }));
     this.onStatusChange?.('修复已回滚');

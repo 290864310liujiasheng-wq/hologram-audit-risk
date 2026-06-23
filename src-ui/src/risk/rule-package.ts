@@ -1,10 +1,11 @@
-import type { PatchProposal, ReviewFinding, Rule, Severity } from './review-core';
+import type { PatchProposal, ReviewFinding, Rule, RulePackage, RulePlane, Severity } from './review-core';
 
 const reviewRuleMeta = {
   'check.l5': {
     name: 'L5 不可逆风险默认阻断',
     category: 'data_integrity',
     severity: 'critical' as Severity,
+    priority: 100,
     gate_effect: 'block' as const,
     recommendation: '先阻断当前改动，并补齐审计与回滚证据后再继续。',
   },
@@ -12,6 +13,7 @@ const reviewRuleMeta = {
     name: 'L4 静默风险需要审批',
     category: 'security',
     severity: 'high' as Severity,
+    priority: 80,
     gate_effect: 'require_approval' as const,
     recommendation: '先人工审批并确认不会引入静默安全或行为破坏。',
   },
@@ -19,6 +21,7 @@ const reviewRuleMeta = {
     name: 'L3 延迟风险需要告警',
     category: 'quality',
     severity: 'medium' as Severity,
+    priority: 60,
     gate_effect: 'warn' as const,
     recommendation: '补充最小验证并确认回归风险已收口。',
   },
@@ -26,6 +29,7 @@ const reviewRuleMeta = {
     name: 'L2 波及风险需要告警',
     category: 'operability',
     severity: 'low' as Severity,
+    priority: 40,
     gate_effect: 'warn' as const,
     recommendation: '收窄波及面并确认不会影响客户当前流程。',
   },
@@ -33,6 +37,7 @@ const reviewRuleMeta = {
   name: string;
   category: string;
   severity: Severity;
+  priority: number;
   gate_effect: Rule['gate_effect'];
   recommendation: string;
 }>;
@@ -51,76 +56,164 @@ const repairRuleMeta = {
     name: '修复 patch 不得写出命中的风险文件范围',
     category: 'repair_scope',
     severity: 'critical' as Severity,
+    priority: 100,
     gate_effect: 'block' as const,
   },
   'repair.scope.absolute_path_write': {
     name: '修复 patch 不得直接写绝对路径',
     category: 'repair_scope',
     severity: 'critical' as Severity,
+    priority: 95,
     gate_effect: 'block' as const,
   },
   'repair.scope.sensitive_path_write': {
     name: '修复 patch 不得直接改动敏感配置或锁文件',
     category: 'repair_scope',
     severity: 'high' as Severity,
+    priority: 90,
     gate_effect: 'block' as const,
   },
   'repair.scope.duplicate_file_write': {
     name: '修复 patch 不应对同一文件生成重复写操作',
     category: 'repair_quality',
     severity: 'medium' as Severity,
+    priority: 50,
     gate_effect: 'warn' as const,
   },
   'repair.scope.large_patch_blast_radius': {
     name: '修复 patch 的文件波及面过大',
     category: 'repair_quality',
     severity: 'medium' as Severity,
+    priority: 45,
     gate_effect: 'warn' as const,
   },
   'repair.test.required_command_failed': {
     name: '修复前验证命令必须全部通过',
     category: 'repair_gate',
     severity: 'critical' as Severity,
+    priority: 110,
     gate_effect: 'block' as const,
   },
 } satisfies Record<string, {
   name: string;
   category: string;
   severity: Severity;
+  priority: number;
   gate_effect: Rule['gate_effect'];
 }>;
 
-export const DEFAULT_REVIEW_RULES: Rule[] = Object.entries(reviewRuleMeta).map(([rule_id, meta]) => ({
-  rule_id,
-  name: meta.name,
-  category: meta.category,
-  severity: meta.severity,
-  scope: ['file_write'],
-  trigger: {
-    kind: 'static_signal',
-    config: {},
-  },
-  gate_effect: meta.gate_effect,
+const DEFAULT_REVIEW_PACKAGE: RulePackage = {
+  package_id: 'review.default',
+  version: 'v1',
+  plane: 'review',
+  source: 'system_default',
   enabled: true,
-}));
+  description: 'Default review rules for current review, gate decisions, and check-derived findings.',
+  rules: Object.entries(reviewRuleMeta).map(([rule_id, meta]) => ({
+    rule_id,
+    package_id: 'review.default',
+    name: meta.name,
+    category: meta.category,
+    severity: meta.severity,
+    priority: meta.priority,
+    scope: ['file_write'],
+    trigger: {
+      kind: 'static_signal',
+      config: {},
+    },
+    gate_effect: meta.gate_effect,
+    enabled: true,
+  })),
+};
 
 export function getReviewBucketDefinition(bucket: ReviewBucket) {
   return reviewRuleMeta[bucketToReviewRuleId[bucket]];
 }
 
-export const DEFAULT_REPAIR_RULES: Rule[] = Object.entries(repairRuleMeta).map(([rule_id, meta]) => ({
-  rule_id,
-  name: meta.name,
-  category: meta.category,
-  severity: meta.severity,
-  scope: ['repair_apply'],
-  trigger: {
-    kind: rule_id === 'repair.test.required_command_failed' ? 'static_signal' : 'diff_pattern',
-    config: {},
-  },
-  gate_effect: meta.gate_effect,
+const DEFAULT_REPAIR_PACKAGE: RulePackage = {
+  package_id: 'repair.default',
+  version: 'v1',
+  plane: 'repair',
+  source: 'system_default',
   enabled: true,
-}));
+  description: 'Default repair preflight rules for bounded patch apply, validation, and rollback safety.',
+  rules: Object.entries(repairRuleMeta).map(([rule_id, meta]) => ({
+    rule_id,
+    package_id: 'repair.default',
+    name: meta.name,
+    category: meta.category,
+    severity: meta.severity,
+    priority: meta.priority,
+    scope: ['repair_apply'],
+    trigger: {
+      kind: rule_id === 'repair.test.required_command_failed' ? 'static_signal' : 'diff_pattern',
+      config: {},
+    },
+    gate_effect: meta.gate_effect,
+    enabled: true,
+  })),
+};
+
+const DEFAULT_RULE_PACKAGES: Record<RulePlane, RulePackage> = {
+  review: DEFAULT_REVIEW_PACKAGE,
+  repair: DEFAULT_REPAIR_PACKAGE,
+};
+
+export interface ResolvedRulePolicy {
+  plane: RulePlane;
+  packages: RulePackage[];
+  rules: Rule[];
+  policy_snapshot_id: string;
+}
+
+export function getDefaultRulePackage(plane: RulePlane): RulePackage {
+  return DEFAULT_RULE_PACKAGES[plane];
+}
+
+export function buildRulePolicySnapshotId(input: {
+  plane: RulePlane;
+  packages?: RulePackage[];
+}): string {
+  const packages = (input.packages && input.packages.length > 0)
+    ? input.packages
+    : [getDefaultRulePackage(input.plane)];
+  return `policy:${input.plane}:${packages.map((pkg) => `${pkg.package_id}@${pkg.version}`).join('+')}`;
+}
+
+export function resolveRulePolicy(input: {
+  plane: RulePlane;
+  extension_packages?: RulePackage[];
+  disabled_rule_ids?: string[];
+}): ResolvedRulePolicy {
+  const packages = [
+    getDefaultRulePackage(input.plane),
+    ...(input.extension_packages || []).filter((pkg) => pkg.enabled && pkg.plane === input.plane),
+  ];
+  const disabledRuleIds = new Set(input.disabled_rule_ids || []);
+  const mergedRules = new Map<string, Rule>();
+
+  for (const pkg of packages) {
+    for (const rule of pkg.rules) {
+      if (!rule.enabled || disabledRuleIds.has(rule.rule_id)) continue;
+      mergedRules.set(rule.rule_id, rule);
+    }
+  }
+
+  const rules = Array.from(mergedRules.values()).sort((left, right) => {
+    if (right.priority !== left.priority) return right.priority - left.priority;
+    return left.rule_id.localeCompare(right.rule_id);
+  });
+
+  return {
+    plane: input.plane,
+    packages,
+    rules,
+    policy_snapshot_id: buildRulePolicySnapshotId({
+      plane: input.plane,
+      packages,
+    }),
+  };
+}
 
 export function evaluateRepairProposal(input: {
   plan_id: string;

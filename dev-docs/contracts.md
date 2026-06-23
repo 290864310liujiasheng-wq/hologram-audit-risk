@@ -15,6 +15,8 @@
 - 已覆盖强运行态信号：标题、状态栏、简报面板均可显示风险/审计状态。
 - 已覆盖多代理合同：`AgentRun`、`ReviewAggregation`、`AggregationConflict` 已进入 `review-core.ts`；`multi-agent.ts` 已实现 specialist fan-out、去重、冲突记录、degraded reason。
 - 已覆盖自修复合同：`RepairPlan`、`PatchProposal`、`PatchOperation`、`RepairRollbackSnapshot` 已进入 `review-core.ts`；`self-heal.ts` 已实现 plan/proposal/apply/rollback 状态流转。
+- 已覆盖第四阶段规则系统首段：`Rule` 已补 `package_id` 与 `priority`；`RulePackage` 已进入 `review-core.ts`；`rule-package.ts` 已实现默认 review / repair package、扩展包合并、禁用 rule 与 `policy_snapshot_id` 生成；`current-review.ts` 与 `self-heal.ts` 已改为消费统一 active policy。
+- 已覆盖第四阶段审计系统首段：`audit-bridge.ts` 已补 `AuditQueryResult`、`AuditRecord`、统一 stage/status/error/state-change 归一；`workspace.ts` 与 `CheckPanel` 已改为消费同一个 normalized audit query truth。
 - 已覆盖 repair preflight 合同：`ValidationCommandResult`、`RepairPreflightReport` 已进入 `review-core.ts`；`rule-package.ts` 已实现默认 repair 规则包；`self-heal.ts` 已在 apply 前执行 rule re-check 与 `required_tests` gate。
 - 已覆盖 repair preflight 合同：`ValidationCommandResult`、`RepairPreflightReport` 已进入 `review-core.ts`；`rule-package.ts` 已实现默认 repair 规则包；`self-heal.ts` 已在 apply 前执行 rule re-check 与 `required_tests` gate，并在 preflight 阻断时抛出结构化 `RepairApplyError` 供 UI/audit 消费。
 - 已覆盖 review gate 合同：`rule-package.ts` 已实现默认 review 规则包；`current-review.ts` 会基于 `check.l5/l4/l3/l2` 派生结构化 `GateDecision`，不再只返回 findings 摘要。
@@ -104,9 +106,11 @@ type GateEffect = 'observe' | 'warn' | 'require_approval' | 'block';
 
 interface Rule {
   rule_id: string;
+  package_id: string;
   name: string;
   category: string;
   severity: Severity;
+  priority: number;
   scope: string[];
   trigger: RuleTrigger;
   gate_effect: GateEffect;
@@ -118,11 +122,27 @@ interface RuleTrigger {
   kind: 'static_signal' | 'diff_pattern' | 'dependency_impact' | 'permission' | 'model_review';
   config: Record<string, unknown>;
 }
+
+type RulePlane = 'review' | 'repair';
+type RulePackageSource = 'system_default' | 'workspace_extension';
+
+interface RulePackage {
+  package_id: string;
+  version: string;
+  plane: RulePlane;
+  source: RulePackageSource;
+  enabled: boolean;
+  description: string;
+  rules: Rule[];
+}
 ```
 
 要求：
 
 - 规则定义是风控真源之一，不能只写在 prompt 或 UI 文案里。
+- `package_id` 与 `version` 必须能解释规则来源，避免 review / repair 混成一组匿名默认常量。
+- `priority` 必须显式声明，并在相同 `gate_effect` 冲突时决定最终裁决原因。
+- 默认包与扩展包必须通过同一 registry 解析出 active policy；禁止 current review、gate decision、repair preflight 各自维护一套默认规则数组。
 - `gate_effect=block` 的规则必须能解释原因并产出审计事件。
 - 后续应扩展 `rule-taxonomy.md`，固定分类和严重级别口径。
 
@@ -183,6 +203,109 @@ interface AuditEvent {
 - 审计是 append-only。
 - 不记录密钥、完整敏感源码或无关个人信息。
 - 如果只记录摘要，必须保留可追溯的 evidence 引用。
+
+## Audit Query Contract
+
+```ts
+interface AuditStateChange {
+  from_state?: string;
+  to_state?: string;
+}
+
+interface AuditRecord {
+  event_id: string;
+  timestamp: string;
+  plane: 'review' | 'approval' | 'repair';
+  stage: string;
+  status: string;
+  subject: string;
+  reason: string;
+  finding_ids: string[];
+  evidence_ids: string[];
+  policy_snapshot_id?: string;
+  state_change?: AuditStateChange;
+  error?: {
+    code?: string;
+    stage?: string;
+    retryable?: boolean;
+  };
+}
+
+interface AuditQueryResult {
+  entries: RecentAuditEntry[];
+  records: AuditRecord[];
+}
+```
+
+要求：
+
+- append-only `entries` 是原始落盘证据，`records` 是统一查询口径；UI 和只读工具必须消费同一套 `records`，不能各自解释 `details`。
+- `records` 必须统一暴露 review / approval / repair 的 `stage`、`status`、`error`、`state_change`、`finding_ids`、`evidence_ids`。
+- repair proposal / approval / apply / rollback 的审计详情必须尽量带上 state change 与 evidence 引用，避免复盘时只能看到一句 reason。
+
+## Workbench Summary Contract
+
+```ts
+interface WorkbenchQueueItem {
+  step_id: 'review' | 'gate' | 'evidence' | 'approval' | 'repair';
+  title: string;
+  state: string;
+  summary: string;
+  detail?: string;
+}
+
+interface RepairWorkbenchSnapshot {
+  status_state: string;
+  status_label: string;
+  test_count: number;
+  strategy: string;
+  risk_note?: string;
+  required_tests: string[];
+  generation_input?: {
+    finding_count: number;
+    file_count: number;
+    eligible: boolean;
+    reason?: string;
+  };
+  provider?: { summary: string; reason?: string };
+  live_repair_reason?: string;
+  generation_meta?: string;
+  proposal?: string;
+  issue_badge?: string;
+  issue_stage?: string;
+  issue_summary?: string;
+  issue_note?: string;
+  preflight?: {
+    summary: string;
+    failed_commands: string[];
+    blocking_rule_ids: string[];
+  };
+  rollback?: string;
+  evidence_trace: {
+    finding_count: number;
+    evidence_count: number;
+    repair_history_count: number;
+  };
+  repair_history: RepairHistoryItem[];
+}
+
+type CurrentReviewSummaryResponse =
+  | { status: 'empty'; message: string }
+  | {
+      status: 'ok';
+      review: CurrentReviewState;
+      workbench_queue: WorkbenchQueueItem[];
+      repair_history: RepairHistoryItem[];
+      repair_workbench: RepairWorkbenchSnapshot;
+    };
+```
+
+要求：
+
+- `current_review_summary` 不得只返回原始 review state；至少要把 `workbench_queue` 与 `repair_history` 一起返回，保证只读工具和工作台消费同一条主路径真源。
+- `自修复闭环` 里使用的 provider/evidence/preflight/history 状态不应继续由 UI 组件自己判断；需要由 owner 层提供统一 `RepairWorkbenchSnapshot`。
+- `current_review_summary` 若支持 `limit` 之类折叠参数，tool schema、workspace executor 与文档口径必须一起更新，不能出现执行器支持但工具合同未声明的漂移。
+- clean review 的后续步骤必须显式收口为 `not_required`；retryable repair issue 必须显式收口为 `degraded`。
 
 ## ProviderProfile Contract
 

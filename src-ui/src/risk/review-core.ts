@@ -5,6 +5,8 @@ export type FindingStatus = 'open' | 'accepted' | 'dismissed' | 'fixed' | 'suppr
 export type GateEffect = 'observe' | 'warn' | 'require_approval' | 'block';
 export type GateSubjectType = 'tool_call' | 'file_write' | 'git_commit' | 'repair_apply' | 'release';
 export type GateDecisionValue = 'allow' | 'warn' | 'require_approval' | 'block';
+export type RulePlane = 'review' | 'repair';
+export type RulePackageSource = 'system_default' | 'workspace_extension';
 
 export interface ReviewJobRequest {
   workspace_id: string;
@@ -45,14 +47,26 @@ export interface RuleTrigger {
 
 export interface Rule {
   rule_id: string;
+  package_id: string;
   name: string;
   category: string;
   severity: Severity;
+  priority: number;
   scope: string[];
   trigger: RuleTrigger;
   gate_effect: GateEffect;
   explanation_template?: string;
   enabled: boolean;
+}
+
+export interface RulePackage {
+  package_id: string;
+  version: string;
+  plane: RulePlane;
+  source: RulePackageSource;
+  enabled: boolean;
+  description: string;
+  rules: Rule[];
 }
 
 export interface GateDecision {
@@ -274,6 +288,14 @@ export function validateReviewJobRequest(request: ReviewJobRequest): ContractErr
 export function validateRule(rule: Rule): ContractError[] {
   const errors: ContractError[] = [];
 
+  if (!rule.package_id.trim()) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'Rule requires a package id.',
+      retryable: false,
+    });
+  }
+
   if (!rule.scope.length) {
     errors.push({
       code: 'invalid_request',
@@ -286,6 +308,14 @@ export function validateRule(rule: Rule): ContractError[] {
     errors.push({
       code: 'invalid_request',
       message: 'Rule requires a non-empty name.',
+      retryable: false,
+    });
+  }
+
+  if (!Number.isFinite(rule.priority)) {
+    errors.push({
+      code: 'invalid_request',
+      message: 'Rule priority must be a finite number.',
       retryable: false,
     });
   }
@@ -389,6 +419,7 @@ export function deriveGateDecision(input: {
 }): GateDecision {
   const ruleById = new Map(input.rules.filter((rule) => rule.enabled).map((rule) => [rule.rule_id, rule]));
   let decision: GateDecisionValue = 'allow';
+  let winningRulePriority = Number.NEGATIVE_INFINITY;
   let reason = 'No enabled rule requires intervention.';
   const findingIds: string[] = [];
 
@@ -398,8 +429,12 @@ export function deriveGateDecision(input: {
     findingIds.push(finding.finding_id);
 
     const candidateDecision = effectToDecision[rule.gate_effect];
-    if (decisionPriority[candidateDecision] > decisionPriority[decision]) {
+    const outranksDecision = decisionPriority[candidateDecision] > decisionPriority[decision];
+    const outranksPriority = decisionPriority[candidateDecision] === decisionPriority[decision]
+      && rule.priority > winningRulePriority;
+    if (outranksDecision || outranksPriority) {
       decision = candidateDecision;
+      winningRulePriority = rule.priority;
       reason = rule.name;
     }
   }

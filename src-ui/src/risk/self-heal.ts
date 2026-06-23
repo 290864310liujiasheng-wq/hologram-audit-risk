@@ -16,8 +16,8 @@ import type {
 import { deriveGateDecision } from './review-core';
 import {
   createRepairGateFailureFinding,
-  DEFAULT_REPAIR_RULES,
   evaluateRepairProposal,
+  resolveRulePolicy,
 } from './rule-package';
 
 export interface RepairGenerationInput {
@@ -460,12 +460,18 @@ export async function runRepairPreflight(input: {
   plan: RepairPlan;
   proposal: PatchProposal;
   findings: ReviewFinding[];
-  policy_snapshot_id: string;
+  policy_snapshot_id?: string;
   now: string;
   runTest: (command: string) => Promise<ValidationCommandResult>;
   rules?: Rule[];
 }): Promise<RepairPreflightReport> {
-  const rules = input.rules || DEFAULT_REPAIR_RULES;
+  const resolvedPolicy = input.rules
+    ? {
+        rules: input.rules,
+        policy_snapshot_id: input.policy_snapshot_id || 'policy:repair:custom',
+      }
+    : resolveRulePolicy({ plane: 'repair' });
+  const rules = resolvedPolicy.rules;
   const proposalFindings = evaluateRepairProposal({
     plan_id: input.plan.repair_plan_id,
     proposal: input.proposal,
@@ -478,7 +484,7 @@ export async function runRepairPreflight(input: {
     subject_ref: input.proposal.patch_proposal_id,
     findings: proposalFindings,
     rules,
-    policy_snapshot_id: input.policy_snapshot_id,
+    policy_snapshot_id: resolvedPolicy.policy_snapshot_id,
     decided_at: input.now,
   });
 
@@ -504,7 +510,7 @@ export async function runRepairPreflight(input: {
       subject_ref: input.proposal.patch_proposal_id,
       findings: [...proposalFindings, noTestFinding],
       rules,
-      policy_snapshot_id: input.policy_snapshot_id,
+      policy_snapshot_id: resolvedPolicy.policy_snapshot_id,
       decided_at: input.now,
     });
     return {
@@ -537,7 +543,7 @@ export async function runRepairPreflight(input: {
     subject_ref: input.proposal.patch_proposal_id,
     findings: [...proposalFindings, ...testFindings],
     rules,
-    policy_snapshot_id: input.policy_snapshot_id,
+    policy_snapshot_id: resolvedPolicy.policy_snapshot_id,
     decided_at: input.now,
   });
 

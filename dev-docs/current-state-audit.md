@@ -6,7 +6,7 @@
 
 This section records the current truth for the adopted repo.
 
-本仓库是半路接管项目：已有 HoloGram 代码图谱与桌面 IDE 基座，当前产品方向已切换为“AI 编码风控平台”。本阶段目标已从“建立内部真源和架构边界”推进到“补齐第三阶段剩余运行态证据并完成阶段收口”。
+本仓库是半路接管项目：已有 HoloGram 代码图谱与桌面 IDE 基座，当前产品方向已切换为“AI 编码风控平台”。当前主线已从第三阶段运行态证据收口切到第四阶段产品化，第一段聚焦统一规则系统而不是回头重做第三阶段 owner / contract / runtime 主干。
 
 ## 已确认事实
 
@@ -17,6 +17,15 @@ This section records the current truth for the adopted repo.
 - `src-ui/src/provider/` 已有 Anthropic/OpenAI-compatible provider 抽象。
 - `src-ui/src/agent/` 已有 Agent 循环、工具注册、权限门禁、hooks、memory、logger。
 - `src-tauri/src/audit.rs` 已有 append-only JSONL 审计日志雏形。
+- `src-ui/src/risk/rule-package.ts` 现已具备默认 review / repair rule package、扩展包合并、禁用 rule 与 policy snapshot 生成的统一 registry。
+- `src-ui/src/risk/audit-bridge.ts` 现已具备统一 `AuditQueryResult` / `AuditRecord` 读模型，`workspace.ts` 与 `CheckPanel` 都通过同一 normalized audit truth 读取最近审计。
+- `src-ui/src/risk/current-review.ts` 现已具备 `buildWorkbenchQueue`，把看风险 / 看 gate / 看证据 / 审批阻断 / repair rollback 主路径收口成纯读模型，而不是散落在 UI 条件里。
+- `current_review_summary` 工具现已直接返回 `review + workbench_queue + repair_history`，只读工具不再只能拿到底层 review object 再自行拼装工作台主路径。
+- `src-ui/src/risk/current-review.ts` 现已具备 `buildRepairWorkbenchSnapshot`；`CheckPanel` 的 provider / generation / preflight / evidence trace / repair history 状态已改为直接消费 owner snapshot，不再在 UI 层各自推断。
+- `current_review_summary` 工具已显式支持 `limit` 参数，用于控制折叠进 `workbench_queue / repair_history / repair_workbench` 的最近审计记录条数。
+- Chrome 实机页在本轮已能刷新到 `🔮 风控4 审计3 — 全息观测站` 标题，说明最新 bundle 已被 localhost 页面加载；页面级 `Review Queue`、`门禁决策`、`多代理审计`、`自修复闭环`、`看证据 · 已就绪` 与 repair/apply 历史文案都已在同一 localhost 页面内出现。
+- `phase4:verify` 的 preview smoke 已尝试在脚本内起本地 preview 并抓取 `127.0.0.1:4174`，但当前环境对子进程绑定端口返回 `EPERM`；该失败已作为环境限制写入 evidence，而不是被当成代码失败吞掉。
+- 2026-06-23：通过本机 Chrome 实机查看 `http://127.0.0.1:4173/`，已确认 `Review Queue`、`门禁决策`、`多代理审计`、`自修复闭环` 在真实 localhost 页面内可见；其中 `Repair 历史` 与 `Evidence trace` 已通过同一页面滚动视图出现，但尚未额外落独立截图文件。
 - 当前 git 状态在本次写作前已有未跟踪 `src-ui/.npm-cache/`，与本任务无关。
 
 ## Product Boundary
@@ -110,4 +119,4 @@ This section records the current truth for the adopted repo.
 
 下一步安全任务：
 
-- 下一步只剩提交前 fresh 验证、整理 stage 范围与正式提交；第三阶段 owner/contract/runtime 主干不再需要回头重做。
+- 第四阶段四个面已形成当前主线闭环；后续若继续推进，应优先做增量 polish、真实 provider 扩样本、以及非阻断的验证自动化增强，而不是回头重做第三阶段 owner / contract / runtime 主干。

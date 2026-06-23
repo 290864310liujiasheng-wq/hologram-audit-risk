@@ -2,7 +2,7 @@
 
 ## Stop Conditions
 
-历史文档接管阶段只验收真源和架构边界；当前第三阶段收口还必须覆盖 live provider、semantic repair、preflight 闭环与 provider failure 证据。
+历史文档接管阶段只验收真源和架构边界；第三阶段收口已完成。当前第四阶段已覆盖规则系统、审计系统、工作台路径与稳定交付能力四个面，并继续以 fresh evidence 做增量收口。
 
 必须满足：
 
@@ -19,6 +19,8 @@
 
 - Review Core：合同测试、状态流转测试、finding 必须关联 evidence。
 - Rule/Policy：规则命中、gate decision、block/approval/audit 路径测试。
+- 第四阶段规则系统：统一 rule registry / package / snapshot 合同、扩展包合并、禁用 rule、优先级裁决，以及 current review / repair preflight 共用规则真源。
+- 第四阶段审计系统：统一 `AuditQueryResult` / `AuditRecord`、review/approval/repair 的 stage/status/error/state change，且 UI 与只读工具共用同一查询真源。
 - Provider：无明文 key、provider 失败降级、超时和结构化错误测试。
 - Audit：append-only、敏感信息过滤、失败可见。
 - UI：构建通过，浏览器或桌面预览验证风险列表、逐行解释、审批和审计视图。
@@ -141,6 +143,22 @@
 - 2026-06-22：semantic repair proof GREEN：以 `engine.run_full_check` 真实产出的 `config.yaml` 与 `migrations/0001_init.sql` 两组 L5 finding 为输入，proposal apply 后 git diff 归零，re-check 从 `1 finding` 下降到 `0`，`one_line` 均返回 `无新变更`。
 - 2026-06-22：preflight allow/block GREEN：allow 样本中 `git diff --check` 通过且 `repair_apply` gate 为 `allow`；block 样本中 `repair.test.required_command_failed`、失败命令 `git diff --check` 与 gate reason 已在 current review / CheckPanel / repair audit 三处保持一致。
 - 2026-06-22：provider failure matrix GREEN：`auth_invalid`、`rate_limit`、`timeout`、`upstream_5xx`、`proxy_407`、`tls_handshake_failed`、`tls_cert_revoked`、`connection_reset`、`socket_hang_up` 均已有稳定复现样本，并在 current review / CheckPanel / repair audit 三处保持同码值口径。
+- 2026-06-22：phase4 rule registry RED：新增 `RulePackage` / policy snapshot / disabled rule / priority 裁决测试后，`node --import tsx src/risk/test-risk.ts` 首次失败于缺少 `buildRulePolicySnapshotId` 与统一 package 入口，确认第四阶段仍按 test-first 推进。
+- 2026-06-22：phase4 rule registry GREEN：补齐 `Rule.package_id`、`Rule.priority`、`RulePackage`、统一 rule registry、扩展包合并、禁用 rule、policy snapshot 生成，以及 `current-review.ts` / `self-heal.ts` 的统一 policy 消费后，`node --import tsx src/risk/test-risk.ts` 通过。
+- 2026-06-22：phase4 rule registry fresh gate：再次执行 `npx tsc --noEmit`、`npm run build` 通过；仍仅存在既有 Vite dynamic/static import 与 chunk size warning，无新增 build blocker。
+- 2026-06-22：phase4 audit query RED：新增 `AuditQueryResult` / `AuditRecord` / unified timeline 测试后，`node --import tsx src/risk/test-risk.ts` 首次失败于缺少 `buildAuditQueryResult`，确认最近审计仍缺统一查询层。
+- 2026-06-22：phase4 audit query GREEN：补齐 `AuditQueryResult`、`AuditRecord`、repair 审计 state/evidence 补充、workspace tool 拦截归一与 `CheckPanel` 共用 query parser 后，`node --import tsx src/risk/test-risk.ts` 通过。
+- 2026-06-22：phase4 audit query fresh gate：再次执行 `npx tsc --noEmit`、`npm run build` 通过；仍仅存在既有 Vite dynamic/static import 与 chunk size warning，无新增 build blocker。
+- 2026-06-22：phase4 workbench history GREEN：`CheckPanel` 已新增 audit-backed 的 `repair history` 与 `evidence trace`；再次执行 `node --import tsx src/risk/test-risk.ts`、`npx tsc --noEmit`、`npm run build` 通过。
+- 2026-06-22：phase4 review queue GREEN：`current-review.ts` 已新增 `buildWorkbenchQueue`，`CheckPanel` 顶部已渲染 contract-backed `Review Queue` 主路径；再次执行 `node --import tsx src/risk/test-risk.ts`、`npx tsc --noEmit`、`npm run build` 通过。
+- 2026-06-22：phase4 review queue empty/degraded GREEN：补齐 clean review 时 `not_required` 空状态、以及 retryable repair issue 时的 `degraded` 状态后，再次执行 `node --import tsx src/risk/test-risk.ts`、`npx tsc --noEmit`、`npm run build` 通过。
+- 2026-06-22：phase4 workbench summary GREEN：`current_review_summary` 已开始直接返回 `workbench_queue` 与 `repair_history`，workspace agent tool 与 `CheckPanel` 现在共用同一条工作台主路径真源；再次执行 `node --import tsx src/risk/test-risk.ts`、`npx tsc --noEmit`、`npm run build` 通过。
+- 2026-06-22：phase4 repair snapshot GREEN：`current-review.ts` 已新增 `buildRepairWorkbenchSnapshot`，`CheckPanel` 的 provider/evidence/preflight/history 读路径已改为消费 snapshot；再次执行 `node --import tsx src/risk/test-risk.ts`、`npx tsc --noEmit`、`npm run build` 通过。
+- 2026-06-22：phase4 summary-tool parity GREEN：`current_review_summary` 已补 `repair_workbench` 与 `limit` 参数合同，mock/runtime/tool schema 不再分叉；再次执行 `npx tsc --noEmit`、`npm run build` 通过。
+- 2026-06-22：phase4 verify entry GREEN：新增 `npm run phase4:verify` 与 `src-ui/scripts/phase4-verify.ts`，并成功落盘 `dev-docs/evidence/phase4-verify.json`；产物包含 `main` 分支、最近提交 `c42326e`、当前 dirty tree、`test:risk`、`tsc`、`build` 与 `cargo check` 的 fresh 证据尾部输出。
+- 2026-06-22：phase4 preview smoke PARTIAL：`phase4:verify` 已尝试起本地 preview 并抓取 `127.0.0.1`，但当前环境里 preview 子进程绑定 `127.0.0.1:4174` 返回 `EPERM`；该失败已写入 `phase4-verify.json.preview_smoke`，目前只能作为“已尝试但受环境限制”的证据，不能算页面级 UI 验收通过。
+- 2026-06-23：phase4 localhost UI GREEN：通过本机 Chrome 打开 `http://127.0.0.1:4173/`，实机可见 `Review Queue`、`门禁决策`、`多代理审计`、`自修复闭环` 区块；继续下滚后可见 `看证据 · 已就绪 4 条 finding · 4 个 evidence` 与 repair/apply 历史文案。页面标题刷新为 `🔮 风控4 审计3 — 全息观测站`。
+- 2026-06-23：phase4 manual-ui checklist GREEN：已新增 `dev-docs/phase4-manual-ui-checklist.md`，把 `npm run dev -- --host 127.0.0.1 --port 4173`、localhost 地址与页面级标记固化成 fallback 验收步骤，避免新会话 agent 只凭 `phase4-verify.json` 自行猜流程。
 
 ## Drift Lock
 

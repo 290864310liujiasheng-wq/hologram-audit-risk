@@ -27,6 +27,7 @@
 
 主工作区，默认是当前任务的代码与风险上下文。
 
+- Review Queue 主路径
 - Diff / 文件内容
 - 行内风险标记
 - 逐行白话解释
@@ -58,8 +59,9 @@
 
 1. 当前 workspace
 2. 最近或正在运行的 review job
-3. 当前 job 的 finding 列表
-4. 选中 finding 的证据、解释和 gate decision
+3. `Review Queue`：看风险 -> 看 gate -> 看证据 -> 审批/阻断 -> repair/rollback
+4. 当前 job 的 finding 列表
+5. 选中 finding 的证据、解释和 gate decision
 
 不默认展示：
 
@@ -105,9 +107,11 @@
 - 当前 active provider 是否 ready、来源是 inline / secure_store / missing，以及缺失原因，也必须在 `自修复闭环` 区块内可见，避免用户只能先点生成提案再被动收错误。
 - 若当前会话仍处于 browser mock / mock workspace，即使聊天助手可用，也必须在 `自修复闭环` 区块内明确提示“当前不具备真实 live repair 证据资格”。
 - 若当前 review 没有进入自修复闭环的风险，或风险没有收口到可编辑源码输入，`自修复闭环` 区块必须显示明确空状态，并把按钮改成不可自动修复，而不是继续允许点击后再报 provider/source-file 错误。
+- 若 `Review Queue` 对应步骤在当前场景不适用，应明确显示为“not required/不适用”，而不是误报成缺证据、失败或待处理。
 - 若结构性风险可以通过当前 `changed_files` 收口到真实源码输入，系统应优先尝试这条回退路径；只有在 finding 路径和 changed_files 都无法提供可读源码时，才允许显示“当前不可自动修复”。
 - 若当前 repo 没有新的已识别风险，状态文案必须直接显示“当前无可修复风险”，而不是继续显示 draft/验证命令等会让用户误以为还能自动修复的中间态。
 - repair planner 的 provider/key/timeout/source-context 失败必须在 `自修复闭环` 区块内可见，并明确是否可重试
+- 若 repair issue 明确可重试，`Review Queue` 与 `自修复闭环` 都应显示为降级状态，而不是继续停在 `draft` 之类会误导用户的中间态。
 - repair preflight 失败也必须在 `自修复闭环` 区块内可见，并保留原 proposal 上下文，不允许只剩一条瞬时状态栏报错
 - 若 preflight 已返回失败命令和阻断 rule，工作台应直接展示这些细节，而不是要求用户自己去 audit 原始 JSON 里猜
 - repair apply 执行中若已自动回滚，也必须在 `自修复闭环` 区块内明确展示 rollback 证据

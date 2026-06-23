@@ -20,6 +20,7 @@ import {
   runRepairPreflight,
 } from './self-heal';
 import type { ReviewFinding } from './review-core';
+import { buildRulePolicySnapshotId } from './rule-package';
 
 const assert = {
   equal(actual: unknown, expected: unknown): void {
@@ -764,7 +765,7 @@ test('buildRepairIssueFromPreflight maps blocked gate decisions to policy_blocke
         decision: 'block',
         reason: '修复 patch 超出当前 finding 范围',
         finding_ids: ['finding-1'],
-        policy_snapshot_id: 'policy:repair-apply:v1',
+        policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
         decided_at: '2026-06-21T00:00:00Z',
       },
       test_results: [],
@@ -792,7 +793,7 @@ test('buildRepairPreflightSummary exposes failed commands and blocking rule ids'
       decision: 'block',
       reason: '修复 patch 超出当前 finding 范围',
       finding_ids: ['finding-1', 'finding-2'],
-      policy_snapshot_id: 'policy:repair-apply:v1',
+      policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
       decided_at: '2026-06-21T00:00:00Z',
     },
     test_results: [

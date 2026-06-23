@@ -5,9 +5,12 @@ import {
   attachRepairExecutionIssueToCurrentReview,
   attachRepairPreflightIssueToCurrentReview,
   attachRepairProposalToCurrentReview,
+  buildRepairWorkbenchSnapshot,
+  buildWorkbenchQueue,
   buildCurrentReviewSummaryResponse,
   buildCurrentReviewState,
 } from './current-review';
+import { buildRulePolicySnapshotId } from './rule-package';
 import { type RiskCheckResult } from './check-adapter';
 import type { RepairIssue } from './review-core';
 
@@ -55,6 +58,9 @@ test('current review summary can be derived from latest check result', () => {
   assert.equal(state.multi_agent_review.merged_findings.length, 1);
   assert.equal(state.repair_plan.approval_state, 'draft');
   assert.equal(state.gate_decision?.decision, 'block');
+  assert.equal(state.gate_decision?.policy_snapshot_id, buildRulePolicySnapshotId({
+    plane: 'review',
+  }));
 });
 
 test('buildCurrentReviewSummaryResponse returns empty when no review exists', () => {
@@ -314,6 +320,9 @@ test('buildCurrentReviewSummaryResponse includes the gate decision and generatio
   if (response.status === 'ok') {
     assert.equal(response.review.gate_decision.decision, 'block');
     assert.equal(response.review.repair_generation_meta?.provider_name, 'anthropic');
+    assert.equal(response.workbench_queue[0]?.step_id, 'review');
+    assert.equal(response.repair_history.length, 0);
+    assert.equal(response.repair_workbench.status_state, 'draft');
   }
 });
 
@@ -338,6 +347,52 @@ test('buildCurrentReviewSummaryResponse includes provider readiness when attache
   if (response.status === 'ok') {
     assert.equal(response.review.provider_readiness?.source, 'secure_store');
     assert.equal(response.review.provider_readiness?.ready, true);
+    assert.equal(response.workbench_queue.length, 5);
+  }
+});
+
+test('buildCurrentReviewSummaryResponse includes repair history when audit records are provided', () => {
+  const state = buildCurrentReviewState({
+    result: sample,
+    workspace_path: '/tmp/workspace',
+  });
+
+  const response = buildCurrentReviewSummaryResponse(state, [
+    {
+      event_id: 'repair:1',
+      timestamp: '2026-06-22T00:00:00Z',
+      plane: 'repair',
+      stage: 'preflight',
+      status: 'failed',
+      subject: 'job-1:repair:proposal',
+      reason: 'Repair preflight failed.',
+      finding_ids: ['finding-1'],
+      evidence_ids: ['evidence-1'],
+      state_change: {
+        from_state: 'approved',
+        to_state: 'approved',
+      },
+      error: {
+        code: 'policy_blocked',
+        stage: 'preflight',
+        retryable: false,
+      },
+      raw: {
+        ts: '2026-06-22T00:00:00Z',
+        tool: 'repair_apply',
+        path: '/tmp/workspace',
+        action: 'denied',
+        reason: 'Repair preflight failed.',
+        details: {},
+      },
+    },
+  ]);
+
+  assert.equal(response.status, 'ok');
+  if (response.status === 'ok') {
+    assert.equal(response.repair_history[0]?.stage, 'preflight');
+    assert.equal(response.workbench_queue[4]?.state, 'failed');
+    assert.equal(response.repair_workbench.repair_history[0]?.stage, 'preflight');
   }
 });
 
@@ -365,4 +420,228 @@ test('attachLiveRepairReadinessToCurrentReview exposes mock-browser runtime mism
   assert.equal(next.live_repair_readiness?.mode, 'mock_browser');
   assert.equal(next.live_repair_readiness?.eligible, false);
   assert.equal(next.provider_readiness?.ready, true);
+});
+
+test('buildWorkbenchQueue exposes the review-to-repair main path with contract-backed states', () => {
+  const state = buildCurrentReviewState({
+    result: sample,
+    workspace_path: '/tmp/workspace',
+  });
+
+  const queue = buildWorkbenchQueue(state);
+
+  assert.equal(queue[0]?.step_id, 'review');
+  assert.equal(queue[0]?.state, 'needs_attention');
+  assert.equal(queue[0]?.section_id, 'risk-summary');
+  assert.equal(queue[1]?.state, 'block');
+  assert.equal(queue[1]?.section_id, 'gate-decision');
+  assert.equal(queue[2]?.state, 'ready');
+  assert.equal(queue[2]?.section_id, 'repair-workbench');
+  assert.equal(queue[3]?.state, 'draft');
+  assert.equal(queue[4]?.state, 'draft');
+});
+
+test('buildWorkbenchQueue prefers audit-backed repair history when present', () => {
+  const state = buildCurrentReviewState({
+    result: sample,
+    workspace_path: '/tmp/workspace',
+  });
+
+  const queue = buildWorkbenchQueue(state, [
+    {
+      event_id: 'repair:1',
+      timestamp: '2026-06-22T00:00:00Z',
+      plane: 'repair',
+      stage: 'preflight',
+      status: 'failed',
+      subject: 'job-1:repair:proposal',
+      reason: 'Repair preflight failed.',
+      finding_ids: ['finding-1'],
+      evidence_ids: ['evidence-1'],
+      state_change: {
+        from_state: 'approved',
+        to_state: 'approved',
+      },
+      error: {
+        code: 'policy_blocked',
+        stage: 'preflight',
+        retryable: false,
+      },
+      raw: {
+        ts: '2026-06-22T00:00:00Z',
+        tool: 'repair_apply',
+        path: '/tmp/workspace',
+        action: 'denied',
+        reason: 'Repair preflight failed.',
+        details: {},
+      },
+    },
+  ]);
+
+  assert.equal(queue[4]?.state, 'failed');
+  assert.equal(queue[4]?.detail, 'approved -> approved');
+});
+
+test('buildWorkbenchQueue keeps empty-state steps out of missing/error wording when review is clean', () => {
+  const state = buildCurrentReviewState({
+    result: {
+      ...sample,
+      passed: true,
+      l5_violations: [],
+      changed_files: [],
+      total_changed_files: 0,
+    },
+    workspace_path: '/tmp/workspace',
+  });
+
+  const queue = buildWorkbenchQueue(state);
+
+  assert.equal(queue[0]?.state, 'clean');
+  assert.equal(queue[1]?.state, 'allow');
+  assert.equal(queue[2]?.state, 'not_required');
+  assert.equal(queue[3]?.state, 'not_required');
+  assert.equal(queue[4]?.state, 'not_required');
+});
+
+test('buildWorkbenchQueue surfaces retryable repair degradation as degraded instead of draft', () => {
+  const state = attachRepairIssueToCurrentReview(buildCurrentReviewState({
+    result: sample,
+    workspace_path: '/tmp/workspace',
+  }), {
+    issue: {
+      issue_id: 'job-1:repair:proposal_generation',
+      repair_plan_id: 'job-1:repair',
+      stage: 'proposal_generation',
+      summary: 'Provider 暂时不可用，修复提案已降级。',
+      error: {
+        code: 'provider_upstream_failed',
+        message: '503',
+        retryable: true,
+      },
+      created_at: '2026-06-22T00:00:00Z',
+    },
+  });
+
+  const queue = buildWorkbenchQueue(state);
+
+  assert.equal(queue[4]?.state, 'degraded');
+});
+
+test('buildRepairWorkbenchSnapshot keeps clean reviews in a not-required empty state', () => {
+  const state = buildCurrentReviewState({
+    result: {
+      ...sample,
+      passed: true,
+      l5_violations: [],
+      changed_files: [],
+      total_changed_files: 0,
+    },
+    workspace_path: '/tmp/workspace',
+  });
+
+  const snapshot = buildRepairWorkbenchSnapshot(state, []);
+
+  assert.equal(snapshot.status_state, 'not_required');
+  assert.equal(snapshot.status_label, '当前无可修复风险');
+  assert.equal(snapshot.evidence_trace.repair_history_count, 0);
+});
+
+test('buildRepairWorkbenchSnapshot surfaces retryable issues, preflight summary, and repair history', () => {
+  const state = attachRepairPreflightIssueToCurrentReview(
+    attachRepairIssueToCurrentReview(buildCurrentReviewState({
+      result: sample,
+      workspace_path: '/tmp/workspace',
+    }), {
+      issue: {
+        issue_id: 'job-1:repair:proposal_generation',
+        repair_plan_id: 'job-1:repair',
+        stage: 'proposal_generation',
+        summary: 'Provider 暂时不可用，修复提案已降级。',
+        error: {
+          code: 'provider_upstream_failed',
+          message: '503',
+          retryable: true,
+        },
+        created_at: '2026-06-22T00:00:00Z',
+      },
+    }),
+    {
+      issue: {
+        issue_id: 'job-1:repair:preflight',
+        repair_plan_id: 'job-1:repair',
+        stage: 'preflight',
+        summary: '修复前复检失败：修复前验证命令必须全部通过',
+        error: {
+          code: 'policy_blocked',
+          message: '修复前验证命令必须全部通过',
+          retryable: false,
+        },
+        created_at: '2026-06-22T00:00:00Z',
+      },
+      preflight: {
+        repair_plan_id: 'job-1:repair',
+        findings: [{
+          finding_id: 'finding-1',
+          job_id: 'job-1',
+          rule_id: 'repair.test.required_command_failed',
+          severity: 'critical',
+          category: 'repair_gate',
+          locations: [{ file_path: 'src/auth.ts', start_line: 1, end_line: 1 }],
+          plain_explanation: '必跑验证命令失败：git diff --check',
+          impact: '当前 patch proposal 无法证明它在 apply 前仍满足最小安全门。',
+          recommendation: '先修复命令失败原因，再重新执行 git diff --check。',
+          evidence_ids: ['repair-test:1'],
+          confidence: 0.99,
+          status: 'open',
+        }],
+        gate_decision: {
+          decision_id: 'decision-1',
+          job_id: 'job-1',
+          subject_type: 'repair_apply',
+          subject_ref: 'job-1:repair:proposal',
+          decision: 'block',
+          reason: '修复前验证命令必须全部通过',
+          finding_ids: ['finding-1'],
+          policy_snapshot_id: 'policy:repair:repair.default@v1',
+          decided_at: '2026-06-22T00:00:00Z',
+        },
+        test_results: [{ command: 'git diff --check', passed: false, stdout: '', stderr: 'failed' }],
+      },
+    },
+  );
+
+  const snapshot = buildRepairWorkbenchSnapshot(state, [
+    {
+      event_id: 'repair:1',
+      timestamp: '2026-06-22T00:00:00Z',
+      plane: 'repair',
+      stage: 'preflight',
+      status: 'failed',
+      subject: 'job-1:repair:proposal',
+      reason: 'Repair preflight failed.',
+      finding_ids: ['finding-1'],
+      evidence_ids: ['repair-test:1'],
+      state_change: {
+        from_state: 'approved',
+        to_state: 'approved',
+      },
+      error: {
+        code: 'policy_blocked',
+        stage: 'preflight',
+        retryable: false,
+      },
+      raw: {
+        ts: '2026-06-22T00:00:00Z',
+        tool: 'repair_apply',
+        path: '/tmp/workspace',
+        action: 'denied',
+        reason: 'Repair preflight failed.',
+        details: {},
+      },
+    },
+  ]);
+
+  assert.equal(snapshot.issue_badge, '提案失败，需修正');
+  assert.equal(snapshot.preflight?.failed_commands[0], 'git diff --check');
+  assert.equal(snapshot.repair_history.length, 1);
 });

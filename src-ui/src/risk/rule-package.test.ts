@@ -1,10 +1,11 @@
 import {
-  DEFAULT_REPAIR_RULES,
-  DEFAULT_REVIEW_RULES,
+  buildRulePolicySnapshotId,
+  getDefaultRulePackage,
   getReviewBucketDefinition,
+  resolveRulePolicy,
   evaluateRepairProposal,
 } from './rule-package';
-import type { PatchProposal, ReviewFinding } from './review-core';
+import type { PatchProposal, ReviewFinding, RulePackage } from './review-core';
 
 const assert = {
   equal(actual: unknown, expected: unknown): void {
@@ -61,15 +62,17 @@ function proposal(patch: Partial<PatchProposal> = {}): PatchProposal {
   };
 }
 
-test('DEFAULT_REPAIR_RULES includes a block rule for out-of-scope writes', () => {
-  const rule = DEFAULT_REPAIR_RULES.find((entry) => entry.rule_id === 'repair.scope.out_of_scope_write');
+test('default repair policy includes a block rule for out-of-scope writes', () => {
+  const rule = resolveRulePolicy({ plane: 'repair' }).rules.find((entry) => entry.rule_id === 'repair.scope.out_of_scope_write');
 
   assert.equal(rule?.gate_effect, 'block');
 });
 
-test('DEFAULT_REVIEW_RULES maps check.l5 to block and check.l4 to require_approval', () => {
-  assert.equal(DEFAULT_REVIEW_RULES.find((entry) => entry.rule_id === 'check.l5')?.gate_effect, 'block');
-  assert.equal(DEFAULT_REVIEW_RULES.find((entry) => entry.rule_id === 'check.l4')?.gate_effect, 'require_approval');
+test('default review policy maps check.l5 to block and check.l4 to require_approval', () => {
+  const policy = resolveRulePolicy({ plane: 'review' });
+
+  assert.equal(policy.rules.find((entry) => entry.rule_id === 'check.l5')?.gate_effect, 'block');
+  assert.equal(policy.rules.find((entry) => entry.rule_id === 'check.l4')?.gate_effect, 'require_approval');
 });
 
 test('getReviewBucketDefinition centralizes category and recommendation for each review bucket', () => {
@@ -77,6 +80,57 @@ test('getReviewBucketDefinition centralizes category and recommendation for each
   assert.equal(getReviewBucketDefinition('l4').category, 'security');
   assert.equal(getReviewBucketDefinition('l3').recommendation, '补充最小验证并确认回归风险已收口。');
   assert.equal(getReviewBucketDefinition('l2').recommendation, '收窄波及面并确认不会影响客户当前流程。');
+});
+
+test('default review and repair packages expose structured package metadata', () => {
+  const reviewPackage = getDefaultRulePackage('review');
+  const repairPackage = getDefaultRulePackage('repair');
+
+  assert.equal(reviewPackage.package_id, 'review.default');
+  assert.equal(reviewPackage.version, 'v1');
+  assert.equal(reviewPackage.plane, 'review');
+  assert.equal(repairPackage.package_id, 'repair.default');
+  assert.equal(repairPackage.version, 'v1');
+  assert.equal(repairPackage.plane, 'repair');
+});
+
+test('resolveRulePolicy returns a policy snapshot id derived from the active package set', () => {
+  const policy = resolveRulePolicy({ plane: 'review' });
+
+  assert.equal(policy.policy_snapshot_id, 'policy:review:review.default@v1');
+});
+
+test('resolveRulePolicy accepts extension packages and disabled rules in one active rule source', () => {
+  const extensionPackage: RulePackage = {
+    package_id: 'review.workspace',
+    version: 'v3',
+    plane: 'review',
+    source: 'workspace_extension',
+    enabled: true,
+    description: 'workspace review overrides',
+    rules: [{
+      rule_id: 'check.custom',
+      package_id: 'review.workspace',
+      name: '自定义 review 规则',
+      category: 'architecture',
+      severity: 'high',
+      priority: 95,
+      scope: ['file_write'],
+      trigger: { kind: 'static_signal', config: {} },
+      gate_effect: 'require_approval',
+      enabled: true,
+    }],
+  };
+
+  const policy = resolveRulePolicy({
+    plane: 'review',
+    extension_packages: [extensionPackage],
+    disabled_rule_ids: ['check.l2'],
+  });
+
+  assert.equal(policy.policy_snapshot_id, 'policy:review:review.default@v1+review.workspace@v3');
+  assert.equal(policy.rules.some((rule) => rule.rule_id === 'check.custom'), true);
+  assert.equal(policy.rules.some((rule) => rule.rule_id === 'check.l2'), false);
 });
 
 test('evaluateRepairProposal flags patch writes outside the finding scope', () => {

@@ -1,4 +1,6 @@
 import {
+  buildRepairHistory,
+  buildAuditQueryResult,
   buildApprovalAuditPayload,
   buildRepairAuditPayload,
   buildReviewAuditPayload,
@@ -6,6 +8,7 @@ import {
 } from './audit-bridge';
 import { adaptCheckResultToFindings, type RiskCheckResult } from './check-adapter';
 import type { GateDecision } from './review-core';
+import { buildRulePolicySnapshotId } from './rule-package';
 
 const assert = {
   equal(actual: unknown, expected: unknown): void {
@@ -64,7 +67,7 @@ test('buildReviewAuditPayload marks failed checks as denied review actions', () 
     decision: 'block',
     reason: 'L5 不可逆风险默认阻断',
     finding_ids: ['job-1:l5:0'],
-    policy_snapshot_id: 'policy:review-default:v1',
+    policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'review' }),
     decided_at: '2026-06-20T00:00:00Z',
   });
 
@@ -105,7 +108,7 @@ test('buildReviewAuditPayload keeps warn decisions as allowed actions with gate 
     decision: 'warn',
     reason: 'L3 延迟风险需要告警',
     finding_ids: ['job-2:l3:0'],
-    policy_snapshot_id: 'policy:review-default:v1',
+    policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'review' }),
     decided_at: '2026-06-20T00:00:00Z',
   });
 
@@ -126,7 +129,7 @@ test('buildReviewAuditPayload carries finding and evidence references into detai
     decision: 'block',
     reason: 'L5 不可逆风险默认阻断',
     finding_ids: ['job-1:l5:0'],
-    policy_snapshot_id: 'policy:review-default:v1',
+    policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'review' }),
     decided_at: '2026-06-20T00:00:00Z',
   } satisfies GateDecision);
 
@@ -134,7 +137,7 @@ test('buildReviewAuditPayload carries finding and evidence references into detai
   assert.deepEqual(payload.details.evidence_ids, ['check:l5:0']);
   assert.equal(payload.details.counts.critical, 1);
   assert.equal(payload.details.gate_decision?.decision, 'block');
-  assert.equal(payload.details.policy_snapshot_id, 'policy:review-default:v1');
+  assert.equal(payload.details.policy_snapshot_id, buildRulePolicySnapshotId({ plane: 'review' }));
 });
 
 test('buildApprovalAuditPayload marks denied approvals and preserves subject context', () => {
@@ -197,8 +200,62 @@ test('buildRepairAuditPayload keeps repair issue stage and retryability for degr
   assert.equal(payload.details.error_retryable, true);
 });
 
+test('buildAuditQueryResult normalizes review, approval, and repair audit entries into one evidence timeline', () => {
+  const result = buildAuditQueryResult({
+    entries: [
+      {
+        ts: '2026-06-20T00:00:01Z',
+        tool: 'review_check',
+        path: '/mock/nebula-project',
+        action: 'denied',
+        reason: 'L5 不可逆风险默认阻断',
+        details: {
+          finding_ids: ['job-1:l5:0'],
+          evidence_ids: ['check:l5:0'],
+          gate_decision: {
+            decision: 'block',
+            reason: 'L5 不可逆风险默认阻断',
+            finding_ids: ['job-1:l5:0'],
+          },
+          policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'review' }),
+        },
+      },
+      {
+        ts: '2026-06-20T00:00:02Z',
+        tool: 'repair_apply',
+        path: '/mock/nebula-project',
+        action: 'denied',
+        reason: 'Repair preflight failed.',
+        details: {
+          approval_state: 'approved',
+          gate_decision: 'block',
+          gate_reason: '修复前验证命令必须全部通过',
+          error_code: 'policy_blocked',
+          error_stage: 'preflight',
+          error_retryable: false,
+          preflight_findings: [{ finding_id: 'finding-1', rule_id: 'repair.test.required_command_failed' }],
+          validation_results: [{ command: 'git diff --check', passed: false, stdout: '', stderr: 'failed' }],
+          state_change: {
+            from_state: 'approved',
+            to_state: 'approved',
+          },
+        },
+      },
+    ],
+  });
+
+  assert.equal(result.records.length, 2);
+  assert.equal(result.records[0]?.plane, 'repair');
+  assert.equal(result.records[0]?.stage, 'preflight');
+  assert.equal(result.records[0]?.error?.code, 'policy_blocked');
+  assert.equal(result.records[0]?.state_change?.from_state, 'approved');
+  assert.deepEqual(result.records[1]?.evidence_ids, ['check:l5:0']);
+  assert.equal(result.records[1]?.policy_snapshot_id, buildRulePolicySnapshotId({ plane: 'review' }));
+});
+
 test('summarizeRecentAuditEntries keeps recent review and approval events in newest-first order', () => {
-  const rows = summarizeRecentAuditEntries([
+  const rows = summarizeRecentAuditEntries(buildAuditQueryResult({
+    entries: [
     {
       ts: '2026-06-20T00:00:01Z',
       tool: 'review_check',
@@ -238,7 +295,8 @@ test('summarizeRecentAuditEntries keeps recent review and approval events in new
       action: 'allowed',
       reason: '',
     },
-  ]);
+    ],
+  }).records);
 
   assert.equal(rows.length, 3);
   assert.equal(rows[0]?.toolLabel, '修复');
@@ -247,4 +305,52 @@ test('summarizeRecentAuditEntries keeps recent review and approval events in new
   assert.equal(rows[2]?.toolLabel, '审查');
   assert.equal(rows[1]?.subject, 'src/auth.ts');
   assert.equal(rows[2]?.actionLabel, '阻断');
+});
+
+test('buildRepairHistory keeps newest repair stages with state changes and retryability', () => {
+  const query = buildAuditQueryResult({
+    entries: [
+      {
+        ts: '2026-06-20T00:00:02Z',
+        tool: 'repair_apply',
+        path: '/mock/nebula-project',
+        action: 'denied',
+        reason: 'Repair preflight failed.',
+        details: {
+          approval_state: 'approved',
+          gate_decision: 'block',
+          gate_reason: '修复前验证命令必须全部通过',
+          error_code: 'policy_blocked',
+          error_stage: 'preflight',
+          error_retryable: false,
+          state_change: {
+            from_state: 'approved',
+            to_state: 'approved',
+          },
+        },
+      },
+      {
+        ts: '2026-06-20T00:00:01Z',
+        tool: 'repair_plan',
+        path: '/mock/nebula-project',
+        action: 'allowed',
+        reason: 'Repair proposal generated.',
+        details: {
+          approval_state: 'waiting_approval',
+          state_change: {
+            from_state: 'draft',
+            to_state: 'waiting_approval',
+          },
+        },
+      },
+    ],
+  });
+
+  const history = buildRepairHistory(query.records);
+
+  assert.equal(history.length, 2);
+  assert.equal(history[0]?.stage, 'preflight');
+  assert.equal(history[0]?.status, 'failed');
+  assert.equal(history[0]?.state_change?.from_state, 'approved');
+  assert.equal(history[1]?.status, 'waiting_approval');
 });

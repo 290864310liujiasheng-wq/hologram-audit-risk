@@ -46,9 +46,11 @@ function baseFinding(patch: Partial<ReviewFinding> = {}): ReviewFinding {
 
 const blockingRule: Rule = {
   rule_id: 'rule-critical',
+  package_id: 'review.default',
   name: '危险写入必须拦截',
   category: 'permission',
   severity: 'critical',
+  priority: 100,
   scope: ['file_write'],
   trigger: { kind: 'permission', config: {} },
   gate_effect: 'block',
@@ -169,6 +171,19 @@ test('validateRule rejects block rules without scope', () => {
   assert.equal(errors[0]?.message, 'Rule requires at least one scope entry.');
 });
 
+test('validateRule rejects rules without a package id or priority', () => {
+  const errors = validateRule({
+    ...blockingRule,
+    package_id: '',
+    priority: Number.NaN,
+  });
+
+  assert.deepEqual(errors.map((error) => error.message), [
+    'Rule requires a package id.',
+    'Rule priority must be a finite number.',
+  ]);
+});
+
 test('deriveGateDecision blocks when an enabled matched rule has block effect', () => {
   const decision = deriveGateDecision({
     job_id: 'job-1',
@@ -189,9 +204,11 @@ test('deriveGateDecision keeps every matched finding id even when block is the s
   const warningRule: Rule = {
     ...blockingRule,
     rule_id: 'rule-warn',
+    package_id: 'review.default',
     name: '普通提醒',
     gate_effect: 'warn',
     severity: 'low',
+    priority: 10,
   };
   const decision = deriveGateDecision({
     job_id: 'job-1',
@@ -208,6 +225,37 @@ test('deriveGateDecision keeps every matched finding id even when block is the s
 
   assert.deepEqual(decision.finding_ids, ['finding-1', 'finding-2']);
   assert.equal(decision.decision, 'block');
+});
+
+test('deriveGateDecision prefers the higher-priority rule when matched effects are equally blocking', () => {
+  const lowerPriorityRule: Rule = {
+    ...blockingRule,
+    rule_id: 'rule-low-priority',
+    name: '低优先级阻断',
+    priority: 20,
+  };
+  const higherPriorityRule: Rule = {
+    ...blockingRule,
+    rule_id: 'rule-high-priority',
+    name: '高优先级阻断',
+    priority: 90,
+  };
+
+  const decision = deriveGateDecision({
+    job_id: 'job-1',
+    subject_type: 'file_write',
+    subject_ref: 'src/app.ts',
+    findings: [
+      baseFinding({ finding_id: 'finding-1', rule_id: 'rule-low-priority' }),
+      baseFinding({ finding_id: 'finding-2', rule_id: 'rule-high-priority' }),
+    ],
+    rules: [lowerPriorityRule, higherPriorityRule],
+    policy_snapshot_id: 'policy-1',
+    decided_at: '2026-06-20T00:00:00Z',
+  });
+
+  assert.equal(decision.decision, 'block');
+  assert.equal(decision.reason, '高优先级阻断');
 });
 
 test('validateGateDecision rejects block decisions without reason or findings', () => {

@@ -815,7 +815,7 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'audit_recent_reviews',
       description: () =>
-        'Read recent review and approval audit records from .hologram/audit.jsonl. Returns the newest review_check and approval.* entries with action, reason, and details. Use when you need the latest risk-review trail, approval decisions, or audit evidence.',
+        'Read recent audit evidence from .hologram/audit.jsonl. Returns both raw entries and normalized records spanning review_check, approval.*, repair_*, gate decisions, preflight failures, rollback, and provider degradation. Use when you need the latest risk-review trail, approval decisions, repair history, or audit evidence.',
       parameters: () => ({
         type: 'object',
         properties: {
@@ -832,13 +832,19 @@ export function createCodingTools(exec: ToolExecutor): Tool[] {
     {
       name: () => 'current_review_summary',
       description: () =>
-        'Read the latest in-memory current review object from the check panel. Returns the newest transformed review state, including findings, gate decision, multi-agent review, repair plan, and any repair degradation state. Use when you need the current risk state instead of historical audit records.',
+        'Read the latest in-memory current review object from the check panel. Returns the newest transformed review state plus workbench_queue and repair_history, including findings, gate decision, multi-agent review, repair plan, and any repair degradation state. Use when you need the current risk state and current workbench path instead of historical audit records.',
       parameters: () => ({
         type: 'object',
-        properties: {},
+        properties: {
+          limit: {
+            type: 'integer',
+            description: 'Maximum number of recent audit records to fold into workbench_queue and repair_history (default: 10)',
+            default: 10,
+          },
+        },
       }),
       readOnly: () => true,
-      execute: () => exec('current_review_summary', {}),
+      execute: (args) => exec('current_review_summary', { limit: args.limit || 10 }),
     },
     {
       name: () => 'active_provider_readiness',

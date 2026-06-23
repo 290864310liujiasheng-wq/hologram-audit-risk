@@ -464,7 +464,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
           decision: 'block',
           reason: 'L5 不可逆风险默认阻断',
           finding_ids: ['check:mock:l5:0'],
-          policy_snapshot_id: 'policy:review-default:v1',
+          policy_snapshot_id: 'policy:review:review.default@v1',
           decided_at: new Date().toISOString(),
         },
         multi_agent_review: {
@@ -495,6 +495,65 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): string 
           has_inline_key: false,
           has_secure_store_key: false,
         },
+      },
+      workbench_queue: [
+        {
+          step_id: 'review',
+          title: '看风险',
+          state: 'needs_attention',
+          summary: '1 条风险待处理',
+          detail: 'API 签名变更会导致下游调用方拿到不兼容返回值。',
+        },
+        {
+          step_id: 'gate',
+          title: '看 gate',
+          state: 'block',
+          summary: 'L5 不可逆风险默认阻断',
+          detail: '策略 policy:review:review.default@v1',
+        },
+        {
+          step_id: 'evidence',
+          title: '看证据',
+          state: 'ready',
+          summary: '1 条 finding · 1 个 evidence',
+          detail: '证据可追溯',
+        },
+        {
+          step_id: 'approval',
+          title: '审批/阻断',
+          state: 'draft',
+          summary: '当前尚未进入审批阶段',
+        },
+        {
+          step_id: 'repair',
+          title: 'repair/rollback',
+          state: 'draft',
+          summary: '当前尚未进入 repair apply / rollback 历史',
+        },
+      ],
+      repair_history: [],
+      repair_workbench: {
+        status_state: 'draft',
+        status_label: '状态 draft',
+        test_count: 2,
+        strategy: '先处理最高风险 finding，再执行最小验证。',
+        risk_note: 'CRITICAL finding requires explicit review.',
+        required_tests: ['npm run test:risk', 'npx tsc --noEmit'],
+        generation_input: {
+          finding_count: 1,
+          file_count: 1,
+          eligible: true,
+        },
+        provider: {
+          summary: 'Provider: deepseek / deepseek-v4-pro · not ready · missing',
+          reason: 'No provider API key available in settings or secure storage.',
+        },
+        evidence_trace: {
+          finding_count: 1,
+          evidence_count: 1,
+          repair_history_count: 0,
+        },
+        repair_history: [],
       },
     });
   }
