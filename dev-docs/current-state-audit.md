@@ -6,7 +6,7 @@
 
 This section records the current truth for the adopted repo.
 
-本仓库是半路接管项目：已有 HoloGram 代码图谱与桌面 IDE 基座，当前产品方向已切换为“AI 编码风控平台”。当前主线已从第三阶段运行态证据收口切到第四阶段产品化，第一段聚焦统一规则系统而不是回头重做第三阶段 owner / contract / runtime 主干。
+本仓库是半路接管项目：已有 HoloGram 代码图谱与桌面 IDE 基座，当前产品方向已切换为“AI 编码风控平台”。当前主线已从第四阶段产品化继续推进到第五阶段交付化，重点是补外部接入、headless report、CI/hook 与管理员导出，而不是回头重做前三四阶段 owner / contract / runtime 主干。
 
 ## 已确认事实
 
@@ -20,6 +20,9 @@ This section records the current truth for the adopted repo.
 - `src-ui/src/risk/rule-package.ts` 现已具备默认 review / repair rule package、扩展包合并、禁用 rule 与 policy snapshot 生成的统一 registry。
 - `src-ui/src/risk/audit-bridge.ts` 现已具备统一 `AuditQueryResult` / `AuditRecord` 读模型，`workspace.ts` 与 `CheckPanel` 都通过同一 normalized audit truth 读取最近审计。
 - `src-ui/src/risk/current-review.ts` 现已具备 `buildWorkbenchQueue`，把看风险 / 看 gate / 看证据 / 审批阻断 / repair rollback 主路径收口成纯读模型，而不是散落在 UI 条件里。
+- `engine/src/bin/hologram-risk-check.rs` 现已提供 headless workspace check 入口，可直接对外部仓库输出 machine-readable check JSON。
+- `src-ui/src/risk/delivery.ts` 现已提供 delivery manifest、workspace rule package 装载、machine report、hook/CI 模板真源。
+- `src-ui/scripts/phase5-delivery.ts` 现已提供 `phase5:init` / `phase5:report` / `phase5:verify` 三个交付化命令入口。
 - `current_review_summary` 工具现已直接返回 `review + workbench_queue + repair_history`，只读工具不再只能拿到底层 review object 再自行拼装工作台主路径。
 - `src-ui/src/risk/current-review.ts` 现已具备 `buildRepairWorkbenchSnapshot`；`CheckPanel` 的 provider / generation / preflight / evidence trace / repair history 状态已改为直接消费 owner snapshot，不再在 UI 层各自推断。
 - `current_review_summary` 工具已显式支持 `limit` 参数，用于控制折叠进 `workbench_queue / repair_history / repair_workbench` 的最近审计记录条数。

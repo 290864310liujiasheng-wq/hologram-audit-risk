@@ -327,6 +327,81 @@ interface ProviderProfile {
 }
 ```
 
+## Delivery Integration Contract
+
+```ts
+interface DeliveryConfig {
+  version: 'phase5.v1';
+  workspace: {
+    root: string;
+    changed_files_source: 'git_status';
+  };
+  provider: {
+    name: string;
+    model: string;
+    base_url: string;
+    key_source: 'env' | 'secure_store';
+    env_var?: string;
+  };
+  rule_packages: {
+    review_paths: string[];
+    repair_paths: string[];
+    disabled_review_rule_ids: string[];
+    disabled_repair_rule_ids: string[];
+  };
+  audit: {
+    jsonl_path: string;
+    report_output_path: string;
+    recent_limit: number;
+  };
+  automation: {
+    verify_commands: string[];
+    pre_commit_hook: string;
+    ci_workflow: string;
+    fail_on_decision: GateDecisionValue;
+  };
+}
+
+interface DeliveryMachineReport {
+  generated_at: string;
+  workspace: {
+    root: string;
+    changed_files_source: 'git_status';
+    audit_jsonl_path: string;
+    report_output_path: string;
+  };
+  provider: {
+    name: string;
+    model: string;
+    base_url: string;
+    key_source: 'env' | 'secure_store';
+    ready: boolean;
+    reason: string;
+    env_var?: string;
+  };
+  policies: {
+    review: ResolvedRulePolicy;
+    repair: ResolvedRulePolicy;
+  };
+  current_review: CurrentReviewSummaryResponse;
+  audit: AuditQueryResult;
+  automation: {
+    verify_commands: string[];
+    pre_commit_hook: string;
+    ci_workflow: string;
+    fail_on_decision: GateDecisionValue;
+    should_fail: boolean;
+  };
+}
+```
+
+要求：
+
+- `delivery.json` 是 workspace/provider/rule-package/audit 接入真源，不依赖 UI 文案或 README 推断。
+- workspace rule package 文件缺失时，系统回退到默认 policy，而不是把“未自定义扩展”误判为交付失败。
+- machine report 必须同时包含 current review、normalized audit、active policy 和 automation fail gate。
+- pre-commit / CI 都只能消费 `phase5:report` 或其下游 Delivery Plane，而不是各写一套私有脚本逻辑。
+
 要求：
 
 - 客户自带模型 API，平台不硬编码统一 key。

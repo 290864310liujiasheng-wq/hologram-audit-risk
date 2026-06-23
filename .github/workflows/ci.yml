@@ -30,3 +30,30 @@ jobs:
 
       - name: Run engine tests
         run: cd engine && cargo test
+
+  risk-delivery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: src-ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm --prefix src-ui ci
+
+      - name: Export machine-readable risk delivery report
+        run: npm --prefix src-ui run phase5:report -- --workspace "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/phase5-risk-report.json" --fail-on off
+
+      - name: Upload risk delivery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-risk-report
+          path: ${{ runner.temp }}/phase5-risk-report.json

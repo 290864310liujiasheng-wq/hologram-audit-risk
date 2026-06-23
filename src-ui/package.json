@@ -9,6 +9,12 @@
     "test:risk": "node --import tsx src/risk/test-risk.ts",
     "phase3:evidence": "node --import tsx scripts/phase3-evidence.ts",
     "phase4:verify": "node --import tsx scripts/phase4-verify.ts",
+    "phase5:init": "node --import tsx scripts/phase5-delivery.ts init",
+    "phase5:report": "node --import tsx scripts/phase5-delivery.ts report",
+    "phase5:rules": "node --import tsx scripts/phase5-delivery.ts rules",
+    "phase5:audit": "node --import tsx scripts/phase5-delivery.ts audit",
+    "phase5:doctor": "node --import tsx scripts/phase5-delivery.ts doctor",
+    "phase5:verify": "node --import tsx scripts/phase5-delivery.ts verify",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

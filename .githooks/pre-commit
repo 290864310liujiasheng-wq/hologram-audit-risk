@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+WORKSPACE_ROOT="${1:-$PWD}"
+
+npm --prefix "$WORKSPACE_ROOT/src-ui" run phase5:report -- --workspace "$WORKSPACE_ROOT" --output "$WORKSPACE_ROOT/.hologram/latest-risk-report.json" --fail-on block

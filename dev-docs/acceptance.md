@@ -2,7 +2,7 @@
 
 ## Stop Conditions
 
-历史文档接管阶段只验收真源和架构边界；第三阶段收口已完成。当前第四阶段已覆盖规则系统、审计系统、工作台路径与稳定交付能力四个面，并继续以 fresh evidence 做增量收口。
+历史文档接管阶段只验收真源和架构边界；第三、第四阶段收口已完成。当前第五阶段继续在前四阶段内核之上验收外部接入、headless report、CI/hook 与管理员导出。
 
 必须满足：
 
@@ -27,6 +27,7 @@
 - Multi-agent：子代理超时、重复 finding 去重、冲突裁决、主代理汇总测试。
 - Self-healing：repair plan、patch proposal、测试 gate、审批、apply、rollback 证据。
 - 第三阶段收口：fresh `npm run test:risk`、`npx tsc --noEmit`、`npm run build`、`cargo check` 全绿；live provider 成功样本与 provider failure 稳定复现样本口径一致。
+- 第五阶段交付化：`phase5:init` 能生成 manifest / rule package / hook / workflow；`phase5:report` 能对真实 workspace 导出 machine-readable report；`phase5:rules` / `phase5:audit` / `phase5:doctor` 能提供管理员规则检查、审计检索、运行诊断；`phase5:verify` 能把 `test:risk`、`tsc`、`build`、engine bin test、`cargo check` 与当前 smoke 写回 `dev-docs/evidence/phase5-delivery.json`。
 
 ## Evidence Log
 
@@ -159,6 +160,12 @@
 - 2026-06-22：phase4 preview smoke PARTIAL：`phase4:verify` 已尝试起本地 preview 并抓取 `127.0.0.1`，但当前环境里 preview 子进程绑定 `127.0.0.1:4174` 返回 `EPERM`；该失败已写入 `phase4-verify.json.preview_smoke`，目前只能作为“已尝试但受环境限制”的证据，不能算页面级 UI 验收通过。
 - 2026-06-23：phase4 localhost UI GREEN：通过本机 Chrome 打开 `http://127.0.0.1:4173/`，实机可见 `Review Queue`、`门禁决策`、`多代理审计`、`自修复闭环` 区块；继续下滚后可见 `看证据 · 已就绪 4 条 finding · 4 个 evidence` 与 repair/apply 历史文案。页面标题刷新为 `🔮 风控4 审计3 — 全息观测站`。
 - 2026-06-23：phase4 manual-ui checklist GREEN：已新增 `dev-docs/phase4-manual-ui-checklist.md`，把 `npm run dev -- --host 127.0.0.1 --port 4173`、localhost 地址与页面级标记固化成 fallback 验收步骤，避免新会话 agent 只凭 `phase4-verify.json` 自行猜流程。
+- 2026-06-23：phase5 init GREEN：`npm run phase5:init -- --workspace /private/tmp/hologram-phase5-delivery-smoke` 已真实生成 `.hologram/delivery.json`、workspace rule package stub、`.githooks/pre-commit` 与 `.github/workflows/hologram-risk.yml`。
+- 2026-06-23：phase5 report GREEN：`npm run phase5:report -- --workspace /Users/liupeicheng/Documents/New project 13/repo --output /private/tmp/hologram-phase5-report.json --fail-on off` 已对真实 repo 导出 machine-readable delivery report。
+- 2026-06-23：phase5 external workspace GREEN：`phase5:verify` 内已创建临时 git repo，真实执行 `phase5:init` 与 `phase5:report`，证明外部 workspace 路径可走通。
+- 2026-06-23：phase5 hook GREEN：`phase5:verify` 内已在外部临时 git repo 上真实执行生成后的 `.githooks/pre-commit`，并用 `HOLOGRAM_PLATFORM_ROOT` 指向当前平台仓库完成 report 导出。
+- 2026-06-23：phase5 admin path GREEN：`phase5:verify` 内已对外部临时 git repo 真实执行 `phase5:rules`、`phase5:audit --query review` 与 `phase5:doctor`。
+- 2026-06-23：phase5 verify GREEN：`npm run phase5:verify` 已通过，并把 `test:risk`、`npx tsc --noEmit`、`npm run build`、`cargo test --manifest-path ../engine/Cargo.toml --bin hologram-risk-check -- --nocapture`、`cargo check`、真实 repo machine report 与外部 workspace smoke 写回 `dev-docs/evidence/phase5-delivery.json`。
 
 ## Drift Lock
 

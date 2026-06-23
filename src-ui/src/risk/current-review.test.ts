@@ -10,7 +10,7 @@ import {
   buildCurrentReviewSummaryResponse,
   buildCurrentReviewState,
 } from './current-review';
-import { buildRulePolicySnapshotId } from './rule-package';
+import { buildRulePolicySnapshotId, resolveRulePolicy } from './rule-package';
 import { type RiskCheckResult } from './check-adapter';
 import type { RepairIssue } from './review-core';
 
@@ -139,6 +139,43 @@ test('current review derives require_approval when the strongest finding is high
   });
 
   assert.equal(state.gate_decision?.decision, 'require_approval');
+});
+
+test('current review accepts a workspace review policy override for external delivery surfaces', () => {
+  const policy = resolveRulePolicy({
+    plane: 'review',
+    extension_packages: [{
+      package_id: 'review.workspace',
+      version: 'v2',
+      plane: 'review',
+      source: 'workspace_extension',
+      enabled: true,
+      description: 'workspace override',
+      rules: [{
+        rule_id: 'check.l5',
+        package_id: 'review.workspace',
+        name: 'workspace l5 override',
+        category: 'security',
+        severity: 'high',
+        priority: 5,
+        scope: ['file_write'],
+        trigger: {
+          kind: 'static_signal',
+          config: {},
+        },
+        gate_effect: 'warn',
+        enabled: true,
+      }],
+    }],
+  });
+  const state = buildCurrentReviewState({
+    result: sample,
+    workspace_path: '/tmp/workspace',
+    review_policy: policy,
+  });
+
+  assert.equal(state.gate_decision?.decision, 'warn');
+  assert.equal(state.gate_decision?.policy_snapshot_id, 'policy:review:review.default@v1+review.workspace@v2');
 });
 
 test('attachRepairProposalToCurrentReview preserves generation metadata for the UI', () => {

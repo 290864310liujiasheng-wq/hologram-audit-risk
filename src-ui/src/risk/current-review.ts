@@ -2,7 +2,7 @@ import { adaptCheckResultToFindings, buildCheckRiskSummary, type RiskCheckResult
 import { buildRepairHistory, type AuditRecord, type RepairHistoryItem } from './audit-bridge';
 import { finalizeMultiAgentReview, type MultiAgentReview } from './multi-agent';
 import type { LiveRepairReadiness, ProviderReadiness } from '../provider/provider-readiness';
-import { resolveRulePolicy } from './rule-package';
+import { resolveRulePolicy, type ResolvedRulePolicy } from './rule-package';
 import { buildRepairPreflightSummary, createRepairPlan, type RepairGenerationMetadata, type RepairGenerationReadiness } from './self-heal';
 import { deriveGateDecision, type GateDecision } from './review-core';
 import type { PatchProposal, RepairIssue, RepairPlan, RepairPreflightReport, RepairRollbackSnapshot, ReviewFinding } from './review-core';
@@ -87,9 +87,10 @@ export type CurrentReviewSummaryResponse<TCheckResult extends RiskCheckResult = 
 export function buildCurrentReviewState<TCheckResult extends RiskCheckResult>(input: {
   result: TCheckResult;
   workspace_path: string;
+  review_policy?: ResolvedRulePolicy;
 }): CurrentReviewState<TCheckResult> {
   const jobId = `check:${input.result.timestamp || 'current'}`;
-  const reviewPolicy = resolveRulePolicy({ plane: 'review' });
+  const reviewPolicy = input.review_policy || resolveRulePolicy({ plane: 'review' });
   const findings = adaptCheckResultToFindings(input.result, {
     jobId,
     evidencePrefix: 'check',

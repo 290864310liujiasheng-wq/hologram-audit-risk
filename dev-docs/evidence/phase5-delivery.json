@@ -1,0 +1,2643 @@
+{
+  "generated_at": "2026-06-23T04:15:42.426Z",
+  "repo_root": "/Users/liupeicheng/Documents/New project 13/repo",
+  "ui_root": "/Users/liupeicheng/Documents/New project 13/repo/src-ui",
+  "tauri_root": "/Users/liupeicheng/Documents/New project 13/repo/src-tauri",
+  "engine_root": "/Users/liupeicheng/Documents/New project 13/repo/engine",
+  "git": {
+    "branch": "main",
+    "last_commit": "f1f5e94 feat: complete risk platform phase 4",
+    "status_short": [
+      " M .github/workflows/ci.yml",
+      " M dev-docs/README.md",
+      " M dev-docs/acceptance.md",
+      " M dev-docs/architecture.md",
+      " M dev-docs/contracts.md",
+      " M dev-docs/current-state-audit.md",
+      " M src-ui/package.json",
+      " M src-ui/src/risk/current-review.test.ts",
+      " M src-ui/src/risk/current-review.ts",
+      " M src-ui/src/risk/test-risk.ts",
+      "?? .githooks/",
+      "?? dev-docs/evidence/phase5-delivery.json",
+      "?? dev-docs/phase5-productization.md",
+      "?? docs/README.md",
+      "?? docs/phase5-delivery.md",
+      "?? engine/src/bin/",
+      "?? src-ui/scripts/phase5-delivery.ts",
+      "?? src-ui/src/risk/delivery.test.ts",
+      "?? src-ui/src/risk/delivery.ts"
+    ]
+  },
+  "commands": [
+    {
+      "command": "node --import tsx src/risk/test-risk.ts",
+      "cwd": "/Users/liupeicheng/Documents/New project 13/repo/src-ui",
+      "exit_code": 0,
+      "passed": true,
+      "stdout_tail": [
+        "ok - createAuditEvent includes decision and evidence references for gate decisions",
+        "ok - classifyProviderFailure maps 401 to provider_auth_invalid",
+        "ok - classifyProviderFailure maps 429 to rate_limited",
+        "ok - classifyProviderFailure maps 503 to provider_upstream_failed",
+        "ok - classifyProviderFailure maps ENOTFOUND to network_unreachable",
+        "ok - classifyProviderFailure maps certificate revoked to tls_cert_revoked",
+        "ok - classifyProviderFailure maps proxy refusal to proxy_rejected",
+        "ok - classifyProviderFailure maps HTTP 407 to proxy_rejected",
+        "ok - classifyProviderFailure maps ECONNRESET to connection_interrupted",
+        "ok - classifyProviderFailure maps unexpected eof to connection_interrupted",
+        "ok - classifyProviderFailure maps issuer certificate chain failures to tls_handshake_failed",
+        "ok - ProviderRequestError preserves provider metadata",
+        "ok - adaptCheckResultToFindings converts violations into ReviewFinding records",
+        "ok - adaptCheckResultToFindings creates stable evidence ids from violation groups",
+        "ok - summarizeSeverityCounts counts findings by severity",
+        "ok - buildCheckRiskSummary orders critical findings first and exposes display locations",
+        "ok - adaptCheckResultToFindings uses bucket-specific recommendations",
+        "ok - buildReviewAuditPayload marks failed checks as denied review actions",
+        "ok - buildReviewAuditPayload keeps warn decisions as allowed actions with gate reason",
+        "ok - buildReviewAuditPayload carries finding and evidence references into details",
+        "ok - buildApprovalAuditPayload marks denied approvals and preserves subject context",
+        "ok - buildRepairAuditPayload stamps timestamp and keeps structured generation metadata",
+        "ok - buildRepairAuditPayload keeps repair issue stage and retryability for degraded proposal runs",
+        "ok - buildAuditQueryResult normalizes review, approval, and repair audit entries into one evidence timeline",
+        "ok - summarizeRecentAuditEntries keeps recent review and approval events in newest-first order",
+        "ok - buildRepairHistory keeps newest repair stages with state changes and retryability",
+        "ok - current review summary can be derived from latest check result",
+        "ok - buildCurrentReviewSummaryResponse returns empty when no review exists",
+        "ok - attachRepairIssueToCurrentReview exposes retryable provider degradation to the UI state",
+        "ok - attachProviderReadinessToCurrentReview exposes missing live provider prerequisites to the UI state",
+        "ok - current review derives require_approval when the strongest finding is high severity",
+        "ok - current review accepts a workspace review policy override for external delivery surfaces",
+        "ok - attachRepairProposalToCurrentReview preserves generation metadata for the UI",
+        "ok - attachRepairPreflightIssueToCurrentReview keeps the proposal visible while surfacing the issue",
+        "ok - attachRepairExecutionIssueToCurrentReview keeps rollback evidence for the UI",
+        "ok - buildCurrentReviewSummaryResponse includes the gate decision and generation metadata",
+        "ok - buildCurrentReviewSummaryResponse includes provider readiness when attached",
+        "ok - buildCurrentReviewSummaryResponse includes repair history when audit records are provided",
+        "ok - attachLiveRepairReadinessToCurrentReview exposes mock-browser runtime mismatch to the UI state",
+        "ok - buildWorkbenchQueue exposes the review-to-repair main path with contract-backed states",
+        "ok - buildWorkbenchQueue prefers audit-backed repair history when present",
+        "ok - buildWorkbenchQueue keeps empty-state steps out of missing/error wording when review is clean",
+        "ok - buildWorkbenchQueue surfaces retryable repair degradation as degraded instead of draft",
+        "ok - buildRepairWorkbenchSnapshot keeps clean reviews in a not-required empty state",
+        "ok - buildRepairWorkbenchSnapshot surfaces retryable issues, preflight summary, and repair history",
+        "ok - validateDeliveryConfig rejects env-backed provider config without env var",
+        "ok - resolveDeliveryPolicies loads workspace rule packages and disabled rule ids into one policy source",
+        "ok - buildDeliveryMachineReport returns machine-readable review, policy, audit, and automation status",
+        "ok - shouldFailDeliveryGate respects the configured decision threshold",
+        "ok - buildDeliveryInitFiles emits delivery manifest, rule package stubs, hook, and CI workflow",
+        "ok - buildDeliveryRuleSummaries flattens policy state for admin rule inspection",
+        "ok - searchDeliveryAuditRecords filters normalized audit records for admin search",
+        "ok - buildDeliveryDoctorReport highlights provider and gate blockers for admin diagnosis",
+        "ok - buildSpecialistAgentRuns routes findings to matching specialist agents",
+        "ok - buildSpecialistAgentRuns degrades the requested agent when execution failed",
+        "ok - aggregateAgentRuns deduplicates overlapping specialist findings and records conflicts",
+        "ok - finalizeMultiAgentReview exposes degraded reasons for downstream UI and audit",
+        "ok - summarizeProviderReadiness prefers inline keys when available",
+        "ok - summarizeProviderReadiness reports secure store readiness when settings key is empty",
+        "ok - summarizeProviderReadiness reports missing credentials when neither source is available",
+        "ok - createRepairPlan derives strategy, tests, and plan storage path from findings",
+        "ok - createRepairPlan keeps required_tests empty when there are no repair findings",
+        "ok - createRepairPlan adds a minimal git diff gate for critical config changes",
+        "ok - buildRepairGenerationMetadata summarizes provider and high-severity focus for audit",
+        "ok - getRepairGenerationBlocker rejects empty finding sets before provider generation starts",
+        "ok - getRepairGenerationBlocker rejects missing readable source files with evidence context",
+        "ok - deriveRepairFilePaths falls back to changed files when findings do not carry usable file paths",
+        "ok - deriveRepairFilePaths keeps finding-backed files and deduplicates overlaps",
+        "ok - parsePatchProposal accepts fenced JSON and builds deterministic operation ids",
+        "ok - parsePatchProposal rejects proposal summaries that are not human-readable",
+        "ok - parsePatchProposal rejects rationales that are only short tokens",
+        "ok - parsePatchProposal rejects operation summaries that stay at placeholder level",
+        "ok - createRepairIssue classifies missing provider key as a non-retryable provider_unavailable degradation",
+        "ok - createRepairIssue classifies authentication failure as non-retryable provider_auth_invalid",
+        "ok - createRepairIssue classifies upstream timeout as retryable timeout degradation",
+        "ok - createRepairIssue classifies HTTP 429 as retryable rate_limited degradation",
+        "ok - createRepairIssue classifies upstream 5xx as retryable provider_upstream_failed degradation",
+        "ok - createRepairIssue classifies dns/network unreachable as retryable network_unreachable degradation",
+        "ok - createRepairIssue classifies missing readable source files as non-retryable missing_evidence degradation",
+        "ok - createRepairIssue classifies ECONNRESET as retryable connection_interrupted degradation",
+        "ok - createRepairIssue classifies unexpected eof as retryable connection_interrupted degradation",
+        "ok - createRepairIssue classifies TLS certificate failure as non-retryable tls_handshake_failed degradation",
+        "ok - createRepairIssue classifies issuer certificate chain failure as non-retryable tls_handshake_failed degradation",
+        "ok - createRepairIssue classifies proxy rejection as retryable proxy_rejected degradation",
+        "ok - createRepairIssue classifies HTTP 407 as retryable proxy_rejected degradation",
+        "ok - createRepairIssue classifies certificate revoked as non-retryable tls_cert_revoked degradation",
+        "ok - createRepairIssue classifies socket hang up as retryable connection_interrupted degradation",
+        "ok - buildRepairIssueFromPreflight maps blocked gate decisions to policy_blocked issues",
+        "ok - buildRepairPreflightSummary exposes failed commands and blocking rule ids",
+        "ok - attachPatchProposal and approval transitions move the plan through the required states",
+        "ok - default repair policy includes a block rule for out-of-scope writes",
+        "ok - default review policy maps check.l5 to block and check.l4 to require_approval",
+        "ok - getReviewBucketDefinition centralizes category and recommendation for each review bucket",
+        "ok - default review and repair packages expose structured package metadata",
+        "ok - resolveRulePolicy returns a policy snapshot id derived from the active package set",
+        "ok - resolveRulePolicy accepts extension packages and disabled rules in one active rule source",
+        "ok - evaluateRepairProposal flags patch writes outside the finding scope",
+        "ok - inspectProviderReadiness short-circuits to inline readiness when settings key exists",
+        "ok - inspectProviderReadiness reports missing in mock mode without secure store lookup",
+        "ok - runRepairPreflight blocks proposals that write outside the repair finding scope",
+        "ok - inspectLiveRepairReadiness blocks mock browser mode even when an inline key exists",
+        "ok - inspectLiveRepairReadiness allows tauri workspace mode when provider is ready",
+        "ok - inspectProviderReadiness uses secure store result when settings key is empty",
+        "ok - inspectProviderReadiness degrades to missing when secure store lookup fails",
+        "ok - applyRepairPlan refuses to write when required tests fail during preflight",
+        "ok - generatePatchProposalFromModel parses model output into a structured proposal",
+        "ok - generatePatchProposalFromModel rejects operations outside the provided repair file set",
+        "ok - generatePatchProposalFromModel rejects no-op file rewrites",
+        "ok - generatePatchProposalFromModel rejects proposals that ignore critical finding files",
+        "ok - generatePatchProposalFromModel rejects proposals that only cover part of the high-severity file set",
+        "ok - generatePatchProposalFromModel rejects proposals that do not touch the high-severity finding line range",
+        "ok - generatePatchProposalFromModel accepts proposals that touch the high-severity finding line range",
+        "ok - generatePatchProposalFromModel rejects proposals that only touch part of a multi-line high-severity range",
+        "ok - generatePatchProposalFromModel rejects disjoint edits that only span across the risk range",
+        "ok - generatePatchProposalFromModel rejects whitespace-only edits on the high-severity finding lines",
+        "ok - generatePatchProposalFromModel accepts proposals that delete the high-severity finding line",
+        "ok - generatePatchProposalFromModel rejects comment-only edits when code on the high-severity line stays the same",
+        "ok - applyRepairPlan writes the proposal and rollbackRepairPlan restores the previous content",
+        "ok - applyRepairPlan rolls back already-written files when a later write fails",
+        "ok - applyRepairPlan reports rollback failures when cleanup cannot fully restore files"
+      ],
+      "stderr_tail": []
+    },
+    {
+      "command": "npx tsc --noEmit",
+      "cwd": "/Users/liupeicheng/Documents/New project 13/repo/src-ui",
+      "exit_code": 0,
+      "passed": true,
+      "stdout_tail": [],
+      "stderr_tail": []
+    },
+    {
+      "command": "npm run build",
+      "cwd": "/Users/liupeicheng/Documents/New project 13/repo/src-ui",
+      "exit_code": 0,
+      "passed": true,
+      "stdout_tail": [
+        "> hologram-ui@0.1.0 build",
+        "> tsc && vite build",
+        "vite v6.4.3 building for production...",
+        "transforming...",
+        "✓ 1475 modules transformed.",
+        "rendering chunks...",
+        "computing gzip size...",
+        "dist/assets/layout.worker-Cl6c_DNy.js            1.96 kB",
+        "dist/assets/codicon-ngg6Pgfi.ttf               121.97 kB",
+        "dist/index.html                                136.51 kB │ gzip:    21.58 kB",
+        "dist/assets/editor.worker-BUUue4Ol.js          251.77 kB",
+        "dist/assets/json.worker-BCp-nYYw.js            383.33 kB",
+        "dist/assets/html.worker-nIlb-LDT.js            693.42 kB",
+        "dist/assets/css.worker-3YT-tnCJ.js           1,030.62 kB",
+        "dist/assets/ts.worker-CGoKbxwe.js            7,011.51 kB",
+        "dist/assets/index-DEvuR2LA.css                 153.06 kB │ gzip:    25.65 kB",
+        "dist/assets/azcli-Y6nb8tq_.js                    0.71 kB │ gzip:     0.28 kB",
+        "dist/assets/javascript-DCh-MI8p.js               0.80 kB │ gzip:     0.44 kB",
+        "dist/assets/ini-Kd9XrMLS.js                      0.96 kB │ gzip:     0.50 kB",
+        "dist/assets/index-D9_B7hh1.js                    1.26 kB │ gzip:     0.48 kB",
+        "dist/assets/csp-D-4FJmMZ.js                      1.28 kB │ gzip:     0.49 kB",
+        "dist/assets/event-BK_86lmQ.js                    1.41 kB │ gzip:     0.68 kB",
+        "dist/assets/pla-DSh2-awV.js                      1.55 kB │ gzip:     0.61 kB",
+        "dist/assets/scheme-BPhDTwHR.js                   1.63 kB │ gzip:     0.78 kB",
+        "dist/assets/flow9-BeJ5waoc.js                    1.67 kB │ gzip:     0.81 kB",
+        "dist/assets/sb-BBc9UKZt.js                       1.69 kB │ gzip:     0.79 kB",
+        "dist/assets/bat-BwHxbl9M.js                      1.71 kB │ gzip:     0.83 kB",
+        "dist/assets/dockerfile-BG73LgW2.js               1.73 kB │ gzip:     0.63 kB",
+        "dist/assets/pascaligo-DtZ0uQbO.js                1.86 kB │ gzip:     0.87 kB",
+        "dist/assets/xml-BdeerwmJ.js                      1.93 kB │ gzip:     0.74 kB",
+        "dist/assets/lua-Cyyb5UIc.js                      1.99 kB │ gzip:     0.89 kB",
+        "dist/assets/cameligo-Bf6VGUru.js                 2.05 kB │ gzip:     0.92 kB",
+        "dist/assets/graphql-BxJiqAUM.js                  2.12 kB │ gzip:     0.99 kB",
+        "dist/assets/objective-c-BDtDVThU.js              2.26 kB │ gzip:     1.02 kB",
+        "dist/assets/lexon-OrD6JF1K.js                    2.30 kB │ gzip:     0.89 kB",
+        "dist/assets/bicep-CFznDFnq.js                    2.40 kB │ gzip:     0.93 kB",
+        "dist/assets/sparql-CJmd_6j2.js                   2.41 kB │ gzip:     1.12 kB",
+        "dist/assets/core-DhEqZVGG.js                     2.44 kB │ gzip:     0.98 kB",
+        "dist/assets/mips-CiqrrVzr.js                     2.44 kB │ gzip:     1.03 kB",
+        "dist/assets/go-acbASCJo.js                       2.52 kB │ gzip:     1.11 kB",
+        "dist/assets/sophia-CnS9iZB_.js                   2.63 kB │ gzip:     1.17 kB",
+        "dist/assets/typespec-Btyra-wh.js                 2.66 kB │ gzip:     1.05 kB",
+        "dist/assets/m3-B8OfTtLu.js                       2.68 kB │ gzip:     1.28 kB",
+        "dist/assets/fsharp-PahG7c26.js                   2.85 kB │ gzip:     1.28 kB",
+        "dist/assets/pascal-vHIfCaH5.js                   2.86 kB │ gzip:     1.36 kB",
+        "dist/assets/shell-DiJ1NA_G.js                    2.94 kB │ gzip:     1.16 kB",
+        "dist/assets/r-j7ic8hl3.js                        2.99 kB │ gzip:     1.24 kB",
+        "dist/assets/cssMode-BEbPAODt.js                  3.01 kB │ gzip:     1.13 kB",
+        "dist/assets/qsharp-Bw9ernYp.js                   3.05 kB │ gzip:     1.37 kB",
+        "dist/assets/java-CXBNlu9o.js                     3.08 kB │ gzip:     1.36 kB",
+        "dist/assets/powershell-COWaemsV.js               3.13 kB │ gzip:     1.34 kB",
+        "dist/assets/cypher-cTPe9QuQ.js                   3.25 kB │ gzip:     1.40 kB",
+        "dist/assets/kotlin-s7OhZKlX.js                   3.26 kB │ gzip:     1.43 kB",
+        "dist/assets/redis-Bu5POkcn.js                    3.42 kB │ gzip:     1.44 kB",
+        "dist/assets/tcl-Dm6ycUr_.js                      3.43 kB │ gzip:     1.33 kB",
+        "dist/assets/coffee-Bd8akH9Z.js                   3.45 kB │ gzip:     1.26 kB",
+        "dist/assets/hcl-DtV1sZF8.js                      3.45 kB │ gzip:     1.45 kB",
+        "dist/assets/htmlMode-BZXO-lB7.js                 3.47 kB │ gzip:     1.25 kB",
+        "dist/assets/liquid-BZzRH0rh.js                   3.48 kB │ gzip:     1.42 kB",
+        "dist/assets/yaml-uZOTBPGl.js                     3.54 kB │ gzip:     1.29 kB",
+        "dist/assets/markdown-BFxVWTOG.js                 3.65 kB │ gzip:     1.35 kB",
+        "dist/assets/python-CTVE0jhn.js                   3.72 kB │ gzip:     1.45 kB",
+        "dist/assets/restructuredtext-CqXO7rUv.js         3.76 kB │ gzip:     1.33 kB",
+        "dist/assets/less-9HpZscsL.js                     3.76 kB │ gzip:     1.38 kB",
+        "dist/assets/apex-DNDY2TF8.js                     3.82 kB │ gzip:     1.73 kB",
+        "dist/assets/rust-BzKRNQWT.js                     4.02 kB │ gzip:     1.79 kB",
+        "dist/assets/dart-BOtBlQCF.js                     4.11 kB │ gzip:     1.61 kB",
+        "dist/assets/mdx-rqy4eIQm.js                      4.32 kB │ gzip:     1.21 kB",
+        "dist/assets/css-DdJfP1eB.js                      4.37 kB │ gzip:     1.34 kB",
+        "dist/assets/csharp-Co3qMtFm.js                   4.39 kB │ gzip:     1.69 kB",
+        "dist/assets/html-B4Q2n3h0.js                     4.53 kB │ gzip:     1.16 kB",
+        "dist/assets/pug-8SOpv6rk.js                      4.69 kB │ gzip:     1.61 kB",
+        "dist/assets/msdax-DmeGPVcC.js                    4.77 kB │ gzip:     1.91 kB",
+        "dist/assets/typescript-BnC-cuvh.js               4.90 kB │ gzip:     1.94 kB",
+        "dist/assets/swift-Bqt4WxQ4.js                    5.03 kB │ gzip:     2.06 kB",
+        "dist/assets/cpp-BbWJElDN.js                      5.16 kB │ gzip:     2.06 kB",
+        "dist/assets/ecl-BEgZUVRK.js                      5.20 kB │ gzip:     2.19 kB",
+        "dist/assets/vb-Db0cS2oM.js                       5.65 kB │ gzip:     2.02 kB",
+        "dist/assets/twig-Csy3S7wG.js                     5.84 kB │ gzip:     1.49 kB",
+        "dist/assets/scss-CBJaRo0y.js                     6.27 kB │ gzip:     1.71 kB",
+        "dist/assets/handlebars-BtBJZj12.js               6.29 kB │ gzip:     1.38 kB",
+        "dist/assets/julia-cl7-CwDS.js                    7.01 kB │ gzip:     2.62 kB",
+        "dist/assets/scala-D9hQfWCl.js                    7.18 kB │ gzip:     2.06 kB",
+        "dist/assets/wgsl-DumH7NcR.js                     7.19 kB │ gzip:     2.71 kB",
+        "dist/assets/st-CHwy0fLd.js                       7.26 kB │ gzip:     2.21 kB",
+        "dist/assets/systemverilog-Bs9z6M-B.js            7.47 kB │ gzip:     2.72 kB",
+        "dist/assets/postiats-CocnycG-.js                 7.72 kB │ gzip:     2.40 kB",
+        "dist/assets/php-BBUBE1dy.js                      7.89 kB │ gzip:     2.04 kB",
+        "dist/assets/perl-Ub6l9XKa.js                     8.12 kB │ gzip:     3.10 kB",
+        "dist/assets/razor-DHNpZzpb.js                    8.29 kB │ gzip:     2.06 kB",
+        "dist/assets/ruby-zBfavPgS.js                     8.37 kB │ gzip:     2.54 kB",
+        "dist/assets/protobuf-Brw8urJB.js                 8.91 kB │ gzip:     2.04 kB",
+        "dist/assets/clojure-Dnu-v4kV.js                  9.51 kB │ gzip:     3.57 kB",
+        "dist/assets/elixir-BkW5O-1t.js                  10.12 kB │ gzip:     2.50 kB",
+        "dist/assets/sql-ClhHkBeG.js                     10.16 kB │ gzip:     3.79 kB",
+        "dist/assets/mysql-C_tMU-Nz.js                   11.14 kB │ gzip:     4.01 kB",
+        "dist/assets/redshift-Bs9aos_-.js                11.66 kB │ gzip:     4.30 kB",
+        "dist/assets/jsonMode-BJgN-DHw.js                12.39 kB │ gzip:     4.55 kB",
+        "dist/assets/pgsql-BlNEE0v7.js                   13.33 kB │ gzip:     4.46 kB",
+        "dist/assets/abap-DLDM7-KI.js                    14.03 kB │ gzip:     5.27 kB",
+        "dist/assets/freemarker2-76FNQv-5.js             15.59 kB │ gzip:     3.91 kB",
+        "dist/assets/powerquery-tScXyioY.js              16.80 kB │ gzip:     4.81 kB",
+        "dist/assets/solidity-Db0IVjzk.js                18.46 kB │ gzip:     4.41 kB",
+        "dist/assets/tsMode-C1M3k5Q_.js                  21.96 kB │ gzip:     6.22 kB",
+        "dist/assets/lspLanguageFeatures-DDBuq8ee.js     28.68 kB │ gzip:     7.73 kB",
+        "dist/assets/index-DKyhK2Uq.js                6,192.72 kB │ gzip: 1,675.84 kB",
+        "✓ built in 21.25s"
+      ],
+      "stderr_tail": [
+        "[plugin vite:reporter]",
+        "(!) /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/bridge.ts is dynamically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/settings.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/settings.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/check.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/check.ts but also statically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/agent/memory.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/main.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/provider/provider-readiness.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/chat.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/conflict.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/constraints.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/file-translator.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/file-tree.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/file-viewer.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/git-panel.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/hotspots.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/lsp-client.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/terminal.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/timeline.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/workspace.ts, dynamic import will not move module into another chunk.",
+        "[plugin vite:reporter]",
+        "(!) /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/events.ts is dynamically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/graph.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/graph.ts but also statically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/agent/agent.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/agent/permission.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/main.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/agent-visualizer.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/chat.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/check.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/conflict.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/constraints.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/file-tree.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/git-panel.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/graph-interaction.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/graph.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/hotspots.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/settings-panel.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/terminal.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/timeline.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/workspace.ts, dynamic import will not move module into another chunk.",
+        "[plugin vite:reporter]",
+        "(!) /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/graph.ts is dynamically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/main.ts but also statically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/main.ts, dynamic import will not move module into another chunk.",
+        "[plugin vite:reporter]",
+        "(!) /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/file-viewer.ts is dynamically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/main.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/timeline.ts but also statically imported by /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/file-tree.ts, /Users/liupeicheng/Documents/New project 13/repo/src-ui/src/ui/git-panel.ts, dynamic import will not move module into another chunk.",
+        "(!) Some chunks are larger than 500 kB after minification. Consider:",
+        "- Using dynamic import() to code-split the application",
+        "- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks",
+        "- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit."
+      ]
+    },
+    {
+      "command": "cargo test --manifest-path ../engine/Cargo.toml --bin hologram-risk-check -- --nocapture",
+      "cwd": "/Users/liupeicheng/Documents/New project 13/repo/src-ui",
+      "exit_code": 0,
+      "passed": true,
+      "stdout_tail": [
+        "running 2 tests",
+        "test tests::parse_args_reads_workspace_and_pretty_flag ... ok",
+        "test tests::parse_git_status_changed_files_handles_modified_untracked_and_rename_lines ... ok",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "stderr_tail": [
+        " --> src/adapter/tree_sitter.rs:6:1",
+        "  |",
+        "6 | / /// Thread-local parser cache — reuses parser across files of the same language.",
+        "7 | | /// Avoids Parser::new() + set_language() allocation overhead for thousands of files.",
+        "  | |_------------------------------------------------------------------------------------^",
+        "  |   |",
+        "  |   rustdoc does not generate documentation for macro invocations",
+        "  |",
+        "  = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion",
+        "  = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default",
+        "warning: unused variable: `idx`",
+        "   --> src/engine.rs:653:40",
+        "    |",
+        "653 |         let inc_result = engine_write(|idx| {",
+        "    |                                        ^^^ help: if this is intentional, prefix it with an underscore: `_idx`",
+        "    |",
+        "    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default",
+        "warning: unused variable: `paths`",
+        "   --> src/engine.rs:654:17",
+        "    |",
+        "654 |             let paths: Vec<(PathBuf, &str)> = changed_files",
+        "    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_paths`",
+        "warning: function `file_key_from_path` is never used",
+        "   --> src/analysis/dynamic_dispatch.rs:421:4",
+        "    |",
+        "421 | fn file_key_from_path(p: &str) -> String {",
+        "    |    ^^^^^^^^^^^^^^^^^^",
+        "    |",
+        "    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default",
+        "warning: field `new_edges` is never read",
+        "  --> src/storage/incremental.rs:35:5",
+        "   |",
+        "30 | struct FileDiff {",
+        "   |        -------- field in this struct",
+        "...",
+        "35 |     new_edges: Vec<Edge>,",
+        "   |     ^^^^^^^^^",
+        "warning: `hologram-engine` (lib) generated 6 warnings (run `cargo fix --lib -p hologram-engine` to apply 3 suggestions)",
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s",
+        "     Running unittests src/bin/hologram-risk-check.rs (/Users/liupeicheng/Documents/New project 13/repo/engine/target/debug/deps/hologram_risk_check-a39a5213e0cf3fe4)"
+      ]
+    },
+    {
+      "command": "cargo check",
+      "cwd": "/Users/liupeicheng/Documents/New project 13/repo/src-tauri",
+      "exit_code": 0,
+      "passed": true,
+      "stdout_tail": [],
+      "stderr_tail": [
+        "warning: function `save_plaintext_credentials` is never used",
+        "   --> src/credential.rs:153:4",
+        "    |",
+        "153 | fn save_plaintext_credentials(entries: &BTreeMap<String, String>) -> Result<(), String> {",
+        "    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "warning: function `parse_plaintext_credentials` is never used",
+        "   --> src/credential.rs:167:4",
+        "    |",
+        "167 | fn parse_plaintext_credentials(plain: &[u8]) -> Result<BTreeMap<String, String>, String> {",
+        "    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "warning: fields `sandbox` and `audit_logger` are never read",
+        "  --> src/workspace.rs:32:9",
+        "   |",
+        "27 | pub struct WorkspaceHandle {",
+        "   |            --------------- fields in this struct",
+        "...",
+        "32 |     pub sandbox: Sandbox,",
+        "   |         ^^^^^^^",
+        "...",
+        "35 |     pub audit_logger: AuditLogger,",
+        "   |         ^^^^^^^^^^^^",
+        "warning: methods `check_read`, `check_write`, `audit_allow`, and `audit_deny` are never used",
+        "   --> src/workspace.rs:177:12",
+        "    |",
+        " 45 | impl WorkspaceHandle {",
+        "    | -------------------- methods in this implementation",
+        "...",
+        "177 |     pub fn check_read(&self, file_path: &str) -> Result<PathBuf, String> {",
+        "    |            ^^^^^^^^^^",
+        "...",
+        "189 |     pub fn check_write(&self, file_path: &str) -> Result<PathBuf, String> {",
+        "    |            ^^^^^^^^^^^",
+        "...",
+        "205 |     pub fn audit_allow(&self, tool: &str, path: &str) {",
+        "    |            ^^^^^^^^^^^",
+        "...",
+        "216 |     pub fn audit_deny(&self, tool: &str, path: &str, reason: &str) {",
+        "    |            ^^^^^^^^^^",
+        "warning: `hologram` (bin \"hologram\") generated 24 warnings (run `cargo fix --bin \"hologram\" -p hologram` to apply 3 suggestions)",
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.16s"
+      ]
+    }
+  ],
+  "init_smoke": {
+    "workspace_root": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-init-Nwugfk",
+    "created_files": [
+      ".hologram/delivery.json",
+      ".hologram/rules/review.workspace.json",
+      ".hologram/rules/repair.workspace.json",
+      ".githooks/pre-commit",
+      ".github/workflows/hologram-risk.yml"
+    ]
+  },
+  "external_workspace_smoke": {
+    "workspace_root": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI",
+    "init_command": "node --import tsx \"/Users/liupeicheng/Documents/New project 13/repo/src-ui/scripts/phase5-delivery.ts\" init --workspace \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI\" --force",
+    "report_command": "node --import tsx \"/Users/liupeicheng/Documents/New project 13/repo/src-ui/scripts/phase5-delivery.ts\" report -- --workspace \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI\" --config \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.hologram/delivery.json\" --output \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.hologram/latest-risk-report.json\" --fail-on off",
+    "hook_command": "HOLOGRAM_PLATFORM_ROOT=\"/Users/liupeicheng/Documents/New project 13/repo\" sh \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.githooks/pre-commit\" \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI\"",
+    "rules_command": "node --import tsx \"/Users/liupeicheng/Documents/New project 13/repo/src-ui/scripts/phase5-delivery.ts\" rules --workspace \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI\" --config \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.hologram/delivery.json\"",
+    "audit_command": "node --import tsx \"/Users/liupeicheng/Documents/New project 13/repo/src-ui/scripts/phase5-delivery.ts\" audit --workspace \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI\" --config \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.hologram/delivery.json\" --query review --limit 5",
+    "doctor_command": "node --import tsx \"/Users/liupeicheng/Documents/New project 13/repo/src-ui/scripts/phase5-delivery.ts\" doctor --workspace \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI\" --config \"/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.hologram/delivery.json\"",
+    "report_output_path": "/var/folders/wm/g0jnlb350llcxj96w1tl7dm00000gn/T/hologram-phase5-external-lePJFI/.hologram/latest-risk-report.json",
+    "gate_decision": "allow"
+  },
+  "machine_report": {
+    "generated_at": "2026-06-23T04:17:35.288Z",
+    "workspace": {
+      "root": "/Users/liupeicheng/Documents/New project 13/repo",
+      "changed_files_source": "git_status",
+      "audit_jsonl_path": ".hologram/audit.jsonl",
+      "report_output_path": ".hologram/latest-risk-report.json"
+    },
+    "provider": {
+      "name": "deepseek",
+      "model": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com",
+      "key_source": "env",
+      "ready": false,
+      "reason": "Provider key is missing from DEEPSEEK_API_KEY.",
+      "env_var": "DEEPSEEK_API_KEY"
+    },
+    "policies": {
+      "review": {
+        "plane": "review",
+        "packages": [
+          {
+            "package_id": "review.default",
+            "version": "v1",
+            "plane": "review",
+            "source": "system_default",
+            "enabled": true,
+            "description": "Default review rules for current review, gate decisions, and check-derived findings.",
+            "rules": [
+              {
+                "rule_id": "check.l5",
+                "package_id": "review.default",
+                "name": "L5 不可逆风险默认阻断",
+                "category": "data_integrity",
+                "severity": "critical",
+                "priority": 100,
+                "scope": [
+                  "file_write"
+                ],
+                "trigger": {
+                  "kind": "static_signal",
+                  "config": {}
+                },
+                "gate_effect": "block",
+                "enabled": true
+              },
+              {
+                "rule_id": "check.l4",
+                "package_id": "review.default",
+                "name": "L4 静默风险需要审批",
+                "category": "security",
+                "severity": "high",
+                "priority": 80,
+                "scope": [
+                  "file_write"
+                ],
+                "trigger": {
+                  "kind": "static_signal",
+                  "config": {}
+                },
+                "gate_effect": "require_approval",
+                "enabled": true
+              },
+              {
+                "rule_id": "check.l3",
+                "package_id": "review.default",
+                "name": "L3 延迟风险需要告警",
+                "category": "quality",
+                "severity": "medium",
+                "priority": 60,
+                "scope": [
+                  "file_write"
+                ],
+                "trigger": {
+                  "kind": "static_signal",
+                  "config": {}
+                },
+                "gate_effect": "warn",
+                "enabled": true
+              },
+              {
+                "rule_id": "check.l2",
+                "package_id": "review.default",
+                "name": "L2 波及风险需要告警",
+                "category": "operability",
+                "severity": "low",
+                "priority": 40,
+                "scope": [
+                  "file_write"
+                ],
+                "trigger": {
+                  "kind": "static_signal",
+                  "config": {}
+                },
+                "gate_effect": "warn",
+                "enabled": true
+              }
+            ]
+          }
+        ],
+        "rules": [
+          {
+            "rule_id": "check.l5",
+            "package_id": "review.default",
+            "name": "L5 不可逆风险默认阻断",
+            "category": "data_integrity",
+            "severity": "critical",
+            "priority": 100,
+            "scope": [
+              "file_write"
+            ],
+            "trigger": {
+              "kind": "static_signal",
+              "config": {}
+            },
+            "gate_effect": "block",
+            "enabled": true
+          },
+          {
+            "rule_id": "check.l4",
+            "package_id": "review.default",
+            "name": "L4 静默风险需要审批",
+            "category": "security",
+            "severity": "high",
+            "priority": 80,
+            "scope": [
+              "file_write"
+            ],
+            "trigger": {
+              "kind": "static_signal",
+              "config": {}
+            },
+            "gate_effect": "require_approval",
+            "enabled": true
+          },
+          {
+            "rule_id": "check.l3",
+            "package_id": "review.default",
+            "name": "L3 延迟风险需要告警",
+            "category": "quality",
+            "severity": "medium",
+            "priority": 60,
+            "scope": [
+              "file_write"
+            ],
+            "trigger": {
+              "kind": "static_signal",
+              "config": {}
+            },
+            "gate_effect": "warn",
+            "enabled": true
+          },
+          {
+            "rule_id": "check.l2",
+            "package_id": "review.default",
+            "name": "L2 波及风险需要告警",
+            "category": "operability",
+            "severity": "low",
+            "priority": 40,
+            "scope": [
+              "file_write"
+            ],
+            "trigger": {
+              "kind": "static_signal",
+              "config": {}
+            },
+            "gate_effect": "warn",
+            "enabled": true
+          }
+        ],
+        "policy_snapshot_id": "policy:review:review.default@v1"
+      },
+      "repair": {
+        "plane": "repair",
+        "packages": [
+          {
+            "package_id": "repair.default",
+            "version": "v1",
+            "plane": "repair",
+            "source": "system_default",
+            "enabled": true,
+            "description": "Default repair preflight rules for bounded patch apply, validation, and rollback safety.",
+            "rules": [
+              {
+                "rule_id": "repair.scope.out_of_scope_write",
+                "package_id": "repair.default",
+                "name": "修复 patch 不得写出命中的风险文件范围",
+                "category": "repair_scope",
+                "severity": "critical",
+                "priority": 100,
+                "scope": [
+                  "repair_apply"
+                ],
+                "trigger": {
+                  "kind": "diff_pattern",
+                  "config": {}
+                },
+                "gate_effect": "block",
+                "enabled": true
+              },
+              {
+                "rule_id": "repair.scope.absolute_path_write",
+                "package_id": "repair.default",
+                "name": "修复 patch 不得直接写绝对路径",
+                "category": "repair_scope",
+                "severity": "critical",
+                "priority": 95,
+                "scope": [
+                  "repair_apply"
+                ],
+                "trigger": {
+                  "kind": "diff_pattern",
+                  "config": {}
+                },
+                "gate_effect": "block",
+                "enabled": true
+              },
+              {
+                "rule_id": "repair.scope.sensitive_path_write",
+                "package_id": "repair.default",
+                "name": "修复 patch 不得直接改动敏感配置或锁文件",
+                "category": "repair_scope",
+                "severity": "high",
+                "priority": 90,
+                "scope": [
+                  "repair_apply"
+                ],
+                "trigger": {
+                  "kind": "diff_pattern",
+                  "config": {}
+                },
+                "gate_effect": "block",
+                "enabled": true
+              },
+              {
+                "rule_id": "repair.scope.duplicate_file_write",
+                "package_id": "repair.default",
+                "name": "修复 patch 不应对同一文件生成重复写操作",
+                "category": "repair_quality",
+                "severity": "medium",
+                "priority": 50,
+                "scope": [
+                  "repair_apply"
+                ],
+                "trigger": {
+                  "kind": "diff_pattern",
+                  "config": {}
+                },
+                "gate_effect": "warn",
+                "enabled": true
+              },
+              {
+                "rule_id": "repair.scope.large_patch_blast_radius",
+                "package_id": "repair.default",
+                "name": "修复 patch 的文件波及面过大",
+                "category": "repair_quality",
+                "severity": "medium",
+                "priority": 45,
+                "scope": [
+                  "repair_apply"
+                ],
+                "trigger": {
+                  "kind": "diff_pattern",
+                  "config": {}
+                },
+                "gate_effect": "warn",
+                "enabled": true
+              },
+              {
+                "rule_id": "repair.test.required_command_failed",
+                "package_id": "repair.default",
+                "name": "修复前验证命令必须全部通过",
+                "category": "repair_gate",
+                "severity": "critical",
+                "priority": 110,
+                "scope": [
+                  "repair_apply"
+                ],
+                "trigger": {
+                  "kind": "static_signal",
+                  "config": {}
+                },
+                "gate_effect": "block",
+                "enabled": true
+              }
+            ]
+          }
+        ],
+        "rules": [
+          {
+            "rule_id": "repair.test.required_command_failed",
+            "package_id": "repair.default",
+            "name": "修复前验证命令必须全部通过",
+            "category": "repair_gate",
+            "severity": "critical",
+            "priority": 110,
+            "scope": [
+              "repair_apply"
+            ],
+            "trigger": {
+              "kind": "static_signal",
+              "config": {}
+            },
+            "gate_effect": "block",
+            "enabled": true
+          },
+          {
+            "rule_id": "repair.scope.out_of_scope_write",
+            "package_id": "repair.default",
+            "name": "修复 patch 不得写出命中的风险文件范围",
+            "category": "repair_scope",
+            "severity": "critical",
+            "priority": 100,
+            "scope": [
+              "repair_apply"
+            ],
+            "trigger": {
+              "kind": "diff_pattern",
+              "config": {}
+            },
+            "gate_effect": "block",
+            "enabled": true
+          },
+          {
+            "rule_id": "repair.scope.absolute_path_write",
+            "package_id": "repair.default",
+            "name": "修复 patch 不得直接写绝对路径",
+            "category": "repair_scope",
+            "severity": "critical",
+            "priority": 95,
+            "scope": [
+              "repair_apply"
+            ],
+            "trigger": {
+              "kind": "diff_pattern",
+              "config": {}
+            },
+            "gate_effect": "block",
+            "enabled": true
+          },
+          {
+            "rule_id": "repair.scope.sensitive_path_write",
+            "package_id": "repair.default",
+            "name": "修复 patch 不得直接改动敏感配置或锁文件",
+            "category": "repair_scope",
+            "severity": "high",
+            "priority": 90,
+            "scope": [
+              "repair_apply"
+            ],
+            "trigger": {
+              "kind": "diff_pattern",
+              "config": {}
+            },
+            "gate_effect": "block",
+            "enabled": true
+          },
+          {
+            "rule_id": "repair.scope.duplicate_file_write",
+            "package_id": "repair.default",
+            "name": "修复 patch 不应对同一文件生成重复写操作",
+            "category": "repair_quality",
+            "severity": "medium",
+            "priority": 50,
+            "scope": [
+              "repair_apply"
+            ],
+            "trigger": {
+              "kind": "diff_pattern",
+              "config": {}
+            },
+            "gate_effect": "warn",
+            "enabled": true
+          },
+          {
+            "rule_id": "repair.scope.large_patch_blast_radius",
+            "package_id": "repair.default",
+            "name": "修复 patch 的文件波及面过大",
+            "category": "repair_quality",
+            "severity": "medium",
+            "priority": 45,
+            "scope": [
+              "repair_apply"
+            ],
+            "trigger": {
+              "kind": "diff_pattern",
+              "config": {}
+            },
+            "gate_effect": "warn",
+            "enabled": true
+          }
+        ],
+        "policy_snapshot_id": "policy:repair:repair.default@v1"
+      }
+    },
+    "current_review": {
+      "status": "ok",
+      "review": {
+        "check": {
+          "api_signature_changes": 402,
+          "blast_radius": 1441,
+          "changed_files": [
+            ".github/workflows/ci.yml",
+            "dev-docs/README.md",
+            "dev-docs/acceptance.md",
+            "dev-docs/architecture.md",
+            "dev-docs/contracts.md",
+            "dev-docs/current-state-audit.md",
+            "src-ui/package.json",
+            "src-ui/src/risk/current-review.test.ts",
+            "src-ui/src/risk/current-review.ts",
+            "src-ui/src/risk/test-risk.ts",
+            ".githooks/",
+            "dev-docs/evidence/phase5-delivery.json",
+            "dev-docs/phase5-productization.md",
+            "docs/README.md",
+            "docs/phase5-delivery.md",
+            "engine/src/bin/",
+            "src-ui/scripts/phase5-delivery.ts",
+            "src-ui/src/risk/delivery.test.ts",
+            "src-ui/src/risk/delivery.ts"
+          ],
+          "coupling_l4": 0,
+          "cross_community_edges": 2151,
+          "cycles_detected": 1,
+          "l2_violations": [],
+          "l3_violations": [],
+          "l4_violations": [],
+          "l5_violations": [
+            {
+              "level": 5,
+              "signal": {
+                "affected_nodes": [],
+                "description": "Configuration file changed — may alter runtime behavior globally.",
+                "file_path": ".github/workflows/ci.yml",
+                "level": 5,
+                "line": 0
+              }
+            },
+            {
+              "level": 5,
+              "signal": {
+                "affected_nodes": [],
+                "description": "Configuration file changed — may alter runtime behavior globally.",
+                "file_path": "src-ui/package.json",
+                "level": 5,
+                "line": 0
+              }
+            },
+            {
+              "level": 5,
+              "signal": {
+                "affected_nodes": [],
+                "description": "Configuration file changed — may alter runtime behavior globally.",
+                "file_path": "dev-docs/evidence/phase5-delivery.json",
+                "level": 5,
+                "line": 0
+              }
+            }
+          ],
+          "new_cycles": 0,
+          "new_thread_conflicts": 0,
+          "one_line": "3 violations: L5=3 L4=0 L3=0 L2=0 (coupling_L4=0 cycles=1)",
+          "passed": false,
+          "passed_checks": [],
+          "signals_count": 3,
+          "timestamp": "2026-06-23T04:17:35Z",
+          "total_changed_files": 19,
+          "violation_count": 3
+        },
+        "findings": [
+          {
+            "finding_id": "check:2026-06-23T04:17:35Z:l5:0",
+            "job_id": "check:2026-06-23T04:17:35Z",
+            "rule_id": "check.l5",
+            "severity": "critical",
+            "category": "data_integrity",
+            "locations": [
+              {
+                "file_path": ".github/workflows/ci.yml",
+                "start_line": 1,
+                "end_line": 1
+              }
+            ],
+            "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+            "impact": "Configuration file changed — may alter runtime behavior globally.",
+            "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+            "evidence_ids": [
+              "check:l5:0"
+            ],
+            "confidence": 0.8,
+            "status": "open"
+          },
+          {
+            "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+            "job_id": "check:2026-06-23T04:17:35Z",
+            "rule_id": "check.l5",
+            "severity": "critical",
+            "category": "data_integrity",
+            "locations": [
+              {
+                "file_path": "src-ui/package.json",
+                "start_line": 1,
+                "end_line": 1
+              }
+            ],
+            "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+            "impact": "Configuration file changed — may alter runtime behavior globally.",
+            "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+            "evidence_ids": [
+              "check:l5:1"
+            ],
+            "confidence": 0.8,
+            "status": "open"
+          },
+          {
+            "finding_id": "check:2026-06-23T04:17:35Z:l5:2",
+            "job_id": "check:2026-06-23T04:17:35Z",
+            "rule_id": "check.l5",
+            "severity": "critical",
+            "category": "data_integrity",
+            "locations": [
+              {
+                "file_path": "dev-docs/evidence/phase5-delivery.json",
+                "start_line": 1,
+                "end_line": 1
+              }
+            ],
+            "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+            "impact": "Configuration file changed — may alter runtime behavior globally.",
+            "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+            "evidence_ids": [
+              "check:l5:2"
+            ],
+            "confidence": 0.8,
+            "status": "open"
+          }
+        ],
+        "summary": {
+          "total": 3,
+          "counts": {
+            "critical": 3,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "info": 0
+          },
+          "topFindings": [
+            {
+              "finding_id": "check:2026-06-23T04:17:35Z:l5:0",
+              "severity": "critical",
+              "category": "data_integrity",
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "locationLabel": "ci.yml:1"
+            },
+            {
+              "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+              "severity": "critical",
+              "category": "data_integrity",
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "locationLabel": "package.json:1"
+            },
+            {
+              "finding_id": "check:2026-06-23T04:17:35Z:l5:2",
+              "severity": "critical",
+              "category": "data_integrity",
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "locationLabel": "phase5-delivery.json:1"
+            }
+          ]
+        },
+        "gate_decision": {
+          "decision_id": "check:2026-06-23T04:17:35Z:file_write:/Users/liupeicheng/Documents/New project 13/repo:block",
+          "job_id": "check:2026-06-23T04:17:35Z",
+          "subject_type": "file_write",
+          "subject_ref": "/Users/liupeicheng/Documents/New project 13/repo",
+          "decision": "block",
+          "reason": "L5 不可逆风险默认阻断",
+          "finding_ids": [
+            "check:2026-06-23T04:17:35Z:l5:0",
+            "check:2026-06-23T04:17:35Z:l5:1",
+            "check:2026-06-23T04:17:35Z:l5:2"
+          ],
+          "policy_snapshot_id": "policy:review:review.default@v1",
+          "decided_at": "2026-06-23T04:17:35Z"
+        },
+        "multi_agent_review": {
+          "job_id": "check:2026-06-23T04:17:35Z",
+          "requested_agents": [
+            "static",
+            "security",
+            "test_regression",
+            "dependency",
+            "repair_planner"
+          ],
+          "agent_results": [
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-23T04:17:35Z:static",
+                "job_id": "check:2026-06-23T04:17:35Z",
+                "agent_type": "static",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0",
+                  "check:l5:1",
+                  "check:l5:2"
+                ],
+                "finding_ids": [
+                  "check:2026-06-23T04:17:35Z:l5:0",
+                  "check:2026-06-23T04:17:35Z:l5:1",
+                  "check:2026-06-23T04:17:35Z:l5:2"
+                ],
+                "started_at": "2026-06-23T04:17:35Z",
+                "completed_at": "2026-06-23T04:17:35Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:0",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": ".github/workflows/ci.yml",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:0"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                },
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "src-ui/package.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:1"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                },
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:2",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "dev-docs/evidence/phase5-delivery.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:2"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-23T04:17:35Z:security",
+                "job_id": "check:2026-06-23T04:17:35Z",
+                "agent_type": "security",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0",
+                  "check:l5:1",
+                  "check:l5:2"
+                ],
+                "finding_ids": [
+                  "check:2026-06-23T04:17:35Z:l5:0",
+                  "check:2026-06-23T04:17:35Z:l5:1",
+                  "check:2026-06-23T04:17:35Z:l5:2"
+                ],
+                "started_at": "2026-06-23T04:17:35Z",
+                "completed_at": "2026-06-23T04:17:35Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:0",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": ".github/workflows/ci.yml",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:0"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                },
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "src-ui/package.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:1"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                },
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:2",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "dev-docs/evidence/phase5-delivery.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:2"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-23T04:17:35Z:test_regression",
+                "job_id": "check:2026-06-23T04:17:35Z",
+                "agent_type": "test_regression",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0",
+                  "check:l5:1",
+                  "check:l5:2"
+                ],
+                "finding_ids": [],
+                "started_at": "2026-06-23T04:17:35Z",
+                "completed_at": "2026-06-23T04:17:35Z"
+              },
+              "findings": [],
+              "suggested_decision": "allow"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-23T04:17:35Z:dependency",
+                "job_id": "check:2026-06-23T04:17:35Z",
+                "agent_type": "dependency",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0",
+                  "check:l5:1",
+                  "check:l5:2"
+                ],
+                "finding_ids": [
+                  "check:2026-06-23T04:17:35Z:l5:1"
+                ],
+                "started_at": "2026-06-23T04:17:35Z",
+                "completed_at": "2026-06-23T04:17:35Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "src-ui/package.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:1"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            },
+            {
+              "run": {
+                "agent_run_id": "check:2026-06-23T04:17:35Z:repair_planner",
+                "job_id": "check:2026-06-23T04:17:35Z",
+                "agent_type": "repair_planner",
+                "status": "completed",
+                "input_evidence_ids": [
+                  "check:l5:0",
+                  "check:l5:1",
+                  "check:l5:2"
+                ],
+                "finding_ids": [
+                  "check:2026-06-23T04:17:35Z:l5:0",
+                  "check:2026-06-23T04:17:35Z:l5:1",
+                  "check:2026-06-23T04:17:35Z:l5:2"
+                ],
+                "started_at": "2026-06-23T04:17:35Z",
+                "completed_at": "2026-06-23T04:17:35Z"
+              },
+              "findings": [
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:0",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": ".github/workflows/ci.yml",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:0"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                },
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "src-ui/package.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:1"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                },
+                {
+                  "finding_id": "check:2026-06-23T04:17:35Z:l5:2",
+                  "job_id": "check:2026-06-23T04:17:35Z",
+                  "rule_id": "check.l5",
+                  "severity": "critical",
+                  "category": "data_integrity",
+                  "locations": [
+                    {
+                      "file_path": "dev-docs/evidence/phase5-delivery.json",
+                      "start_line": 1,
+                      "end_line": 1
+                    }
+                  ],
+                  "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+                  "impact": "Configuration file changed — may alter runtime behavior globally.",
+                  "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+                  "evidence_ids": [
+                    "check:l5:2"
+                  ],
+                  "confidence": 0.8,
+                  "status": "open"
+                }
+              ],
+              "suggested_decision": "block"
+            }
+          ],
+          "merged_findings": [
+            {
+              "finding_id": "check:2026-06-23T04:17:35Z:l5:0",
+              "job_id": "check:2026-06-23T04:17:35Z",
+              "rule_id": "check.l5",
+              "severity": "critical",
+              "category": "data_integrity",
+              "locations": [
+                {
+                  "file_path": ".github/workflows/ci.yml",
+                  "start_line": 1,
+                  "end_line": 1
+                }
+              ],
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "impact": "Configuration file changed — may alter runtime behavior globally.",
+              "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+              "evidence_ids": [
+                "check:l5:0"
+              ],
+              "confidence": 0.8,
+              "status": "open"
+            },
+            {
+              "finding_id": "check:2026-06-23T04:17:35Z:l5:1",
+              "job_id": "check:2026-06-23T04:17:35Z",
+              "rule_id": "check.l5",
+              "severity": "critical",
+              "category": "data_integrity",
+              "locations": [
+                {
+                  "file_path": "src-ui/package.json",
+                  "start_line": 1,
+                  "end_line": 1
+                }
+              ],
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "impact": "Configuration file changed — may alter runtime behavior globally.",
+              "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+              "evidence_ids": [
+                "check:l5:1"
+              ],
+              "confidence": 0.8,
+              "status": "open"
+            },
+            {
+              "finding_id": "check:2026-06-23T04:17:35Z:l5:2",
+              "job_id": "check:2026-06-23T04:17:35Z",
+              "rule_id": "check.l5",
+              "severity": "critical",
+              "category": "data_integrity",
+              "locations": [
+                {
+                  "file_path": "dev-docs/evidence/phase5-delivery.json",
+                  "start_line": 1,
+                  "end_line": 1
+                }
+              ],
+              "plain_explanation": "Configuration file changed — may alter runtime behavior globally.",
+              "impact": "Configuration file changed — may alter runtime behavior globally.",
+              "recommendation": "先阻断当前改动，并补齐审计与回滚证据后再继续。",
+              "evidence_ids": [
+                "check:l5:2"
+              ],
+              "confidence": 0.8,
+              "status": "open"
+            }
+          ],
+          "aggregation": {
+            "job_id": "check:2026-06-23T04:17:35Z",
+            "lead_agent_run_id": "check:2026-06-23T04:17:35Z:lead-reviewer",
+            "merged_finding_ids": [
+              "check:2026-06-23T04:17:35Z:l5:0",
+              "check:2026-06-23T04:17:35Z:l5:1",
+              "check:2026-06-23T04:17:35Z:l5:2"
+            ],
+            "dropped_duplicates": [
+              "check:2026-06-23T04:17:35Z:l5:0",
+              "check:2026-06-23T04:17:35Z:l5:0",
+              "check:2026-06-23T04:17:35Z:l5:1",
+              "check:2026-06-23T04:17:35Z:l5:1",
+              "check:2026-06-23T04:17:35Z:l5:1",
+              "check:2026-06-23T04:17:35Z:l5:2",
+              "check:2026-06-23T04:17:35Z:l5:2"
+            ],
+            "conflicts": []
+          },
+          "degraded_reasons": []
+        },
+        "repair_plan": {
+          "repair_plan_id": "check:2026-06-23T04:17:35Z:repair",
+          "job_id": "check:2026-06-23T04:17:35Z",
+          "finding_ids": [
+            "check:2026-06-23T04:17:35Z:l5:0",
+            "check:2026-06-23T04:17:35Z:l5:1",
+            "check:2026-06-23T04:17:35Z:l5:2"
+          ],
+          "strategy": "Prioritize the highest-risk finding first, keep blast radius narrow, and re-run the strongest local gates before any apply.",
+          "patch_proposal_ref": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/repair-plans/check:2026-06-23T04:17:35Z:repair.json",
+          "required_tests": [
+            "git diff --check",
+            "npm run build"
+          ],
+          "risk_note": "CRITICAL finding requires explicit review: Configuration file changed — may alter runtime behavior globally.",
+          "approval_state": "draft"
+        }
+      },
+      "workbench_queue": [
+        {
+          "step_id": "review",
+          "title": "看风险",
+          "state": "needs_attention",
+          "summary": "3 条风险待处理",
+          "detail": "Configuration file changed — may alter runtime behavior globally.",
+          "section_id": "risk-summary"
+        },
+        {
+          "step_id": "gate",
+          "title": "看 gate",
+          "state": "block",
+          "summary": "L5 不可逆风险默认阻断",
+          "detail": "策略 policy:review:review.default@v1",
+          "section_id": "gate-decision"
+        },
+        {
+          "step_id": "evidence",
+          "title": "看证据",
+          "state": "ready",
+          "summary": "3 条 finding · 3 个 evidence",
+          "detail": "证据可追溯",
+          "section_id": "repair-workbench"
+        },
+        {
+          "step_id": "approval",
+          "title": "审批/阻断",
+          "state": "draft",
+          "summary": "当前尚未进入审批阶段",
+          "section_id": "repair-workbench"
+        },
+        {
+          "step_id": "repair",
+          "title": "repair/rollback",
+          "state": "failed",
+          "summary": "proposal_generation · Repair proposal generation degraded.",
+          "detail": "draft -> draft",
+          "section_id": "repair-workbench"
+        }
+      ],
+      "repair_history": [
+        {
+          "timestamp": "2026-06-21T15:49:24Z",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          }
+        },
+        {
+          "timestamp": "2026-06-21T15:49:23Z",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          }
+        },
+        {
+          "timestamp": "2026-06-21T15:49:16Z",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          }
+        },
+        {
+          "timestamp": "2026-06-21T15:44:12Z",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          }
+        },
+        {
+          "timestamp": "2026-06-21T15:29:10Z",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          }
+        }
+      ],
+      "repair_workbench": {
+        "status_state": "draft",
+        "status_label": "状态 draft",
+        "test_count": 2,
+        "strategy": "Prioritize the highest-risk finding first, keep blast radius narrow, and re-run the strongest local gates before any apply.",
+        "risk_note": "CRITICAL finding requires explicit review: Configuration file changed — may alter runtime behavior globally.",
+        "required_tests": [
+          "git diff --check",
+          "npm run build"
+        ],
+        "evidence_trace": {
+          "finding_count": 3,
+          "evidence_count": 3,
+          "repair_history_count": 5
+        },
+        "repair_history": [
+          {
+            "timestamp": "2026-06-21T15:49:24Z",
+            "stage": "proposal_generation",
+            "status": "failed",
+            "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "state_change": {
+              "from_state": "draft",
+              "to_state": "draft"
+            },
+            "error": {
+              "code": "missing_evidence",
+              "stage": "proposal_generation",
+              "retryable": false
+            }
+          },
+          {
+            "timestamp": "2026-06-21T15:49:23Z",
+            "stage": "proposal_generation",
+            "status": "failed",
+            "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "state_change": {
+              "from_state": "draft",
+              "to_state": "draft"
+            },
+            "error": {
+              "code": "missing_evidence",
+              "stage": "proposal_generation",
+              "retryable": false
+            }
+          },
+          {
+            "timestamp": "2026-06-21T15:49:16Z",
+            "stage": "proposal_generation",
+            "status": "failed",
+            "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "state_change": {
+              "from_state": "draft",
+              "to_state": "draft"
+            },
+            "error": {
+              "code": "missing_evidence",
+              "stage": "proposal_generation",
+              "retryable": false
+            }
+          },
+          {
+            "timestamp": "2026-06-21T15:44:12Z",
+            "stage": "proposal_generation",
+            "status": "failed",
+            "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "state_change": {
+              "from_state": "draft",
+              "to_state": "draft"
+            },
+            "error": {
+              "code": "missing_evidence",
+              "stage": "proposal_generation",
+              "retryable": false
+            }
+          },
+          {
+            "timestamp": "2026-06-21T15:29:10Z",
+            "stage": "proposal_generation",
+            "status": "failed",
+            "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "state_change": {
+              "from_state": "draft",
+              "to_state": "draft"
+            },
+            "error": {
+              "code": "missing_evidence",
+              "stage": "proposal_generation",
+              "retryable": false
+            }
+          }
+        ]
+      }
+    },
+    "audit": {
+      "entries": [
+        {
+          "action": "allowed",
+          "details": {
+            "counts": {
+              "critical": 0,
+              "high": 0,
+              "info": 0,
+              "low": 0,
+              "medium": 0
+            },
+            "evidence_ids": [],
+            "finding_ids": [],
+            "gate_decision": {
+              "decision": "allow",
+              "finding_ids": [],
+              "reason": "No enabled rule requires intervention."
+            },
+            "policy_snapshot_id": "policy:review-default:v1",
+            "timestamp": "2026-06-22T01:15:52Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "No enabled rule requires intervention.",
+          "tool": "review_check",
+          "ts": "2026-06-22T01:15:53Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-22T01:15:52Z"
+        },
+        {
+          "action": "allowed",
+          "details": {
+            "counts": {
+              "critical": 0,
+              "high": 0,
+              "info": 0,
+              "low": 0,
+              "medium": 0
+            },
+            "evidence_ids": [],
+            "finding_ids": [],
+            "gate_decision": {
+              "decision": "allow",
+              "finding_ids": [],
+              "reason": "No enabled rule requires intervention."
+            },
+            "policy_snapshot_id": "policy:review-default:v1",
+            "timestamp": "2026-06-22T00:16:09Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "No enabled rule requires intervention.",
+          "tool": "review_check",
+          "ts": "2026-06-22T00:16:09Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-22T00:16:07Z"
+        },
+        {
+          "action": "allowed",
+          "details": {
+            "counts": {
+              "critical": 0,
+              "high": 0,
+              "info": 0,
+              "low": 0,
+              "medium": 0
+            },
+            "evidence_ids": [],
+            "finding_ids": [],
+            "gate_decision": {
+              "decision": "allow",
+              "finding_ids": [],
+              "reason": "No enabled rule requires intervention."
+            },
+            "policy_snapshot_id": "policy:review-default:v1",
+            "timestamp": "2026-06-22T00:04:19Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "No enabled rule requires intervention.",
+          "tool": "review_check",
+          "ts": "2026-06-22T00:04:19Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-22T00:04:17Z"
+        },
+        {
+          "action": "allowed",
+          "details": {
+            "counts": {
+              "critical": 0,
+              "high": 0,
+              "info": 0,
+              "low": 1,
+              "medium": 0
+            },
+            "evidence_ids": [
+              "check:l2:0"
+            ],
+            "finding_ids": [
+              "check:2026-06-21T16:27:40Z:l2:0"
+            ],
+            "gate_decision": {
+              "decision": "warn",
+              "finding_ids": [
+                "check:2026-06-21T16:27:40Z:l2:0"
+              ],
+              "reason": "L2 波及风险需要告警"
+            },
+            "policy_snapshot_id": "policy:review-default:v1",
+            "timestamp": "2026-06-21T16:27:40Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "L2 波及风险需要告警",
+          "tool": "review_check",
+          "ts": "2026-06-21T16:27:40Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-21T16:27:38Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:49:24.043Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:49:06Z:repair"
+            },
+            "timestamp": "2026-06-21T15:49:24.043Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:49:24Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:49:23.215Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:49:06Z:repair"
+            },
+            "timestamp": "2026-06-21T15:49:23.215Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:49:23Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:49:16.378Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:49:06Z:repair"
+            },
+            "timestamp": "2026-06-21T15:49:16.378Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:49:16Z"
+        },
+        {
+          "action": "allowed",
+          "details": {
+            "counts": {
+              "critical": 0,
+              "high": 0,
+              "info": 0,
+              "low": 1,
+              "medium": 0
+            },
+            "evidence_ids": [
+              "check:l2:0"
+            ],
+            "finding_ids": [
+              "check:2026-06-21T15:49:06Z:l2:0"
+            ],
+            "gate_decision": {
+              "decision": "warn",
+              "finding_ids": [
+                "check:2026-06-21T15:49:06Z:l2:0"
+              ],
+              "reason": "L2 波及风险需要告警"
+            },
+            "policy_snapshot_id": "policy:review-default:v1",
+            "timestamp": "2026-06-21T15:49:06Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "L2 波及风险需要告警",
+          "tool": "review_check",
+          "ts": "2026-06-21T15:49:06Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-21T15:49:05Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:44:12.453Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+            },
+            "timestamp": "2026-06-21T15:44:12.453Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:44:12Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:29:10.050Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+            },
+            "timestamp": "2026-06-21T15:29:10.050Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:29:10Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:29:08.813Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+            },
+            "timestamp": "2026-06-21T15:29:08.813Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:29:08Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-21T15:29:03Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:27:58.848Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+            },
+            "timestamp": "2026-06-21T15:27:58.848Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:27:58Z"
+        },
+        {
+          "action": "denied",
+          "details": {
+            "approval_state": "draft",
+            "error_code": "missing_evidence",
+            "error_retryable": false,
+            "error_stage": "proposal_generation",
+            "generation_meta": {
+              "file_count": 0,
+              "focus_file_paths": [],
+              "generated_at": "2026-06-21T15:27:54.568Z",
+              "high_severity_finding_ids": [],
+              "model": "deepseek-v4-pro",
+              "provider_name": "deepseek",
+              "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+            },
+            "timestamp": "2026-06-21T15:27:54.568Z"
+          },
+          "path": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "tool": "repair_plan",
+          "ts": "2026-06-21T15:27:54Z"
+        },
+        {
+          "action": "denied",
+          "details": null,
+          "path": "/Users/liupeicheng/Documents/New project 13/repo/.hologram/memory/MEMORY.md",
+          "reason": "parent directory not found",
+          "tool": "read",
+          "ts": "2026-06-21T15:20:11Z"
+        }
+      ],
+      "records": [
+        {
+          "event_id": "review_check:2026-06-22T01:15:53Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-22T01:15:53Z",
+          "plane": "review",
+          "stage": "review",
+          "status": "allow",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "No enabled rule requires intervention.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "state_change": {
+            "from_state": "running",
+            "to_state": "allow"
+          },
+          "raw": {
+            "action": "allowed",
+            "details": {
+              "counts": {
+                "critical": 0,
+                "high": 0,
+                "info": 0,
+                "low": 0,
+                "medium": 0
+              },
+              "evidence_ids": [],
+              "finding_ids": [],
+              "gate_decision": {
+                "decision": "allow",
+                "finding_ids": [],
+                "reason": "No enabled rule requires intervention."
+              },
+              "policy_snapshot_id": "policy:review-default:v1",
+              "timestamp": "2026-06-22T01:15:52Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "No enabled rule requires intervention.",
+            "tool": "review_check",
+            "ts": "2026-06-22T01:15:53Z"
+          }
+        },
+        {
+          "event_id": "review_check:2026-06-22T00:16:09Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-22T00:16:09Z",
+          "plane": "review",
+          "stage": "review",
+          "status": "allow",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "No enabled rule requires intervention.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "state_change": {
+            "from_state": "running",
+            "to_state": "allow"
+          },
+          "raw": {
+            "action": "allowed",
+            "details": {
+              "counts": {
+                "critical": 0,
+                "high": 0,
+                "info": 0,
+                "low": 0,
+                "medium": 0
+              },
+              "evidence_ids": [],
+              "finding_ids": [],
+              "gate_decision": {
+                "decision": "allow",
+                "finding_ids": [],
+                "reason": "No enabled rule requires intervention."
+              },
+              "policy_snapshot_id": "policy:review-default:v1",
+              "timestamp": "2026-06-22T00:16:09Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "No enabled rule requires intervention.",
+            "tool": "review_check",
+            "ts": "2026-06-22T00:16:09Z"
+          }
+        },
+        {
+          "event_id": "review_check:2026-06-22T00:04:19Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-22T00:04:19Z",
+          "plane": "review",
+          "stage": "review",
+          "status": "allow",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "No enabled rule requires intervention.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "state_change": {
+            "from_state": "running",
+            "to_state": "allow"
+          },
+          "raw": {
+            "action": "allowed",
+            "details": {
+              "counts": {
+                "critical": 0,
+                "high": 0,
+                "info": 0,
+                "low": 0,
+                "medium": 0
+              },
+              "evidence_ids": [],
+              "finding_ids": [],
+              "gate_decision": {
+                "decision": "allow",
+                "finding_ids": [],
+                "reason": "No enabled rule requires intervention."
+              },
+              "policy_snapshot_id": "policy:review-default:v1",
+              "timestamp": "2026-06-22T00:04:19Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "No enabled rule requires intervention.",
+            "tool": "review_check",
+            "ts": "2026-06-22T00:04:19Z"
+          }
+        },
+        {
+          "event_id": "review_check:2026-06-21T16:27:40Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T16:27:40Z",
+          "plane": "review",
+          "stage": "review",
+          "status": "warn",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "L2 波及风险需要告警",
+          "finding_ids": [
+            "check:2026-06-21T16:27:40Z:l2:0"
+          ],
+          "evidence_ids": [
+            "check:l2:0"
+          ],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "state_change": {
+            "from_state": "running",
+            "to_state": "warn"
+          },
+          "raw": {
+            "action": "allowed",
+            "details": {
+              "counts": {
+                "critical": 0,
+                "high": 0,
+                "info": 0,
+                "low": 1,
+                "medium": 0
+              },
+              "evidence_ids": [
+                "check:l2:0"
+              ],
+              "finding_ids": [
+                "check:2026-06-21T16:27:40Z:l2:0"
+              ],
+              "gate_decision": {
+                "decision": "warn",
+                "finding_ids": [
+                  "check:2026-06-21T16:27:40Z:l2:0"
+                ],
+                "reason": "L2 波及风险需要告警"
+              },
+              "policy_snapshot_id": "policy:review-default:v1",
+              "timestamp": "2026-06-21T16:27:40Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "L2 波及风险需要告警",
+            "tool": "review_check",
+            "ts": "2026-06-21T16:27:40Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:49:24Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:49:24Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:49:24.043Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:49:06Z:repair"
+              },
+              "timestamp": "2026-06-21T15:49:24.043Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:49:24Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:49:23Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:49:23Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:49:23.215Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:49:06Z:repair"
+              },
+              "timestamp": "2026-06-21T15:49:23.215Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:49:23Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:49:16Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:49:16Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:49:16.378Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:49:06Z:repair"
+              },
+              "timestamp": "2026-06-21T15:49:16.378Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:49:16Z"
+          }
+        },
+        {
+          "event_id": "review_check:2026-06-21T15:49:06Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:49:06Z",
+          "plane": "review",
+          "stage": "review",
+          "status": "warn",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "L2 波及风险需要告警",
+          "finding_ids": [
+            "check:2026-06-21T15:49:06Z:l2:0"
+          ],
+          "evidence_ids": [
+            "check:l2:0"
+          ],
+          "policy_snapshot_id": "policy:review-default:v1",
+          "state_change": {
+            "from_state": "running",
+            "to_state": "warn"
+          },
+          "raw": {
+            "action": "allowed",
+            "details": {
+              "counts": {
+                "critical": 0,
+                "high": 0,
+                "info": 0,
+                "low": 1,
+                "medium": 0
+              },
+              "evidence_ids": [
+                "check:l2:0"
+              ],
+              "finding_ids": [
+                "check:2026-06-21T15:49:06Z:l2:0"
+              ],
+              "gate_decision": {
+                "decision": "warn",
+                "finding_ids": [
+                  "check:2026-06-21T15:49:06Z:l2:0"
+                ],
+                "reason": "L2 波及风险需要告警"
+              },
+              "policy_snapshot_id": "policy:review-default:v1",
+              "timestamp": "2026-06-21T15:49:06Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "L2 波及风险需要告警",
+            "tool": "review_check",
+            "ts": "2026-06-21T15:49:06Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:44:12Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:44:12Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:44:12.453Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+              },
+              "timestamp": "2026-06-21T15:44:12.453Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:44:12Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:29:10Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:29:10Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:29:10.050Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+              },
+              "timestamp": "2026-06-21T15:29:10.050Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:29:10Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:29:08Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:29:08Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:29:08.813Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+              },
+              "timestamp": "2026-06-21T15:29:08.813Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:29:08Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:27:58Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:27:58Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:27:58.848Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+              },
+              "timestamp": "2026-06-21T15:27:58.848Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:27:58Z"
+          }
+        },
+        {
+          "event_id": "repair_plan:2026-06-21T15:27:54Z:/Users/liupeicheng/Documents/New project 13/repo",
+          "timestamp": "2026-06-21T15:27:54Z",
+          "plane": "repair",
+          "stage": "proposal_generation",
+          "status": "failed",
+          "subject": "/Users/liupeicheng/Documents/New project 13/repo",
+          "reason": "Repair proposal generation degraded.",
+          "finding_ids": [],
+          "evidence_ids": [],
+          "state_change": {
+            "from_state": "draft",
+            "to_state": "draft"
+          },
+          "error": {
+            "code": "missing_evidence",
+            "stage": "proposal_generation",
+            "retryable": false
+          },
+          "raw": {
+            "action": "denied",
+            "details": {
+              "approval_state": "draft",
+              "error_code": "missing_evidence",
+              "error_retryable": false,
+              "error_stage": "proposal_generation",
+              "generation_meta": {
+                "file_count": 0,
+                "focus_file_paths": [],
+                "generated_at": "2026-06-21T15:27:54.568Z",
+                "high_severity_finding_ids": [],
+                "model": "deepseek-v4-pro",
+                "provider_name": "deepseek",
+                "repair_plan_id": "check:2026-06-21T15:19:28Z:repair"
+              },
+              "timestamp": "2026-06-21T15:27:54.568Z"
+            },
+            "path": "/Users/liupeicheng/Documents/New project 13/repo",
+            "reason": "Repair proposal generation degraded.",
+            "tool": "repair_plan",
+            "ts": "2026-06-21T15:27:54Z"
+          }
+        }
+      ]
+    },
+    "automation": {
+      "verify_commands": [
+        "node --import tsx src/risk/test-risk.ts",
+        "npx tsc --noEmit",
+        "npm run build",
+        "cargo check"
+      ],
+      "pre_commit_hook": ".githooks/pre-commit",
+      "ci_workflow": ".github/workflows/hologram-risk.yml",
+      "fail_on_decision": "block",
+      "should_fail": true
+    }
+  }
+}

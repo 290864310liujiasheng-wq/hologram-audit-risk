@@ -27,6 +27,7 @@ Workspace / Git Diff / AI Tool Event
 | Agent Plane | 工具调用、多轮审查、多代理并行、主代理汇总 | `src-ui/src/agent/` 起步，核心语义不得只留在 prompt |
 | Policy Plane | 规则包、严重级别、审批、禁止/询问/允许策略 | `src-ui/src/risk/rule-package.ts` 为当前统一 registry owner，`src-ui/src/agent/permission.ts` 只保留工具权限适配 |
 | Audit Plane | append-only 审计事件、证据引用、决策记录，以及统一审计查询读模型 | `src-tauri/src/audit.rs` 负责落盘，`src-ui/src/risk/audit-bridge.ts` 负责 normalized query truth |
+| Delivery Plane | workspace delivery manifest、headless check、machine-readable report、hook/CI 模板 | `engine/src/bin/hologram-risk-check.rs`、`src-ui/src/risk/delivery.ts`、`src-ui/scripts/phase5-delivery.ts` |
 | UI Plane | 深色 IDE 工作台，展示风险、解释、证据、审批 | `src-ui/src/ui/` |
 
 ## Forbidden Paths
@@ -88,7 +89,7 @@ Finding
 - 模型失败不应导致 IDE 工作台不可用。
 - 高风险动作才阻断；普通风险默认给解释和建议。
 - 审计写入失败不能假装成功，必须产生可见 degraded 状态。
-- 后续若接入 CI 或 Git hooks，应提供旁路模式和明确超时策略。
+- 第五阶段接入的 CI / Git hooks / report export 必须消费 Delivery Plane，而不是重新在脚本里手拼 rule/audit/current-review 语义。
 
 ## 与旧 HoloGram 语义的关系
 

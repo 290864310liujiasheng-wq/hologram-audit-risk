@@ -4,6 +4,7 @@ import '../provider/provider-readiness.test';
 import './check-adapter.test';
 import './audit-bridge.test';
 import './current-review.test';
+import './delivery.test';
 import './multi-agent.test';
 import './self-heal.test';
 import './rule-package.test';
