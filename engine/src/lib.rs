@@ -12,3 +12,4 @@ pub mod mcp;
 pub mod logging;
 pub mod watcher;
 pub mod cli;
+pub mod entitlement;

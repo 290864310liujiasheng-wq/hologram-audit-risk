@@ -98,7 +98,11 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let cycles = detect_cycles(after);
     let cycle_count = cycles.len();
     let cycles_before = detect_cycles(before).len();
-    let signals = SignalGenerator::new().generate(before, after, changed_files, l4_count, cycle_count);
+    let mut signals = SignalGenerator::new().generate(before, after, changed_files, l4_count, cycle_count);
+
+    // Secret scanning: scan the content of every changed file.
+    let secret_signals = crate::routing::secrets::scan_changed_files(changed_files);
+    signals.extend(secret_signals);
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(&signals, &config);
     let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();

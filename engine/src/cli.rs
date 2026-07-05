@@ -2734,6 +2734,45 @@ fn load_entitlement_status_from_dir(dir: &Path) -> EntitlementStatus {
             };
         }
     };
+
+    // Verify the server signature before trusting any field in the JSON.
+    let sig_raw = match fs::read_to_string(&sig_path) {
+        Ok(sig) => sig,
+        Err(error) => {
+            return EntitlementStatus {
+                state: EntitlementState::Invalid,
+                plan: None,
+                valid_until: None,
+                next_billing_at: None,
+                payment_pending: false,
+                reason: format!("读取授权签名失败：{error}"),
+            };
+        }
+    };
+    match crate::entitlement::verify_entitlement_signature(&raw, sig_raw.trim()) {
+        crate::entitlement::SignatureVerifyResult::Valid => {}
+        crate::entitlement::SignatureVerifyResult::Malformed => {
+            return EntitlementStatus {
+                state: EntitlementState::Invalid,
+                plan: None,
+                valid_until: None,
+                next_billing_at: None,
+                payment_pending: false,
+                reason: "授权签名格式错误，文件可能已损坏。".to_string(),
+            };
+        }
+        crate::entitlement::SignatureVerifyResult::Invalid => {
+            return EntitlementStatus {
+                state: EntitlementState::Invalid,
+                plan: None,
+                valid_until: None,
+                next_billing_at: None,
+                payment_pending: false,
+                reason: "授权签名验证失败，授权文件可能已被篡改或来自未知服务器。".to_string(),
+            };
+        }
+    }
+
     let document = match serde_json::from_str::<PersonalEntitlementDocument>(&raw) {
         Ok(value) => value,
         Err(error) => {
@@ -3956,7 +3995,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "signed-entitlement"
+            "signature": "i75pymAM13eX4xDqk87WCGMBEuXXrpYI+66t3CtfTKbgmA+jp5u/Z129EJJnr4E95vn3wWn8cIln/Z91M1lcCw=="
         }));
     }
     if url == "mock://refresh-active/api/entitlement/refresh" {
@@ -3972,7 +4011,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "refreshed-signature"
+            "signature": "i75pymAM13eX4xDqk87WCGMBEuXXrpYI+66t3CtfTKbgmA+jp5u/Z129EJJnr4E95vn3wWn8cIln/Z91M1lcCw=="
         }));
     }
     if url == "mock://refresh-revoked/api/entitlement/refresh" {
@@ -3988,7 +4027,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "revoked",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "revoked-signature"
+            "signature": "qjvku6Fib3f9oKVcP59wdR6qs24Odm14Mus9YD7DdgBaZJFlSQfrOtli2PDgui21yAmQXbcBx5MPk/mgh1rxCw=="
         }));
     }
     if url == "mock://payment-pending/api/auth/exchange" || url == "mock://payment-timeout/api/auth/exchange" {
@@ -4004,7 +4043,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "core-signature"
+            "signature": "mw1056a5W6bBhTRIkJFC+N9MxXoyIXkjc46LA2rMbgdPNTVq3NhJtY3WyDsdi5iJ7jOfyAc8ufdnK0PbCgcoCw=="
         }));
     }
     if url.starts_with("mock://payment-pending/api/payment/query?") {
@@ -4020,7 +4059,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "paid-signature"
+            "signature": "i75pymAM13eX4xDqk87WCGMBEuXXrpYI+66t3CtfTKbgmA+jp5u/Z129EJJnr4E95vn3wWn8cIln/Z91M1lcCw=="
         }));
     }
     if url.starts_with("mock://payment-timeout/api/payment/query?") {
@@ -4036,7 +4075,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "core-signature"
+            "signature": "mw1056a5W6bBhTRIkJFC+N9MxXoyIXkjc46LA2rMbgdPNTVq3NhJtY3WyDsdi5iJ7jOfyAc8ufdnK0PbCgcoCw=="
         }));
     }
 
@@ -4325,6 +4364,15 @@ mod tests {
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()
+    }
+
+    /// Write `json` to `dir/entitlement.json` and a real Ed25519 signature to
+    /// `dir/entitlement.sig`.  All tests that need a valid entitlement on disk
+    /// must go through this helper — never write a fake sig string directly.
+    fn write_signed_entitlement(dir: &std::path::Path, json: &str) {
+        let sig = crate::entitlement::sign_for_test(json);
+        std::fs::write(dir.join("entitlement.json"), json).expect("entitlement.json");
+        std::fs::write(dir.join("entitlement.sig"), sig).expect("entitlement.sig");
     }
 
     #[test]
@@ -4675,52 +4723,39 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-auth-status-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("entitlement root");
         std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(root_path.join("entitlement.sig"), "fake-sig").expect("sig");
         let device_id = super::derive_device_id_for_dir(&root_path).expect("device id");
 
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("active entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
         let active = super::render_auth_status(&super::load_entitlement_status_from_dir(&root_path));
         assert!(active.contains("已登录"));
 
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2026-07-05T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("grace entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2026-07-05T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
         let grace = super::render_auth_status(&super::load_entitlement_status_from_dir(&root_path));
         assert!(grace.contains("已登录"));
         assert!(grace.contains("72 小时"));
 
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2026-06-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("expired entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2026-06-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
         let expired = super::render_auth_status(&super::load_entitlement_status_from_dir(&root_path));
         assert!(expired.contains("Core 免费版"));
         assert!(expired.contains("已过期"));
 
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"revoked","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("revoked entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"revoked","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
         let revoked = super::render_auth_status(&super::load_entitlement_status_from_dir(&root_path));
         assert!(revoked.contains("已撤销"));
 
@@ -4751,16 +4786,12 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-payment-pending-status-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("entitlement root");
         std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(root_path.join("entitlement.sig"), "core-signature").expect("sig");
         let device_id = super::derive_device_id_for_dir(&root_path).expect("device id");
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"core_free","features":[],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","payment_pending":true,"next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"core_free","features":[],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","payment_pending":true,"next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
 
         let rendered = super::render_auth_status_for_dir(&root_path);
         assert!(rendered.contains("支付确认中"));
@@ -4774,16 +4805,12 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-unknown-entitlement-status-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("entitlement root");
         std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(root_path.join("entitlement.sig"), "fake-sig").expect("sig");
         let device_id = super::derive_device_id_for_dir(&root_path).expect("device id");
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"suspended","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"suspended","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
 
         let status = super::load_entitlement_status_from_dir(&root_path);
         assert!(matches!(status.state, super::EntitlementState::Invalid));
@@ -4824,9 +4851,13 @@ mod tests {
         let entitlement: serde_json::Value = serde_json::from_str(&entitlement_raw).expect("entitlement value");
         assert_eq!(entitlement["plan"], "pro_personal_monthly");
         assert_eq!(entitlement["status"], "active");
+        // Verify the sig on disk is a real Ed25519 signature that passes verification.
+        let sig_on_disk = std::fs::read_to_string(root_path.join("entitlement.sig")).expect("sig");
+        let json_on_disk = std::fs::read_to_string(root_path.join("entitlement.json")).expect("json");
         assert_eq!(
-            std::fs::read_to_string(root_path.join("entitlement.sig")).expect("sig"),
-            "signed-entitlement"
+            crate::entitlement::verify_entitlement_signature(&json_on_disk, sig_on_disk.trim()),
+            crate::entitlement::SignatureVerifyResult::Valid,
+            "entitlement.sig on disk must be a valid Ed25519 signature"
         );
         assert!(!root_path.join("session.json").exists(), "session should be cleared after exchange");
 
@@ -4838,12 +4869,7 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-device-mismatch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("entitlement root");
         std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(root_path.join("entitlement.sig"), "fake-sig").expect("sig");
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            r#"{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"mismatched-device-id","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}"#,
-        )
-        .expect("entitlement");
+        write_signed_entitlement(&root_path, r#"{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"mismatched-device-id","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}"#);
 
         let status = super::load_entitlement_status_from_dir(&root_path);
         assert!(matches!(status.state, super::EntitlementState::DeviceMismatch));
@@ -4857,25 +4883,23 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-refresh-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("entitlement root");
         std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(root_path.join("entitlement.sig"), "old-sig").expect("sig");
         let device_id = super::derive_device_id_for_dir(&root_path).expect("device id");
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-20T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-20T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-20T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-20T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
 
         let status = super::refresh_entitlement_for_dir(&root_path, Some("mock://refresh-active"))
             .expect("refresh should succeed");
         assert!(matches!(status.state, super::EntitlementState::Active));
         let raw = std::fs::read_to_string(root_path.join("entitlement.json")).expect("entitlement raw");
         assert!(raw.contains("\"notify\""));
+        let sig_on_disk = std::fs::read_to_string(root_path.join("entitlement.sig")).expect("sig");
         assert_eq!(
-            std::fs::read_to_string(root_path.join("entitlement.sig")).expect("sig"),
-            "refreshed-signature"
+            crate::entitlement::verify_entitlement_signature(&raw, sig_on_disk.trim()),
+            crate::entitlement::SignatureVerifyResult::Valid,
+            "refreshed entitlement.sig must be a valid Ed25519 signature"
         );
 
         let _ = std::fs::remove_dir_all(&root_path);
@@ -4886,16 +4910,12 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-refresh-revoked-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("entitlement root");
         std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(root_path.join("entitlement.sig"), "old-sig").expect("sig");
         let device_id = super::derive_device_id_for_dir(&root_path).expect("device id");
-        std::fs::write(
-            root_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-20T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-20T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-20T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-20T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&root_path, &json);
 
         let status = super::refresh_entitlement_for_dir(&root_path, Some("mock://refresh-revoked"))
             .expect("refresh should succeed");
@@ -5186,24 +5206,22 @@ mod tests {
         std::env::remove_var("AUDIT_RISK_AUTH_BASE_URL");
 
         std::fs::write(entitlement_path.join("device_secret"), "device-secret").expect("device secret");
-        std::fs::write(entitlement_path.join("entitlement.sig"), "old-sig").expect("sig");
         let device_id = super::derive_device_id_for_dir(&entitlement_path).expect("device id");
-        std::fs::write(
-            entitlement_path.join("entitlement.json"),
-            format!(
-                r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-20T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-20T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-                device_id
-            ),
-        )
-        .expect("stale entitlement");
+        let json = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-20T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-20T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            device_id
+        );
+        write_signed_entitlement(&entitlement_path, &json);
 
         let rendered = super::render_auth_status_for_dir_with_workspace(&entitlement_path, &workspace_path);
         assert!(rendered.contains("已登录"));
         let refreshed_raw = std::fs::read_to_string(entitlement_path.join("entitlement.json")).expect("refreshed entitlement");
         assert!(refreshed_raw.contains("\"notify\""));
+        let refreshed_sig = std::fs::read_to_string(entitlement_path.join("entitlement.sig")).expect("sig");
         assert_eq!(
-            std::fs::read_to_string(entitlement_path.join("entitlement.sig")).expect("sig"),
-            "refreshed-signature"
+            crate::entitlement::verify_entitlement_signature(&refreshed_raw, refreshed_sig.trim()),
+            crate::entitlement::SignatureVerifyResult::Valid,
+            "workspace refresh must write a valid Ed25519 signature"
         );
 
         let _ = std::fs::remove_dir_all(&entitlement_path);
