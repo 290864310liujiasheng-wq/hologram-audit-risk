@@ -11,7 +11,7 @@ This section records the current truth for the adopted repo.
 ## 已确认事实
 
 - 根目录存在 `AGENTS.md`，本次已改写为当前 agent 宪法。
-- 根 `README.md` 仍是 HoloGram 外部介绍，包含 3D 星图、MCP、安装和截图叙事。
+- 根 `README.md` 已切到 AI 编码风控平台对外口径，主产品叙事为 `audit-risk` CLI，旧 HoloGram 语义只保留为历史基座说明。
 - `docs/DATA_FLOW_ARCHITECTURE.md` 仍是 HoloGram 数据流说明，可作为现有基座证据，不作为新产品边界。
 - `engine/` 提供 Rust 代码图谱、静态分析、路由/耦合/数据流等候选 evidence 能力。
 - `src-ui/src/provider/` 已有 Anthropic/OpenAI-compatible provider 抽象。
@@ -20,11 +20,16 @@ This section records the current truth for the adopted repo.
 - `src-ui/src/risk/rule-package.ts` 现已具备默认 review / repair rule package、扩展包合并、禁用 rule 与 policy snapshot 生成的统一 registry。
 - `src-ui/src/risk/audit-bridge.ts` 现已具备统一 `AuditQueryResult` / `AuditRecord` 读模型，`workspace.ts` 与 `CheckPanel` 都通过同一 normalized audit truth 读取最近审计。
 - `src-ui/src/risk/current-review.ts` 现已具备 `buildWorkbenchQueue`，把看风险 / 看 gate / 看证据 / 审批阻断 / repair rollback 主路径收口成纯读模型，而不是散落在 UI 条件里。
-- `engine/src/bin/hologram-risk-check.rs` 现已提供 headless workspace check 入口，可直接对外部仓库输出 machine-readable check JSON。
+- `engine/src/bin/audit-risk.rs` 现已提供公共 CLI 主入口；`engine/src/bin/hologram-risk-check.rs` 仅保留迁移期兼容壳。
 - `src-ui/src/risk/delivery.ts` 现已提供 delivery manifest、workspace rule package 装载、machine report、hook/CI 模板真源。
-- `src-ui/scripts/phase5-delivery.ts` 现已提供 `phase5:init` / `phase5:report` / `phase5:verify` 三个交付化命令入口。
+- `src-ui/scripts/phase5-delivery.ts` 现已退化为交付化兼容/验证壳；公共命令面已收口到 Rust `audit-risk` CLI。
 - `current_review_summary` 工具现已直接返回 `review + workbench_queue + repair_history`，只读工具不再只能拿到底层 review object 再自行拼装工作台主路径。
 - `src-ui/src/risk/current-review.ts` 现已具备 `buildRepairWorkbenchSnapshot`；`CheckPanel` 的 provider / generation / preflight / evidence trace / repair history 状态已改为直接消费 owner snapshot，不再在 UI 层各自推断。
+- repair proposal 在展示给用户前，现已新增 owner 层 `repair_proposal_validation`：会先做二次审计、快速语法检查，并给出固定的逻辑变更提示；若引入新风险或语法非法，会在 proposal_generation 阶段直接阻断展示。
+- `audit-risk doctor` 现已具备 CLI 版本、engine 版本、`git/cargo/node` 依赖完整性、rule package `package_id/version`、provider 与 audit 路径状态的一键体检输出。
+- `audit-risk watch` 在人类模式下现已补“watching / initial scan running / 首轮摘要”三段首屏反馈，避免启动时看起来无响应。
+- `audit-risk check / diff / init / doctor / report / notify --test` 当前默认已切到统一中文产品壳；机器消费若要保持稳定 JSON，必须显式加 `--json`。
+- 这轮 task4 审计已确认并修复：对子目录 workspace 运行 `check/watch` 时不会再把父仓库 `../` 变更误带进结果；生成的 `.githooks/pre-commit` 也不会再写出坏掉的平台根路径或错误的 binary 路径。
 - `current_review_summary` 工具已显式支持 `limit` 参数，用于控制折叠进 `workbench_queue / repair_history / repair_workbench` 的最近审计记录条数。
 - Chrome 实机页在本轮已能刷新到 `🔮 风控4 审计3 — 全息观测站` 标题，说明最新 bundle 已被 localhost 页面加载；页面级 `Review Queue`、`门禁决策`、`多代理审计`、`自修复闭环`、`看证据 · 已就绪` 与 repair/apply 历史文案都已在同一 localhost 页面内出现。
 - `phase4:verify` 的 preview smoke 已尝试在脚本内起本地 preview 并抓取 `127.0.0.1:4174`，但当前环境对子进程绑定端口返回 `EPERM`；该失败已作为环境限制写入 evidence，而不是被当成代码失败吞掉。
@@ -33,7 +38,7 @@ This section records the current truth for the adopted repo.
 
 ## Product Boundary
 
-- 旧公开 README 把项目讲成 HoloGram 代码星图工具；当前内部真源把代码图谱限定为风控 evidence plane。
+- 公开 README 已切到 `audit-risk` CLI 叙事；代码图谱被限定为风控 evidence plane，而不是产品主卖点。
 - 旧工具描述强调 Agent 与图谱互动；当前主线要求 Agent 服务于风险审查、解释、拦截和审计。
 - 旧环境示例包含平台 provider 字段；当前产品边界要求客户自带模型 API，密钥不得写入代码或文档。
 
@@ -41,7 +46,7 @@ This section records the current truth for the adopted repo.
 
 - 采用：深色 IDE 工作台、代码图谱分析、本地凭证/审计、Provider 抽象、权限门禁。
 - 暂不采用：把 HoloGram 作为产品名或最终叙事、把 3D 图谱作为唯一核心卖点、把模型 API 做成平台统一供应。
-- 暂不迁移：`README.md`、`docs/`、旧截图和安装说明。迁移它们属于公开产品语义变更，后续单独确认。
+- 暂不迁移：旧截图、安装说明和历史 HoloGram 基座文档的全部公开资产。它们仍属于公开产品语义变更，后续单独确认。
 
 ## Current Call Chains
 

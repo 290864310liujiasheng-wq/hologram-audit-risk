@@ -2,7 +2,7 @@
 # 端到端测试入口
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="${TEST_E2E_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 PASS=0
 FAIL=0
 
@@ -15,8 +15,9 @@ for test_script in "$SCRIPT_DIR"/test_*.sh; do
     if bash "$test_script"; then
         PASS=$((PASS + 1))
     else
+        exit_code=$?
         FAIL=$((FAIL + 1))
-        echo "FAIL (exit code $?)"
+        echo "FAIL (exit code $exit_code)"
     fi
 done
 

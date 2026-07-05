@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "sample_kind": "contract_fixture_not_live_capture",
+    "captured_from": null,
+    "captured_at": null,
+    "base_url": null,
+    "note": "这些是用于对齐 CLI 与服务端字段形状的合同样例，不是已采集的真实远端返回。拿到真实 auth/payment 服务后，必须用 dev-docs/auth-payment-live-verification.md 重新采集并替换或追加带 provenance 的样本。"
+  },
+  "auth_poll_approved": {
+    "status": "approved",
+    "auth_token": "opaque-token"
+  },
+  "auth_exchange_pro": {
+    "entitlement": {
+      "user_id": "user-1",
+      "plan": "pro_personal_monthly",
+      "features": ["observe", "notify"],
+      "issued_at": "2026-06-27T00:00:00Z",
+      "valid_until": "2026-08-01T00:00:00Z",
+      "device_id": "sha256-device-id",
+      "last_refresh_time": "2026-06-27T00:00:00Z",
+      "status": "active",
+      "next_billing_at": "2026-07-31T00:00:00Z"
+    },
+    "signature": "base64-signature"
+  },
+  "payment_query_pending": {
+    "entitlement": {
+      "user_id": "user-1",
+      "plan": "core_free",
+      "features": [],
+      "issued_at": "2026-06-27T00:00:00Z",
+      "valid_until": "2026-08-01T00:00:00Z",
+      "device_id": "sha256-device-id",
+      "last_refresh_time": "2026-06-27T00:00:00Z",
+      "status": "active",
+      "payment_pending": true,
+      "next_billing_at": "2026-07-31T00:00:00Z"
+    },
+    "signature": "base64-signature"
+  },
+  "entitlement_refresh_active": {
+    "entitlement": {
+      "user_id": "user-1",
+      "plan": "pro_personal_monthly",
+      "features": ["observe", "notify"],
+      "issued_at": "2026-06-27T00:00:00Z",
+      "valid_until": "2026-08-01T00:00:00Z",
+      "device_id": "sha256-device-id",
+      "last_refresh_time": "2026-06-28T00:00:00Z",
+      "status": "active",
+      "next_billing_at": "2026-07-31T00:00:00Z"
+    },
+    "signature": "base64-signature-refreshed"
+  },
+  "entitlement_refresh_revoked": {
+    "entitlement": {
+      "user_id": "user-1",
+      "plan": "pro_personal_monthly",
+      "features": ["observe"],
+      "issued_at": "2026-06-27T00:00:00Z",
+      "valid_until": "2026-08-01T00:00:00Z",
+      "device_id": "sha256-device-id",
+      "last_refresh_time": "2026-06-28T00:00:00Z",
+      "status": "revoked",
+      "next_billing_at": "2026-07-31T00:00:00Z"
+    },
+    "signature": "base64-signature-revoked"
+  }
+}

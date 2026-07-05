@@ -2,7 +2,7 @@
 
 ## Decision
 
-The single recommended architecture is：本地 IDE 工作台 + 代码证据引擎 + 风控审查核心 + 客户自带模型 provider + 权限/审计平面 + 可选多代理编排。
+The single recommended architecture is：CLI 风控入口 + 代码证据引擎 + 风控审查核心 + 客户自带模型 provider + 权限/审计平面 + 桌面管理后台 + 可选多代理编排。
 
 ```text
 Workspace / Git Diff / AI Tool Event
@@ -12,10 +12,10 @@ Workspace / Git Diff / AI Tool Event
   -> Risk Aggregator
   -> Gate Decision
   -> Audit Trail
-  -> UI Workbench / CLI / Future API
+  -> CLI Output / Hook / CI / Admin Console
 ```
 
-这条主线匹配当前仓库事实：已有 Rust 代码图谱引擎、Tauri 本地壳、前端 Agent 循环、Provider 抽象、权限门禁和审计日志。后续应把这些能力收束到“编码风控”产品语义，而不是继续扩散成通用图谱展示。
+这条主线匹配当前仓库事实：已有 Rust 代码图谱引擎、Tauri 本地壳、前端 Agent 循环、Provider 抽象、权限门禁和审计日志。后续应把这些能力收束到“CLI-first 的编码风控”产品语义，而不是继续扩散成通用图谱展示或桌面 IDE 主产品。
 
 ## Owner Layers
 
@@ -27,8 +27,8 @@ Workspace / Git Diff / AI Tool Event
 | Agent Plane | 工具调用、多轮审查、多代理并行、主代理汇总 | `src-ui/src/agent/` 起步，核心语义不得只留在 prompt |
 | Policy Plane | 规则包、严重级别、审批、禁止/询问/允许策略 | `src-ui/src/risk/rule-package.ts` 为当前统一 registry owner，`src-ui/src/agent/permission.ts` 只保留工具权限适配 |
 | Audit Plane | append-only 审计事件、证据引用、决策记录，以及统一审计查询读模型 | `src-tauri/src/audit.rs` 负责落盘，`src-ui/src/risk/audit-bridge.ts` 负责 normalized query truth |
-| Delivery Plane | workspace delivery manifest、headless check、machine-readable report、hook/CI 模板 | `engine/src/bin/hologram-risk-check.rs`、`src-ui/src/risk/delivery.ts`、`src-ui/scripts/phase5-delivery.ts` |
-| UI Plane | 深色 IDE 工作台，展示风险、解释、证据、审批 | `src-ui/src/ui/` |
+| Delivery Plane | CLI 命令面、workspace delivery manifest、machine-readable report、hook/CI 模板 | `engine/src/bin/hologram-risk-check.rs`、`src-ui/src/risk/delivery.ts`、`src-ui/scripts/phase5-delivery.ts` |
+| UI Plane | 深色桌面管理后台，展示规则、风险、证据、审批与报告 | `src-ui/src/ui/` |
 
 ## Forbidden Paths
 
@@ -86,17 +86,19 @@ Finding
 ## 不中断客户使用
 
 - 审查任务应可取消、可超时、可降级。
-- 模型失败不应导致 IDE 工作台不可用。
+- 模型失败不应导致 CLI 主路径或管理后台不可用。
 - 高风险动作才阻断；普通风险默认给解释和建议。
 - 审计写入失败不能假装成功，必须产生可见 degraded 状态。
 - 第五阶段接入的 CI / Git hooks / report export 必须消费 Delivery Plane，而不是重新在脚本里手拼 rule/audit/current-review 语义。
+- 日常开发主路径应优先通过 CLI 暴露；桌面壳只保留管理后台职责，不再承担主编码入口定位。
 
 ## 与旧 HoloGram 语义的关系
 
 - “代码星图”是 Evidence Plane 的一种展示和分析输入，不是产品主叙事。
 - “Agent 工具”是审查执行和解释通道，不是泛聊天卖点。
 - “约束门禁”应升级为规则/策略/gate decision 合同。
-- `README.md` 和 `docs/DATA_FLOW_ARCHITECTURE.md` 暂不迁移，作为现有基座说明和历史外部文档。
+- 桌面壳继续存在，但只作为管理后台基座，不再作为主产品叙事。
+- `docs/DATA_FLOW_ARCHITECTURE.md` 暂不迁移，作为现有基座说明和历史外部文档。
 
 ## 停止条件
 

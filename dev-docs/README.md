@@ -6,8 +6,8 @@
 
 ## 当前阶段
 
-- 阶段：第一、第二、第三、第四阶段已完成；当前进入第五阶段交付化，目标是把 workspace/provider/rule-package/audit 接入、headless report、CI/hook 和管理员导出推进成可复用的产品外层。
-- 当前状态：第五阶段已新增 headless `hologram-risk-check`、`phase5:init` / `phase5:report` / `phase5:verify`、workspace delivery manifest、hook/CI 模板与 machine-readable report 出口；前四阶段的规则系统、审计系统、工作台路径与 phase4 验证入口继续作为第五阶段底座。
+- 阶段：第一、第二、第三、第四阶段已完成；当前进入第五阶段交付化，目标是把 workspace/provider/rule-package/audit 接入、CLI report、CI/hook 和管理员导出推进成可复用的产品外层。
+- 当前状态：第五阶段已新增 `audit-risk` CLI 主入口与双层命令面，现阶段覆盖 `check/watch/diff/init/doctor` 主路径和 `report/rules/audit/verify` 次路径；前四阶段的规则系统、审计系统、工作台路径与 phase4 验证入口继续作为第五阶段底座。
 - 已完成交付：真源文档、`Review Core` 最小 owner、`CheckPanel` 风控摘要、审批写路径、审计读写链路、Agent 对当前审查/最近审计的读取能力、多代理聚合 owner、自修复 plan/proposal/apply/rollback owner、`current_review_summary` 扩展对象、`active_provider_readiness` 只读链路、CheckPanel 的多代理/自修复区块、repair audit 读路径、第三阶段 live provider / semantic repair / preflight / provider failure 证据，以及第四阶段已统一 `rule-package` registry / package metadata / policy snapshot 口径和 `AuditQueryResult` / `AuditRecord` 审计查询口径。
 - 本阶段真实项目证据：当前 repo 已生成 `hologram_graph.json`（`5017` 节点 / `9525` 边）、`.last_project`、`.hologram/audit.jsonl`；新增 [evidence/phase3-runtime-samples.json](evidence/phase3-runtime-samples.json) 记录 live deepseek proposal 成功样本、config/migration 语义修复样本、preflight 阻断样本与 provider 边界矩阵。
 - 当前 UI 方向：深色 IDE 工作台。
@@ -21,7 +21,9 @@
 - [domain-model.md](domain-model.md)：领域对象、状态流转、身份与审计关系。
 - [contracts.md](contracts.md)：审查任务、规则命中、拦截决策、审计事件、自修复计划等合同草案。
 - [phase4-productization.md](phase4-productization.md)：第四阶段四个产品化面的当前边界、已完成切片、剩余任务与停止条件。
-- [phase5-productization.md](phase5-productization.md)：第五阶段交付化边界、headless 接入面、CI/hook/admin 路径与停止条件。
+- [phase5-productization.md](phase5-productization.md)：第五阶段交付化边界、CLI 接入面、CI/hook/admin 路径与停止条件。
+- [personal-pro-auth-contract.md](personal-pro-auth-contract.md)：个人版 29 元/月的浏览器登录、支付确认、entitlement 缓存、刷新、撤销与 doctor 诊断合同。
+- [auth-payment-live-verification.md](auth-payment-live-verification.md)：拿到真实 auth/payment 服务后，如何对 poll/exchange/refresh/payment-query 做 fresh 验收，并补 29 元/月订单、支付回调、续费与撤销样本。
 - [phase4-manual-ui-checklist.md](phase4-manual-ui-checklist.md)：当 `phase4:verify` 的 preview smoke 受环境限制失败时，补做 localhost 页面级 UI 验收的固定步骤与标记。
 - [acceptance.md](acceptance.md)：文档阶段验收、后续代码验收口径和漂移锁。
 - [evidence/phase3-runtime-samples.json](evidence/phase3-runtime-samples.json)：第三阶段 fresh 运行态证据，包含 live provider、semantic repair、preflight 与 provider failure 样本。

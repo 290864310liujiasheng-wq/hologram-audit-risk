@@ -201,6 +201,8 @@ interface AuditEvent {
 要求：
 
 - 审计是 append-only。
+- `.hologram/audit.jsonl` 的新记录必须带 `prev_hash` 与 `integrity_hash`，形成顺序哈希链。
+- 当历史文件里仍有旧格式记录时，新的链式记录允许把上一行原始 JSON 文本作为锚点继续追加，但导出报告必须明确这是 `legacy_anchor`，不能伪装成全量链式历史。
 - 不记录密钥、完整敏感源码或无关个人信息。
 - 如果只记录摘要，必须保留可追溯的 evidence 引用。
 
@@ -243,6 +245,32 @@ interface AuditQueryResult {
 - `records` 必须统一暴露 review / approval / repair 的 `stage`、`status`、`error`、`state_change`、`finding_ids`、`evidence_ids`。
 - repair proposal / approval / apply / rollback 的审计详情必须尽量带上 state change 与 evidence 引用，避免复盘时只能看到一句 reason。
 
+## Delivery Report Integrity Contract
+
+```ts
+interface DeliveryAuditIntegritySummary {
+  status: 'empty' | 'verified' | 'legacy_anchor' | 'failed';
+  verified: boolean;
+  entry_count: number;
+  chained_entry_count: number;
+  legacy_entry_count: number;
+  last_hash?: string;
+  issues: string[];
+}
+
+interface DeliveryReportSignature {
+  algorithm: 'sha256';
+  digest: string;
+}
+```
+
+要求：
+
+- `audit-risk report` 必须导出 `audit.integrity`，明确最近导出窗口内审计链是否可信。
+- 发现哈希链损坏时，`audit.integrity.status` 必须为 `failed`，并给出最小可定位的 `issues`。
+- 导出 JSON 必须附带 `report_signature`，用于对整个 machine-readable report 做二次校验。
+- `doctor` 与管理侧只读视图不得自定义另一套完整性口径，必须复用同一个 `audit.integrity` 结果。
+
 ## Workbench Summary Contract
 
 ```ts
@@ -271,6 +299,12 @@ interface RepairWorkbenchSnapshot {
   live_repair_reason?: string;
   generation_meta?: string;
   proposal?: string;
+  proposal_validation?: {
+    secondary_audit: string;
+    syntax_check: string;
+    logic_change: string;
+    blocked_message?: string;
+  };
   issue_badge?: string;
   issue_stage?: string;
   issue_summary?: string;
@@ -304,6 +338,7 @@ type CurrentReviewSummaryResponse =
 
 - `current_review_summary` 不得只返回原始 review state；至少要把 `workbench_queue` 与 `repair_history` 一起返回，保证只读工具和工作台消费同一条主路径真源。
 - `自修复闭环` 里使用的 provider/evidence/preflight/history 状态不应继续由 UI 组件自己判断；需要由 owner 层提供统一 `RepairWorkbenchSnapshot`。
+- repair proposal 一旦生成，必须先写入 `repair_proposal_validation` 再决定是否允许展示；UI 和只读工具不允许跳过这层 owner 结论直接显示 proposal。
 - `current_review_summary` 若支持 `limit` 之类折叠参数，tool schema、workspace executor 与文档口径必须一起更新，不能出现执行器支持但工具合同未声明的漂移。
 - clean review 的后续步骤必须显式收口为 `not_required`；retryable repair issue 必须显式收口为 `degraded`。
 
@@ -326,6 +361,112 @@ interface ProviderProfile {
   };
 }
 ```
+
+## CLI Command Contract
+
+```ts
+type CliCommandTier = 'primary' | 'secondary';
+type CliStatus = 'ok' | 'ready' | 'needs_attention' | 'error';
+
+interface CliStructuredEnvelope {
+  schema_version: 'audit-risk.cli.v1';
+  command:
+    | 'check'
+    | 'watch'
+    | 'diff'
+    | 'init'
+    | 'doctor'
+    | 'report'
+    | 'rules'
+    | 'audit'
+    | 'verify'
+    | 'notify';
+  generated_at: string;
+  workspace_root?: string;
+  status: CliStatus;
+}
+```
+
+补充命令面：
+
+- 人类界面命令：`audit-risk`（零参数首页）、`help`、`tour`、`check`、`diff`、`init`、`doctor`、`report`、`report --history-compare`、`notify --test`、`auth login/logout/status`、`observe`
+- 结构化 JSON 键名继续稳定英文；中文化要求只作用于人类可读终端输出
+
+命令分层：
+
+- primary：`check`、`watch`、`diff`、`init`、`doctor`
+- secondary：`report`、`rules`、`audit`、`verify`、`notify`
+
+默认输出：
+
+- `check` / `diff` / `init` / `doctor` / `report` / `notify --test`：默认输出中文人类页面；加 `--json` 时切回结构化 JSON
+- `rules` / `audit` / `verify`：JSON 到 `stdout`
+- `watch`：人类可读终端摘要；`--jsonl` 时输出结构化事件流
+
+退出码：
+
+- `0`：命令执行成功，结果低于当前 fail gate
+- `1`：未预期内部错误
+- `2`：命令执行成功，但 gate 达到失败阈值
+- `3`：环境或配置错误
+- `4`：CLI 用法错误
+
+要求：
+
+- 公共二进制名统一为 `audit-risk`；`hologram-risk-check` 只允许作为迁移期内部实现名存在，不能继续出现在正式文档和公共帮助里。
+- `watch --jsonl` 至少要保留 `session_started`、`check_completed`、`finding_emitted`、`finding_suppressed`、`gate_decided`、`session_error` 六类事件。
+- `watch` 默认只展示 `critical/high/medium`；`low/info` 仅在 `--verbose` 下允许进入人类可读摘要。
+- `watch` 必须按 `file_path + rule_id` 做防抖；同一文件同一规则 10 分钟内只允许输出一次，重复命中应进入 `finding_suppressed` 路径而不是持续刷屏。
+- `watch --observe` 必须启动本地只读观察页，并打印 `local_url`、`public_url` 与二维码图片路径；若外网/LAN 绑定受环境限制，必须显式写出 fallback note，而不是静默失败。
+- 零参数 `audit-risk` 不再直接报错；无论当前目录是不是 workspace，都先进入中文新手首页，并在 workspace 内同时展示当前目录状态、上次审查结果、Core/Pro 状态和推荐下一步。
+- `help`、`tour`、`auth status`、Pro gate 提示都必须用中文大白话；不能把英文冷错误直接暴露给最终用户。
+- `check`、`diff`、`init`、`doctor`、`report`、`notify --test` 的默认终端输出也必须走同一套中文产品壳；脚本或 hook 若要消费机器结果，必须显式传 `--json`。
+- `check` / `diff` 输出至少包含 `changed_files`、`analysis`、`review`、`audit_ref`。
+- `init` 输出必须列出 `created_files`。
+- `doctor` 输出必须区分 `ready`、`needs_attention`、`error`，并显式列出检查项、blockers 与 notes。
+- `doctor` 的最小检查项至少包含：CLI 版本、`git`/`cargo` 依赖完整性、workspace 可读性、`.hologram` 可写性、delivery config 可解析性、review/repair rule package 可加载性（含 `package_id/version`）、provider 配置就绪状态、audit 路径可写性。
+- `notify --test` 必须返回结构化结果，至少包含 `tested_url`、`http_status`、`ok`；未提供 webhook URL 时，允许从 `delivery.json.observe.webhook_url` 或环境变量读取。
+- `report --history-compare`、`observe`、`notify`、`watch --observe` 必须在命令入口第一层做 Pro entitlement gate；gate 失败时只返回中文提示，不进入任何真实功能逻辑。
+- secondary 命令允许在迁移期复用现有 phase5 壳，但公共命令面只能由 Rust CLI owner 定义，不能再由 TS 脚本私自扩字段或改退出码。
+
+## Personal Pro Entitlement Contract
+
+```ts
+type PersonalEntitlementState =
+  | 'active'
+  | 'grace'
+  | 'expired'
+  | 'revoked'
+  | 'device_mismatch'
+  | 'missing'
+  | 'invalid';
+
+interface PersonalEntitlement {
+  user_id: string;
+  plan: 'core_free' | 'pro_personal_monthly';
+  features: string[];
+  issued_at: string;
+  valid_until: string;
+  device_id: string;
+  last_refresh_time: string;
+  status: 'active' | 'revoked';
+  payment_pending?: boolean;
+  next_billing_at?: string;
+}
+```
+
+要求：
+
+- 本地 entitlement 目录固定为 `{app_support_dir}/audit-risk/entitlement/`，最少包含 `entitlement.json`、`entitlement.sig`、`device_secret` 三个文件。
+- `session.json` 为登录中会话缓存，至少包含 `session_id / status / created_at / expires_at / poll_url / exchange_url / login_url`；`expires_at` 过期后不能继续显示“登录进行中”。
+- `device_secret` 为首次登录生成的本机随机值，独立文件保存；丢失或 `device_id` 不匹配后必须进入 `device_mismatch`，提示重新 `audit-risk auth login`。
+- 服务端 entitlement 的 `status` 当前只接受 `active / revoked`；本地状态机固定为 `active / grace / expired / revoked / device_mismatch / missing / invalid`，其中 `grace/expired` 由 `valid_until` 与 72 小时宽限期派生，未知远端 status 必须进入 `invalid`，不能放行 Pro。
+- `payment_pending=true` 且 `plan=core_free` 时，`auth status` 必须显示“支付确认中”，不能退回泛化未登录。
+- `auth login` 的浏览器流程、邮箱/手机号验证码、微信支付/支付宝、`GET /api/auth/poll`、`POST /api/auth/exchange`、`POST /api/entitlement/refresh` 的接口合同已经冻结，但当前 Core 仓库在服务端未接入前只能实现 CLI 侧合同与状态读取，不能伪造 Pro 成功态。
+- `auth status` 输出必须固定显示登录状态、当前版本、有效期/宽限期、设备绑定、开通方式或取消方式。
+- `delivery.json.auth.base_url` 是 `auth login`、`auth status` stale entitlement refresh 与 `doctor` 的首选服务地址；环境变量 `AUDIT_RISK_AUTH_BASE_URL` 只作为回退。
+- `doctor` 至少暴露 `auth_service` 与 `entitlement_cache`，其中服务失败要结构化到 `network_unreachable / bad_json / timeout / auth_service_error`。
+- `observe`、`notify` 等 Pro 能力由授权系统控制，不依赖加壳、混淆或“防护锁”作为主方案。
 
 ## Delivery Integration Contract
 
@@ -353,6 +494,9 @@ interface DeliveryConfig {
     jsonl_path: string;
     report_output_path: string;
     recent_limit: number;
+  };
+  auth: {
+    base_url: string;
   };
   automation: {
     verify_commands: string[];
@@ -398,9 +542,11 @@ interface DeliveryMachineReport {
 要求：
 
 - `delivery.json` 是 workspace/provider/rule-package/audit 接入真源，不依赖 UI 文案或 README 推断。
+- `delivery.json.auth.base_url` 是 CLI 侧 auth 服务地址的首选真源；环境变量 `AUDIT_RISK_AUTH_BASE_URL` 只作为回退，不应成为长期唯一配置入口。
+- Rust CLI owner 与 `src-ui/src/risk/delivery.ts` 必须对 `delivery.json.auth.base_url` 保持同一合同，禁止一边支持 auth 配置、另一边仍生成旧模板。
 - workspace rule package 文件缺失时，系统回退到默认 policy，而不是把“未自定义扩展”误判为交付失败。
 - machine report 必须同时包含 current review、normalized audit、active policy 和 automation fail gate。
-- pre-commit / CI 都只能消费 `phase5:report` 或其下游 Delivery Plane，而不是各写一套私有脚本逻辑。
+- pre-commit / CI 都只能消费 `audit-risk report` 或其下游 Delivery Plane，而不是各写一套私有脚本逻辑。
 
 要求：
 
@@ -510,6 +656,34 @@ interface RepairGenerationMetadata {
 
 - live proposal 生成成功或失败时，都应尽量记录 provider/model/file_count/high-severity focus，作为运行态证据留口。
 - 这类元数据属于 owner 层读模型，不应由 UI 文案或 prompt 临时拼接。
+
+## RepairProposalValidationSummary Contract
+
+```ts
+interface RepairProposalValidationSummary {
+  secondary_audit: {
+    passed: boolean;
+    summary: string;
+  };
+  syntax_check: {
+    passed: boolean;
+    summary: string;
+  };
+  logic_change: {
+    summary: string;
+  };
+  blocked: boolean;
+  blocked_reason?: string;
+}
+```
+
+要求：
+
+- 所有 AI 生成的 repair proposal 在展示给用户前，必须先经过二次审计和快速语法检查。
+- 成功展示时，至少要有三条显式输出：`✅ 二次审计通过`、`✅ 语法检查通过`、`⚠️ 逻辑变更提示 ...`。
+- 若二次审计判定 proposal 引入新风险，必须直接阻断展示，并使用固定文案 `该修复方案引入了新的风险，已被系统自动拦截`。
+- 若快速语法检查失败，必须直接阻断展示，并使用固定文案 `该修复方案未通过语法检查，已被系统自动拦截`。
+- `blocked` / `blocked_reason` 属于 owner 层真相，不能让 UI 或 prompt 自行推断。
 
 ## RepairIssue Contract
 
