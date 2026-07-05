@@ -4,13 +4,55 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-287%20passed-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-357%20passed-brightgreen" /></a>
+  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?label=latest" /></a>
   <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
 > **AI 编码风控平台**
 >
 > 为 AI 生成的代码提供实时审查、规则拦截和不可篡改的审计证据。
+
+---
+
+## 安装
+
+**一行安装（macOS / Linux）：**
+
+```sh
+curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh
+```
+
+安装到自定义路径（不需要 sudo）：
+
+```sh
+curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh -s -- --prefix ~/.local
+```
+
+安装指定版本：
+
+```sh
+curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh -s -- --version v0.2.0
+```
+
+**手动下载：** 从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 页面下载对应平台的预编译二进制：
+
+| 平台 | 文件名 |
+|---|---|
+| macOS Apple Silicon | `audit-risk-macos-arm64` |
+| macOS Intel | `audit-risk-macos-x64` |
+| Linux x64 | `audit-risk-linux-x64` |
+| Linux ARM64 | `audit-risk-linux-arm64` |
+| Windows x64 | `audit-risk-windows-x64.exe` |
+
+**从源码构建：**
+
+```sh
+git clone https://github.com/834063245-creator/HoloGram.git
+cd HoloGram/engine
+cargo build --release --bin audit-risk
+# 二进制在 target/release/audit-risk
+```
 
 ---
 
