@@ -689,6 +689,26 @@ export class CheckPanel {
       sec.appendChild(proposal);
     }
 
+    if (snapshot.proposal_validation) {
+      const secondaryAudit = ce('div', 'check-vmore');
+      secondaryAudit.textContent = snapshot.proposal_validation.secondary_audit;
+      sec.appendChild(secondaryAudit);
+
+      const syntaxCheck = ce('div', 'check-vmore');
+      syntaxCheck.textContent = snapshot.proposal_validation.syntax_check;
+      sec.appendChild(syntaxCheck);
+
+      const logicChange = ce('div', 'check-vmore');
+      logicChange.textContent = snapshot.proposal_validation.logic_change;
+      sec.appendChild(logicChange);
+
+      if (snapshot.proposal_validation.blocked_message) {
+        const blocked = ce('div', 'check-vchange');
+        blocked.textContent = snapshot.proposal_validation.blocked_message;
+        sec.appendChild(blocked);
+      }
+    }
+
     if (snapshot.issue_badge && snapshot.issue_stage && snapshot.issue_summary) {
       const degraded = ce('div', 'check-gate-summary');
       const issueBadge = ce('span', `check-gate-badge ${snapshot.status_state === 'degraded' ? 'check-gate-mid' : 'check-gate-high'}`);

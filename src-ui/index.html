@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔮 全息观测站 — HoloGram Observatory</title>
+  <title>CodeInsight AI - 智能风控系统</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════════════════
        HOLOGRAM OBSERVATORY — Orbital Command Console
@@ -2963,6 +2963,643 @@
     #shortcuts-overlay .so-sep { width: 1px; background: rgba(60,90,140,0.12); align-self: stretch; }
 
 
+    /* ═══════════════════════════════════════════════════════════════
+       LIGHT WORKBENCH OVERRIDES — phase 5 shell alignment
+       ═══════════════════════════════════════════════════════════════ */
+    :root {
+      --toolbar-h: 72px;
+      --status-h: 34px;
+      --void: #f2f6fb;
+      --void-deep: #e9f0f8;
+      --panel-bg: rgba(255, 255, 255, 0.88);
+      --panel-edge: rgba(125, 152, 189, 0.28);
+      --starlight: #18263d;
+      --starlight-dim: rgba(38, 54, 79, 0.92);
+      --text-muted: rgba(76, 96, 126, 0.76);
+      --signal: #3579f6;
+      --signal-bright: #4a8eff;
+      --signal-glow: rgba(53, 121, 246, 0.16);
+      --sol: #f3a034;
+      --sol-bright: #ffb85c;
+      --nebula: #6a78f0;
+      --nebula-bright: #8391ff;
+      --font-hud: 'Outfit', 'Noto Sans SC', sans-serif;
+      --font-body: 'Noto Sans SC', 'PingFang SC', 'Helvetica Neue', sans-serif;
+      --blur: blur(18px);
+    }
+
+    html, body {
+      background:
+        radial-gradient(circle at top right, rgba(110, 168, 255, 0.22), transparent 30%),
+        radial-gradient(circle at bottom left, rgba(84, 189, 176, 0.18), transparent 28%),
+        linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
+      color: var(--starlight-dim);
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(120, 145, 182, 0.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(120, 145, 182, 0.08) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent 78%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    #space, #scanlines, #vignette { display: none; }
+
+    #toolbar {
+      height: var(--toolbar-h);
+      padding: 0 18px;
+      gap: 10px;
+      background: rgba(13, 26, 47, 0.9);
+      border-bottom: 1px solid rgba(117, 148, 189, 0.24);
+      box-shadow: 0 12px 32px rgba(15, 32, 58, 0.14);
+    }
+
+    .app-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 216px;
+      margin-right: 6px;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background:
+        radial-gradient(circle at 30% 30%, rgba(127, 216, 255, 0.98), rgba(53, 121, 246, 0.98) 58%, rgba(13, 26, 47, 0.9) 59%),
+        linear-gradient(135deg, rgba(74, 142, 255, 0.95), rgba(73, 205, 182, 0.9));
+      box-shadow: 0 10px 20px rgba(53, 121, 246, 0.22);
+      position: relative;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .brand-mark::after {
+      content: '';
+      position: absolute;
+      inset: 8px;
+      border-radius: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+    }
+
+    .brand-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .brand-copy strong {
+      color: rgba(244, 248, 255, 0.96);
+      font: 700 20px/1 var(--font-hud);
+      letter-spacing: 0.02em;
+    }
+
+    .brand-copy span {
+      color: rgba(176, 194, 225, 0.76);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    #mode-switch {
+      padding: 4px;
+      gap: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(120, 150, 190, 0.12);
+      border-radius: 14px;
+    }
+
+    .mode-btn {
+      width: 34px;
+      height: 30px;
+      border-radius: 10px;
+      color: rgba(192, 210, 239, 0.58);
+    }
+
+    .mode-btn.active {
+      color: #eef5ff;
+      background: linear-gradient(180deg, rgba(72, 142, 255, 0.95), rgba(53, 121, 246, 0.95));
+      box-shadow: 0 10px 18px rgba(53, 121, 246, 0.22);
+    }
+
+    #toolbar .sep {
+      height: 24px;
+      background: linear-gradient(to bottom, transparent, rgba(161, 184, 221, 0.34), transparent);
+    }
+
+    #toolbar button:not(.mode-btn) {
+      height: 34px;
+      padding: 0 12px;
+      color: rgba(219, 229, 246, 0.84);
+      border-radius: 11px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    #toolbar button:not(.mode-btn):hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    #search-wrap {
+      height: 40px;
+      min-width: 300px;
+      border: 1px solid rgba(144, 171, 206, 0.22);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    #search-input {
+      width: 280px;
+      height: 38px;
+      padding: 0 14px;
+      color: rgba(245, 249, 255, 0.94);
+      font-size: 11px;
+    }
+
+    #search-input::placeholder { color: rgba(183, 200, 228, 0.54); }
+
+    #search-btn {
+      width: 38px;
+      height: 38px;
+      border-left: 1px solid rgba(144, 171, 206, 0.16);
+      color: rgba(215, 227, 245, 0.7);
+    }
+
+    #tb-path {
+      display: inline-flex;
+      align-items: center;
+      max-width: 240px;
+      height: 34px;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(216, 226, 243, 0.74);
+      font-size: 10px;
+      border: 1px solid rgba(144, 171, 206, 0.14);
+    }
+
+    #graph {
+      top: calc(var(--toolbar-h) + 18px);
+      left: 268px;
+      right: 386px;
+      bottom: 226px;
+      border-radius: 28px;
+      overflow: hidden;
+      border: 1px solid rgba(143, 168, 205, 0.28);
+      background:
+        radial-gradient(circle at 50% 42%, rgba(86, 154, 255, 0.18), transparent 28%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 253, 0.94));
+      box-shadow:
+        0 26px 60px rgba(37, 63, 98, 0.12),
+        inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    }
+
+    #graph::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(126, 150, 186, 0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(126, 150, 186, 0.12) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.68), transparent 88%);
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    #graph::after {
+      content: '依赖图谱';
+      position: absolute;
+      top: 18px;
+      left: 22px;
+      z-index: 16;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(139, 164, 201, 0.22);
+      color: #1d314f;
+      font: 700 14px/1 var(--font-hud);
+      letter-spacing: 0.02em;
+      box-shadow: 0 12px 24px rgba(42, 65, 98, 0.08);
+    }
+
+    #graph-legend,
+    #graph-focus-banner,
+    #graph-tooltip,
+    #detail-card,
+    #shortcuts-overlay,
+    #timeline-panel,
+    #hotspots-panel,
+    #git-panel,
+    #constraints-panel,
+    #conflict-panel,
+    #terminal-panel,
+    #settings-panel,
+    #chat-panel,
+    #check-panel {
+      background: var(--panel-bg);
+      border: 1px solid rgba(142, 167, 204, 0.22);
+      box-shadow: 0 18px 38px rgba(33, 57, 92, 0.12);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+    }
+
+    #graph-legend {
+      left: 18px;
+      bottom: 18px;
+      color: #425573;
+    }
+
+    .node-label,
+    .galaxy-label {
+      text-shadow: 0 1px 2px rgba(255, 255, 255, 0.75), 0 0 10px rgba(103, 150, 230, 0.22);
+    }
+
+    #welcome {
+      top: calc(var(--toolbar-h) + 18px);
+      left: 300px;
+      right: 412px;
+      bottom: 258px;
+      border-radius: 28px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(242, 247, 253, 0.96));
+      border: 1px solid rgba(143, 168, 205, 0.24);
+      box-shadow: 0 26px 60px rgba(37, 63, 98, 0.12);
+      color: #1b2b43;
+    }
+
+    #welcome h1 {
+      font-family: var(--font-hud);
+      font-size: 42px;
+      letter-spacing: 0.02em;
+      color: #1d314f;
+    }
+
+    #welcome p {
+      color: rgba(78, 97, 125, 0.82);
+      font-size: 14px;
+    }
+
+    #welcome .big-btn {
+      height: 52px;
+      padding: 0 24px;
+      border-radius: 16px;
+      border: 1px solid rgba(84, 129, 204, 0.22);
+      background: linear-gradient(180deg, #4a8eff, #3579f6);
+      color: #f8fbff;
+      box-shadow: 0 16px 28px rgba(53, 121, 246, 0.2);
+    }
+
+    #chat-panel {
+      top: calc(var(--toolbar-h) + 18px);
+      right: 18px;
+      bottom: 18px;
+      width: 356px;
+      max-width: calc(100vw - 36px);
+      transform: translateX(104%);
+      border-radius: 28px;
+      overflow: hidden;
+      box-shadow:
+        0 22px 48px rgba(33, 57, 92, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.62);
+    }
+
+    #chat-panel.chat-open { transform: translateX(0); }
+
+    .chat-header,
+    .chat-input-area,
+    .chat-footer,
+    .chat-session-tabs,
+    .chat-history-panel {
+      background: transparent;
+      border-color: rgba(142, 167, 204, 0.18);
+    }
+
+    .chat-title,
+    .chat-session-tab.active,
+    .chat-model-badge,
+    .chat-mode-badge {
+      color: #1e3150;
+    }
+
+    .chat-header {
+      padding: 14px 16px 10px;
+    }
+
+    .chat-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .chat-session-tab {
+      font-size: 10px;
+      padding: 6px 10px;
+      color: rgba(78, 97, 125, 0.72);
+      border-radius: 10px;
+    }
+
+    .chat-session-tab.active {
+      background: rgba(74, 142, 255, 0.12);
+      border-color: rgba(74, 142, 255, 0.18);
+      color: #23406b;
+    }
+
+    .chat-messages,
+    .chat-history-list,
+    .chat-input {
+      background: transparent;
+      color: #2b3f5f;
+    }
+
+    .chat-messages {
+      padding: 12px 14px 16px;
+      gap: 12px;
+      background:
+        linear-gradient(180deg, rgba(248, 251, 255, 0.8), rgba(244, 248, 252, 0.92));
+    }
+
+    .msg-bubble {
+      max-width: 100%;
+      padding: 12px 14px;
+      font-size: 12px;
+      line-height: 1.7;
+      border-radius: 14px;
+    }
+
+    .msg-bubble.user {
+      background: linear-gradient(180deg, #4f8fff, #3b7af3);
+      border: 1px solid rgba(66, 124, 231, 0.2);
+      color: #f8fbff;
+      border-radius: 14px;
+      box-shadow: 0 12px 24px rgba(59, 122, 243, 0.14);
+    }
+
+    .msg-bubble.assistant {
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid rgba(142, 167, 204, 0.18);
+      color: #31445f;
+      border-radius: 14px;
+      box-shadow: 0 12px 24px rgba(44, 67, 99, 0.06);
+    }
+
+    .chat-input {
+      border-radius: 18px;
+      border: 1px solid rgba(142, 167, 204, 0.22);
+      background: rgba(245, 248, 252, 0.88);
+    }
+
+    .chat-send-btn {
+      background: linear-gradient(180deg, #4a8eff, #3579f6);
+      color: #f8fbff;
+    }
+
+    .chat-stop-btn {
+      background: rgba(229, 92, 92, 0.12);
+      color: #bb4e4e;
+    }
+
+    #check-panel {
+      left: 268px;
+      right: 404px;
+      bottom: 18px;
+      height: 192px;
+      border-radius: 24px;
+      transform: translateY(120%);
+      overflow: hidden;
+      box-shadow:
+        0 18px 38px rgba(33, 57, 92, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.66);
+    }
+
+    #check-panel.check-open { transform: translateY(0); }
+
+    .check-tab {
+      background: rgba(255, 255, 255, 0.9);
+      color: #233552;
+      border-color: rgba(142, 167, 204, 0.2);
+    }
+
+    .check-content,
+    .check-section,
+    .check-history-banner {
+      background: transparent;
+      color: #30435f;
+      border-color: rgba(142, 167, 204, 0.16);
+    }
+
+    .check-content {
+      padding: 10px 14px 14px;
+      gap: 8px;
+      background:
+        linear-gradient(180deg, rgba(251, 253, 255, 0.92), rgba(246, 249, 253, 0.94));
+    }
+
+    .check-section {
+      background: rgba(255, 255, 255, 0.76);
+      border-color: rgba(142, 167, 204, 0.14);
+      border-radius: 14px;
+    }
+
+    .check-section-title,
+    .check-tab-label {
+      color: #4c6486;
+      letter-spacing: 0.04em;
+    }
+
+    .check-file-item,
+    .check-stat {
+      background: rgba(239, 245, 252, 0.86);
+      color: #2c4262;
+      border-color: rgba(142, 167, 204, 0.12);
+    }
+
+    #status {
+      height: var(--status-h);
+      padding: 0 18px;
+      background: rgba(255, 255, 255, 0.72);
+      border-top: 1px solid rgba(142, 167, 204, 0.18);
+      color: #50627f;
+      box-shadow: 0 -8px 20px rgba(33, 57, 92, 0.06);
+    }
+
+    #left-tabs,
+    #right-tabs,
+    #bottom-tabs {
+      background: rgba(255, 255, 255, 0.76);
+      border-color: rgba(142, 167, 204, 0.18);
+      box-shadow: 0 12px 24px rgba(33, 57, 92, 0.08);
+    }
+
+    #left-tabs,
+    #right-tabs {
+      display: none !important;
+    }
+
+    #bottom-tabs {
+      left: 50%;
+      bottom: calc(var(--status-h) + 8px);
+      transform: translateX(-50%);
+      padding: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .dock-tab {
+      color: rgba(71, 92, 124, 0.74);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+
+    .dock-tab.active {
+      color: #1e3150;
+      background: rgba(74, 142, 255, 0.12);
+      box-shadow: none;
+    }
+
+    .dock-tab:hover { background: rgba(74, 142, 255, 0.08); }
+
+    #file-tree-panel {
+      position: fixed !important;
+      top: calc(var(--toolbar-h) + 18px) !important;
+      left: 18px !important;
+      bottom: 18px !important;
+      width: 232px !important;
+      z-index: 40 !important;
+      display: flex !important;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(245, 249, 253, 0.94)) !important;
+      border: 1px solid rgba(142, 167, 204, 0.22) !important;
+      border-radius: 24px !important;
+      box-shadow: 0 22px 46px rgba(33, 57, 92, 0.1) !important;
+      overflow: hidden;
+    }
+
+    .ft-header {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid rgba(142, 167, 204, 0.16);
+      font-size: 12px;
+      color: #415572;
+      background: rgba(250, 252, 255, 0.84);
+    }
+
+    .ft-tree {
+      padding: 8px 0 12px;
+      background: transparent;
+      font-size: 12px;
+    }
+
+    .ft-row {
+      min-height: 32px;
+      padding: 6px 12px 6px var(--indent, 12px);
+      border-left-width: 3px;
+    }
+
+    .ft-row:hover {
+      background: rgba(74, 142, 255, 0.08);
+      border-left-color: rgba(74, 142, 255, 0.42);
+    }
+
+    .ft-name-dir {
+      color: #20324d;
+      font-weight: 600;
+    }
+
+    .ft-name-file {
+      color: #536987;
+    }
+
+    .ft-arrow,
+    .ft-icon,
+    .ft-header-btn {
+      color: #7087aa;
+    }
+
+    @media (max-width: 1480px) {
+      #graph,
+      #welcome {
+        left: 246px;
+        right: 360px;
+      }
+
+      #check-panel {
+        left: 246px;
+        right: 378px;
+      }
+
+      #chat-panel {
+        width: 332px;
+      }
+    }
+
+    @media (max-width: 1180px) {
+      #graph,
+      #welcome {
+        left: 18px;
+        right: 18px;
+        bottom: 272px;
+      }
+
+      #chat-panel {
+        top: auto;
+        left: 18px;
+        right: 18px;
+        width: auto;
+        height: 34vh;
+        bottom: 18px;
+        transform: translateY(112%);
+      }
+
+      #chat-panel.chat-open { transform: translateY(0); }
+
+      #check-panel {
+        left: 18px;
+        right: 18px;
+        bottom: calc(18px + 34vh + 14px);
+      }
+
+      #file-tree-panel {
+        width: calc(100vw - 36px) !important;
+        right: 18px !important;
+        left: 18px !important;
+        bottom: auto !important;
+        height: 32vh !important;
+      }
+
+      .app-brand,
+      #tb-path,
+      #toolbar .sep:nth-of-type(n+6) {
+        display: none;
+      }
+
+      #toolbar {
+        gap: 6px;
+        padding: 0 12px;
+      }
+
+      #search-wrap {
+        min-width: 0;
+        flex: 1;
+      }
+
+      #search-input {
+        width: 100%;
+      }
+
+      #bottom-tabs {
+        display: flex !important;
+      }
+    }
+
     .hidden { display: none !important; }
   </style>
 </head>
@@ -2987,6 +3624,13 @@
        TOOLBAR
        ═══════════════════════════════════════════════════════════════ -->
   <div id="toolbar">
+    <div class="app-brand">
+      <span class="brand-mark"></span>
+      <div class="brand-copy">
+        <strong>CodeInsight AI</strong>
+        <span>智能风控系统</span>
+      </div>
+    </div>
     <div id="mode-switch">
       <button class="mode-btn" data-mode="files" data-icon="mode-minimal" title="文件视图"></button>
       <button class="mode-btn active" data-mode="standard" data-icon="mode-standard" title="标准星图"></button>
@@ -3014,7 +3658,7 @@
     <span class="sep"></span>
     <span class="spacer"></span>
     <div id="search-wrap">
-      <input id="search-input" type="text" placeholder="SEARCH SYMBOL…" autocomplete="off" spellcheck="false" />
+      <input id="search-input" type="text" placeholder="搜索文件、节点、提交、问题…" autocomplete="off" spellcheck="false" />
       <button id="search-btn" data-icon="search"></button>
     </div>
     <span class="sep"></span>
@@ -3026,9 +3670,9 @@
        WELCOME
        ═══════════════════════════════════════════════════════════════ -->
   <div id="welcome">
-    <h1>◈ HOLOGRAM</h1>
-    <p>DEEP SPACE CODE TOPOLOGY · AI-ASSISTED ANALYSIS</p>
-    <button class="big-btn" id="btn-welcome-open">◈ INITIALIZE WORKSPACE</button>
+    <h1>智能风控系统</h1>
+    <p>把项目树、依赖图谱、风险简报和 AI 助手收进同一个亮色工作台。</p>
+    <button class="big-btn" id="btn-welcome-open">打开项目并开始分析</button>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════

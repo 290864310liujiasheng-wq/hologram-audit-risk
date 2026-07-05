@@ -1,5 +1,6 @@
 import type { GateDecision, RepairPlan, ReviewFinding, Severity, ValidationCommandResult } from './review-core';
 import type { RepairGenerationMetadata } from './self-heal';
+import type { RepairProposalValidationSummary } from './review-core';
 import type { RiskCheckResult } from './check-adapter';
 import { summarizeSeverityCounts } from './check-adapter';
 
@@ -51,6 +52,7 @@ export interface RepairAuditPayload {
     operation_count?: number;
     required_tests?: string[];
     generation_meta?: RepairGenerationMetadata;
+    proposal_validation?: RepairProposalValidationSummary;
     remember?: boolean;
     rollback_id?: string;
     gate_decision?: string;
@@ -76,6 +78,9 @@ export interface RecentAuditEntry {
   action: string;
   reason: string;
   details?: Record<string, unknown>;
+  prev_hash?: string | null;
+  integrity_hash?: string;
+  raw_line?: string;
 }
 
 export interface AuditRecord {

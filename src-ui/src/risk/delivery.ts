@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   buildAuditQueryResult,
   type AuditQueryResult,
@@ -32,6 +33,9 @@ export interface DeliveryConfig {
     report_output_path: string;
     recent_limit: number;
   };
+  auth: {
+    base_url: string;
+  };
   automation: {
     verify_commands: string[];
     pre_commit_hook: string;
@@ -62,10 +66,13 @@ export interface DeliveryMachineReport {
     repair: ResolvedRulePolicy;
   };
   current_review: ReturnType<typeof buildCurrentReviewSummaryResponse>;
-  audit: AuditQueryResult;
+  audit: AuditQueryResult & {
+    integrity: DeliveryAuditIntegritySummary;
+  };
   automation: DeliveryConfig['automation'] & {
     should_fail: boolean;
   };
+  report_signature: DeliveryReportSignature;
 }
 
 type StringEnv = Record<string, string | undefined>;
@@ -88,6 +95,21 @@ export interface DeliveryDoctorReport {
   overall_status: 'ready' | 'needs_attention';
   blockers: string[];
   notes: string[];
+}
+
+export interface DeliveryAuditIntegritySummary {
+  status: 'empty' | 'verified' | 'legacy_anchor' | 'failed';
+  verified: boolean;
+  entry_count: number;
+  chained_entry_count: number;
+  legacy_entry_count: number;
+  last_hash?: string;
+  issues: string[];
+}
+
+export interface DeliveryReportSignature {
+  algorithm: 'sha256';
+  digest: string;
 }
 
 export function createDefaultDeliveryConfig(workspaceRoot: string): DeliveryConfig {
@@ -115,12 +137,13 @@ export function createDefaultDeliveryConfig(workspaceRoot: string): DeliveryConf
       report_output_path: '.hologram/latest-risk-report.json',
       recent_limit: 20,
     },
+    auth: {
+      base_url: '',
+    },
     automation: {
       verify_commands: [
-        'node --import tsx src/risk/test-risk.ts',
-        'npx tsc --noEmit',
-        'npm run build',
-        'cargo check',
+        'audit-risk check . --fail-on block',
+        'audit-risk doctor .',
       ],
       pre_commit_hook: '.githooks/pre-commit',
       ci_workflow: '.github/workflows/hologram-risk.yml',
@@ -144,6 +167,9 @@ export function validateDeliveryConfig(config: DeliveryConfig): void {
   }
   if (!config.audit.jsonl_path.trim() || !config.audit.report_output_path.trim()) {
     throw new Error('Delivery config requires audit jsonl and report output paths.');
+  }
+  if (typeof config.auth.base_url !== 'string') {
+    throw new Error('Delivery config requires auth.base_url.');
   }
   if (config.audit.recent_limit <= 0) {
     throw new Error('Delivery config requires audit.recent_limit > 0.');
@@ -241,14 +267,14 @@ export function buildDeliveryMachineReport(input: {
   });
   const provider = buildDeliveryProviderStatus(input.config, input.env);
   const audit = buildAuditQueryResult({ entries: input.auditEntries });
+  const auditIntegrity = buildDeliveryAuditIntegritySummary(input.auditEntries);
   const reviewState = buildCurrentReviewState({
     result: input.checkResult,
     workspace_path: input.config.workspace.root,
     review_policy: policies.review,
   });
   const currentReview = buildCurrentReviewSummaryResponse(reviewState, audit.records);
-
-  return {
+  const reportWithoutSignature = {
     generated_at: input.generatedAt,
     workspace: {
       ...input.config.workspace,
@@ -258,7 +284,10 @@ export function buildDeliveryMachineReport(input: {
     provider,
     policies,
     current_review: currentReview,
-    audit,
+    audit: {
+      ...audit,
+      integrity: auditIntegrity,
+    },
     automation: {
       ...input.config.automation,
       should_fail: shouldFailDeliveryGate({
@@ -266,6 +295,11 @@ export function buildDeliveryMachineReport(input: {
         threshold: input.config.automation.fail_on_decision,
       }),
     },
+  };
+
+  return {
+    ...reportWithoutSignature,
+    report_signature: buildDeliveryReportSignature(reportWithoutSignature),
   };
 }
 
@@ -332,6 +366,12 @@ export function buildDeliveryDoctorReport(input: {
     blockers.push(input.report.provider.reason);
   }
 
+  if (input.report.audit.integrity.status === 'failed') {
+    blockers.push(`Audit log integrity verification failed: ${input.report.audit.integrity.issues.join('; ')}`);
+  } else if (input.report.audit.integrity.status === 'legacy_anchor') {
+    notes.push('Audit log integrity is verified from the first chained entry forward; earlier legacy lines are only anchor-linked.');
+  }
+
   if (input.report.current_review.status === 'ok') {
     const decision = input.report.current_review.review.gate_decision.decision;
     if (decision === 'block' || decision === 'require_approval') {
@@ -359,6 +399,111 @@ export function buildDeliveryDoctorReport(input: {
     blockers,
     notes,
   };
+}
+
+function buildDeliveryAuditIntegritySummary(entries: RecentAuditEntry[]): DeliveryAuditIntegritySummary {
+  if (entries.length === 0) {
+    return {
+      status: 'empty',
+      verified: true,
+      entry_count: 0,
+      chained_entry_count: 0,
+      legacy_entry_count: 0,
+      issues: [],
+    };
+  }
+
+  const issues: string[] = [];
+  let chainedEntryCount = 0;
+  let legacyEntryCount = 0;
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = normalizeAuditIntegrityEntry(entries[index]);
+    const previous = index > 0 ? normalizeAuditIntegrityEntry(entries[index - 1]) : undefined;
+
+    if (!entry.integrity_hash) {
+      legacyEntryCount += 1;
+      continue;
+    }
+
+    chainedEntryCount += 1;
+    const expectedPrevHash = previous
+      ? previous.integrity_hash || hashAuditLine(previous.raw_line || JSON.stringify(buildRawAuditLine(previous)))
+      : null;
+    if ((entry.prev_hash || null) !== expectedPrevHash) {
+      issues.push(`${entry.tool}@${entry.ts} has mismatched prev_hash.`);
+    }
+
+    const expectedIntegrityHash = hashAuditLine(JSON.stringify(buildRawAuditLine(entry)));
+    if (entry.integrity_hash !== expectedIntegrityHash) {
+      issues.push(`${entry.tool}@${entry.ts} has mismatched integrity_hash.`);
+    }
+  }
+
+  const lastHash = [...entries]
+    .reverse()
+    .map((entry) => normalizeAuditIntegrityEntry(entry))
+    .find((entry) => entry.integrity_hash)?.integrity_hash;
+  const status = issues.length > 0
+    ? 'failed'
+    : legacyEntryCount > 0
+      ? 'legacy_anchor'
+      : 'verified';
+
+  return {
+    status,
+    verified: issues.length === 0,
+    entry_count: entries.length,
+    chained_entry_count: chainedEntryCount,
+    legacy_entry_count: legacyEntryCount,
+    last_hash: lastHash,
+    issues,
+  };
+}
+
+function buildDeliveryReportSignature(report: Omit<DeliveryMachineReport, 'report_signature'>): DeliveryReportSignature {
+  return {
+    algorithm: 'sha256',
+    digest: hashAuditLine(JSON.stringify(report)),
+  };
+}
+
+function normalizeAuditIntegrityEntry(entry: RecentAuditEntry) {
+  return {
+    ts: entry.ts,
+    tool: entry.tool,
+    path: entry.path,
+    action: entry.action,
+    reason: entry.reason,
+    details: entry.details,
+    prev_hash: entry.prev_hash ?? null,
+    integrity_hash: typeof entry.integrity_hash === 'string' ? entry.integrity_hash : undefined,
+    raw_line: typeof entry.raw_line === 'string' ? entry.raw_line : undefined,
+  };
+}
+
+function buildRawAuditLine(entry: {
+  ts: string;
+  tool: string;
+  path: string;
+  action: string;
+  reason: string;
+  details?: Record<string, unknown>;
+  prev_hash?: string | null;
+}) {
+  return {
+    ts: entry.ts,
+    tool: entry.tool,
+    path: entry.path,
+    action: entry.action,
+    reason: entry.reason,
+    details: entry.details,
+    prev_hash: entry.prev_hash ?? null,
+  };
+}
+
+function hashAuditLine(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 export function buildDeliveryInitFiles(input: {
@@ -391,10 +536,14 @@ function buildPreCommitHook(platformRoot: string): string {
   return `#!/bin/sh
 set -eu
 
-PLATFORM_ROOT="\${HOLOGRAM_PLATFORM_ROOT:-${platformRoot}}"
+PLATFORM_ROOT="\${AUDIT_RISK_PLATFORM_ROOT:-\${HOLOGRAM_PLATFORM_ROOT:-${platformRoot}}}"
 WORKSPACE_ROOT="\${1:-$PWD}"
 
-npm --prefix "$PLATFORM_ROOT/src-ui" run phase5:report -- --workspace "$WORKSPACE_ROOT" --config "$WORKSPACE_ROOT/.hologram/delivery.json" --output "$WORKSPACE_ROOT/.hologram/latest-risk-report.json" --fail-on block
+if [ -n "\${AUDIT_RISK_BIN:-}" ]; then
+  "\$AUDIT_RISK_BIN" report "$WORKSPACE_ROOT" --config "$WORKSPACE_ROOT/.hologram/delivery.json" --output "$WORKSPACE_ROOT/.hologram/latest-risk-report.json" --fail-on block
+else
+  cargo run --quiet --manifest-path "$PLATFORM_ROOT/engine/Cargo.toml" --bin audit-risk -- report "$WORKSPACE_ROOT" --config "$WORKSPACE_ROOT/.hologram/delivery.json" --output "$WORKSPACE_ROOT/.hologram/latest-risk-report.json" --fail-on block
+fi
 `;
 }
 
@@ -429,7 +578,7 @@ jobs:
       - name: Install Hologram platform UI dependencies
         run: npm --prefix "$GITHUB_WORKSPACE/.hologram/platform/src-ui" ci
       - name: Run machine-readable risk delivery report
-        run: npm --prefix "$GITHUB_WORKSPACE/.hologram/platform/src-ui" run phase5:report -- --workspace "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.hologram/delivery.json" --output "$RUNNER_TEMP/phase5-risk-report.json" --fail-on block
+        run: cargo run --quiet --manifest-path "$GITHUB_WORKSPACE/.hologram/platform/engine/Cargo.toml" --bin audit-risk -- report "$GITHUB_WORKSPACE" --config "$GITHUB_WORKSPACE/.hologram/delivery.json" --output "$RUNNER_TEMP/phase5-risk-report.json" --fail-on block
       - name: Upload risk delivery artifact
         uses: actions/upload-artifact@v4
         with:

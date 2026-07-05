@@ -213,7 +213,7 @@ export class FileTreePanel {
     this.filterInput.placeholder = '过滤文件…';
     Object.assign(this.filterInput.style, {
       width: '100%', padding: '3px 8px', margin: '0',
-      background: 'rgba(8,16,28,0.6)', border: '1px solid var(--panel-edge, rgba(48,60,80,0.3))',
+      background: 'rgba(245, 248, 252, 0.92)', border: '1px solid var(--panel-edge, rgba(142,167,204,0.3))',
       borderRadius: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px',
       color: 'var(--starlight-dim)', outline: 'none', flexShrink: '0',
     });

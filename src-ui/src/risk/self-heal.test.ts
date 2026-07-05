@@ -4,6 +4,7 @@ import {
   applyRepairPlan,
   buildRepairPreflightSummary,
   buildRepairGenerationMetadata,
+  inspectRepairProposalForReview,
   deriveRepairFilePaths,
   buildRepairIssueFromPreflight,
   getRepairGenerationBlocker,
@@ -148,6 +149,93 @@ test('buildRepairGenerationMetadata summarizes provider and high-severity focus 
   assert.equal(metadata.file_count, 2);
   assert.deepEqual(metadata.high_severity_finding_ids, ['finding-crit']);
   assert.deepEqual(metadata.focus_file_paths, ['src/a.ts', 'src/b.ts']);
+});
+
+test('inspectRepairProposalForReview returns explicit secondary audit, syntax, and logic change summaries', () => {
+  const proposal = parsePatchProposal(
+    '{"summary":"修复高风险写入","rationale":"把危险写入改成受控布尔分支并保持 patch 面最小。","operations":[{"file_path":"src/auth.ts","summary":"tighten guard path","new_content":"export const fixed = true;"}]}',
+    {
+      repair_plan_id: 'job-1:repair',
+      generated_at: '2026-06-26T00:00:00Z',
+    },
+  );
+
+  const inspection = inspectRepairProposalForReview({
+    job_id: 'job-1',
+    repair_plan_id: 'job-1:repair',
+    proposal,
+    findings: [
+      finding({
+        locations: [{ file_path: 'src/auth.ts', start_line: 12, end_line: 14 }],
+      }),
+    ],
+    policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
+    now: '2026-06-26T00:00:00Z',
+  });
+
+  assert.equal(inspection.summary.secondary_audit.passed, true);
+  assert.equal(inspection.summary.secondary_audit.summary, '✅ 二次审计通过');
+  assert.equal(inspection.summary.syntax_check.passed, true);
+  assert.equal(inspection.summary.syntax_check.summary, '✅ 语法检查通过');
+  assert.equal(
+    inspection.summary.logic_change.summary,
+    '⚠️ 逻辑变更提示：提案会改动 1 个文件并触达 1 条高风险 finding，请在审批前人工复核业务语义。',
+  );
+  assert.equal(inspection.summary.blocked, false);
+});
+
+test('inspectRepairProposalForReview blocks proposals that introduce new repair risk before user review', () => {
+  const proposal = parsePatchProposal(
+    '{"summary":"修复敏感配置","rationale":"直接改动敏感配置文件。","operations":[{"file_path":".env","summary":"rewrite sensitive file","new_content":"SECRET=next"}]}',
+    {
+      repair_plan_id: 'job-1:repair',
+      generated_at: '2026-06-26T00:00:00Z',
+    },
+  );
+
+  const inspection = inspectRepairProposalForReview({
+    job_id: 'job-1',
+    repair_plan_id: 'job-1:repair',
+    proposal,
+    findings: [
+      finding({
+        locations: [{ file_path: '.env', start_line: 1, end_line: 1 }],
+      }),
+    ],
+    policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
+    now: '2026-06-26T00:00:00Z',
+  });
+
+  assert.equal(inspection.summary.secondary_audit.passed, false);
+  assert.equal(inspection.summary.blocked, true);
+  assert.equal(inspection.summary.blocked_reason, '该修复方案引入了新的风险，已被系统自动拦截');
+});
+
+test('inspectRepairProposalForReview blocks proposals that fail syntax checks before user review', () => {
+  const proposal = parsePatchProposal(
+    '{"summary":"修复高风险写入","rationale":"保持 patch 范围最小。","operations":[{"file_path":"src/auth.ts","summary":"rewrite ts content","new_content":"export const = ;"}]}',
+    {
+      repair_plan_id: 'job-1:repair',
+      generated_at: '2026-06-26T00:00:00Z',
+    },
+  );
+
+  const inspection = inspectRepairProposalForReview({
+    job_id: 'job-1',
+    repair_plan_id: 'job-1:repair',
+    proposal,
+    findings: [
+      finding({
+        locations: [{ file_path: 'src/auth.ts', start_line: 12, end_line: 14 }],
+      }),
+    ],
+    policy_snapshot_id: buildRulePolicySnapshotId({ plane: 'repair' }),
+    now: '2026-06-26T00:00:00Z',
+  });
+
+  assert.equal(inspection.summary.syntax_check.passed, false);
+  assert.equal(inspection.summary.blocked, true);
+  assert.equal(inspection.summary.blocked_reason, '该修复方案未通过语法检查，已被系统自动拦截');
 });
 
 test('getRepairGenerationBlocker rejects empty finding sets before provider generation starts', () => {

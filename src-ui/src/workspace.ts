@@ -53,8 +53,10 @@ import {
   getRepairGenerationBlocker,
   RepairApplyError,
   RepairApplyExecutionError,
+  RepairProposalValidationError,
   rejectRepairPlan,
   rollbackRepairPlan as rollbackRepairPlanState,
+  validateRepairProposalForReview,
   type RepairGenerationInput,
 } from './risk/self-heal';
 import type { PatchProposal, RepairRollbackSnapshot, ValidationCommandResult } from './risk/review-core';
@@ -724,12 +726,23 @@ export class Workspace {
         findings: repairFindings,
         generated_at: generatedAt,
       });
+      const proposalValidation = validateRepairProposalForReview({
+        job_id: this.currentReviewState.repair_plan.job_id,
+        repair_plan_id: this.currentReviewState.repair_plan.repair_plan_id,
+        proposal,
+        findings: repairFindings,
+        policy_snapshot_id: buildRulePolicySnapshotId({
+          plane: 'repair',
+        }),
+        now: generatedAt,
+      });
       const repairPlan = attachPatchProposal(this.currentReviewState.repair_plan, proposal);
       this.currentPatchProposal = proposal;
       this.currentReviewState = attachRepairProposalToCurrentReview(this.currentReviewState, {
         repair_plan: repairPlan,
         patch_proposal: proposal,
         repair_generation_meta: generationMeta,
+        repair_proposal_validation: proposalValidation,
       });
       checkPanel.update(this.currentReviewState.check, this.currentReviewState);
       await this.appendRepairAudit(buildRepairAuditPayload({
@@ -744,6 +757,7 @@ export class Workspace {
           operation_count: proposal.operations.length,
           required_tests: repairPlan.required_tests,
           generation_meta: generationMeta,
+          proposal_validation: proposalValidation,
           finding_ids: repairFindings.map((finding) => finding.finding_id),
           evidence_ids: Array.from(new Set(repairFindings.flatMap((finding) => finding.evidence_ids))),
           state_change: {
@@ -774,6 +788,7 @@ export class Workspace {
       this.currentReviewState = attachRepairIssueToCurrentReview(this.currentReviewState, {
         issue,
         repair_generation_meta: generationMeta,
+        repair_proposal_validation: error instanceof RepairProposalValidationError ? error.summary : undefined,
       });
       checkPanel.update(this.currentReviewState.check, this.currentReviewState);
       await this.appendRepairAudit(buildRepairAuditPayload({
@@ -788,6 +803,7 @@ export class Workspace {
           error_stage: issue.stage,
           error_retryable: issue.error.retryable,
           generation_meta: generationMeta,
+          proposal_validation: error instanceof RepairProposalValidationError ? error.summary : undefined,
           finding_ids: this.currentReviewState.multi_agent_review.merged_findings.map((finding) => finding.finding_id),
           evidence_ids: Array.from(new Set(this.currentReviewState.multi_agent_review.merged_findings.flatMap((finding) => finding.evidence_ids))),
         },
@@ -795,6 +811,8 @@ export class Workspace {
       this.onStatusChange?.(
         issue.error.code === 'missing_evidence'
           ? '修复提案已阻断：当前风险没有可编辑源码输入'
+          : error instanceof RepairProposalValidationError && error.summary.blocked_reason
+            ? error.summary.blocked_reason
           : issue.summary,
       );
     }

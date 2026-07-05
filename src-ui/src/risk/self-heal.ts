@@ -1,9 +1,11 @@
 import type { Chunk, Provider, ProviderFailureCode } from '../provider/types';
 import { ChunkType } from '../provider/types';
+import ts from 'typescript';
 import type {
   ContractError,
   PatchOperation,
   PatchProposal,
+  RepairProposalValidationSummary,
   RepairExecutionStage,
   RepairIssue,
   RepairPreflightReport,
@@ -52,6 +54,12 @@ export interface RepairGenerationReadiness {
   reason: string;
   finding_count: number;
   file_count: number;
+}
+
+export interface RepairProposalReviewInspection {
+  summary: RepairProposalValidationSummary;
+  findings: ReviewFinding[];
+  gate_decision: ReturnType<typeof deriveGateDecision>;
 }
 
 export function deriveRepairFilePaths(input: {
@@ -129,6 +137,28 @@ export class RepairApplyExecutionError extends Error {
   }
 }
 
+export class RepairProposalValidationError extends Error {
+  readonly summary: RepairProposalValidationSummary;
+  readonly findings: ReviewFinding[];
+  readonly gate_decision: ReturnType<typeof deriveGateDecision>;
+  readonly contract_error: ContractError;
+
+  constructor(input: {
+    message: string;
+    summary: RepairProposalValidationSummary;
+    findings: ReviewFinding[];
+    gate_decision: ReturnType<typeof deriveGateDecision>;
+    contract_error: ContractError;
+  }) {
+    super(input.message);
+    this.name = 'RepairProposalValidationError';
+    this.summary = input.summary;
+    this.findings = input.findings;
+    this.gate_decision = input.gate_decision;
+    this.contract_error = input.contract_error;
+  }
+}
+
 export function buildRepairGenerationMetadata(input: {
   repair_plan_id: string;
   provider_name: string;
@@ -148,6 +178,88 @@ export function buildRepairGenerationMetadata(input: {
       .map((finding) => finding.finding_id),
     generated_at: input.generated_at,
   };
+}
+
+export function inspectRepairProposalForReview(input: {
+  job_id: string;
+  repair_plan_id: string;
+  proposal: PatchProposal;
+  findings: ReviewFinding[];
+  policy_snapshot_id: string;
+  now: string;
+}): RepairProposalReviewInspection {
+  const validationFindings = evaluateRepairProposal({
+    plan_id: input.repair_plan_id,
+    proposal: input.proposal,
+    findings: input.findings,
+  });
+  const gateDecision = deriveGateDecision({
+    job_id: input.job_id,
+    subject_type: 'repair_apply',
+    subject_ref: input.proposal.patch_proposal_id,
+    findings: validationFindings,
+    rules: resolveRulePolicy({ plane: 'repair' }).rules,
+    policy_snapshot_id: input.policy_snapshot_id,
+    decided_at: input.now,
+  });
+  const syntaxCheck = validatePatchProposalSyntax(input.proposal);
+  const highSeverityCount = input.findings.filter((finding) => finding.severity === 'critical' || finding.severity === 'high').length;
+  const logicSummary = `⚠️ 逻辑变更提示：提案会改动 ${input.proposal.operations.length} 个文件并触达 ${highSeverityCount} 条高风险 finding，请在审批前人工复核业务语义。`;
+  const secondaryAuditPassed = gateDecision.decision !== 'block' && gateDecision.decision !== 'require_approval';
+
+  let blockedReason: string | undefined;
+  if (!secondaryAuditPassed) {
+    blockedReason = '该修复方案引入了新的风险，已被系统自动拦截';
+  } else if (!syntaxCheck.passed) {
+    blockedReason = '该修复方案未通过语法检查，已被系统自动拦截';
+  }
+
+  return {
+    summary: {
+      secondary_audit: {
+        passed: secondaryAuditPassed,
+        summary: secondaryAuditPassed ? '✅ 二次审计通过' : '❌ 二次审计未通过',
+      },
+      syntax_check: {
+        passed: syntaxCheck.passed,
+        summary: syntaxCheck.passed ? '✅ 语法检查通过' : '❌ 语法检查未通过',
+      },
+      logic_change: {
+        summary: logicSummary,
+      },
+      blocked: Boolean(blockedReason),
+      blocked_reason: blockedReason,
+    },
+    findings: validationFindings,
+    gate_decision: gateDecision,
+  };
+}
+
+export function validateRepairProposalForReview(input: {
+  job_id: string;
+  repair_plan_id: string;
+  proposal: PatchProposal;
+  findings: ReviewFinding[];
+  policy_snapshot_id: string;
+  now: string;
+}): RepairProposalValidationSummary {
+  const inspection = inspectRepairProposalForReview(input);
+  if (!inspection.summary.blocked) {
+    return inspection.summary;
+  }
+
+  throw new RepairProposalValidationError({
+    message: inspection.summary.blocked_reason || 'Repair proposal validation failed.',
+    summary: inspection.summary,
+    findings: inspection.findings,
+    gate_decision: inspection.gate_decision,
+    contract_error: {
+      code: inspection.findings.length > 0 ? 'proposal_new_risk' : 'syntax_invalid',
+      message: inspection.summary.blocked_reason || 'Repair proposal validation failed.',
+      retryable: false,
+      evidence_ids: inspection.findings.flatMap((finding) => finding.evidence_ids),
+    },
+  });
 }
 
 export async function generatePatchProposalFromModel(
@@ -685,6 +797,10 @@ function validatePatchProposalAgainstInput(
 }
 
 function normalizeRepairError(error: unknown): ContractError {
+  if (error instanceof RepairProposalValidationError) {
+    return error.contract_error;
+  }
+
   if (isContractError(error)) {
     return error;
   }
@@ -869,6 +985,57 @@ function summarizeRepairError(stage: RepairExecutionStage, error: ContractError)
 
   const suffix = error.retryable ? '可重试。' : '需要先修正输入或配置。';
   return `${prefix}：${error.message} ${suffix}`;
+}
+
+function validatePatchProposalSyntax(proposal: PatchProposal): { passed: boolean; detail?: string } {
+  const failures: string[] = [];
+
+  for (const operation of proposal.operations) {
+    const filePath = normalizeRepairPath(operation.file_path);
+    const extension = filePath.split('.').pop()?.toLowerCase() || '';
+    const content = operation.new_content;
+
+    try {
+      if (extension === 'json') {
+        JSON.parse(content);
+        continue;
+      }
+
+      if (['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(extension)) {
+        const sourceFile = ts.createSourceFile(
+          filePath,
+          content,
+          ts.ScriptTarget.ES2022,
+          true,
+          extension === 'tsx'
+            ? ts.ScriptKind.TSX
+            : extension === 'jsx'
+              ? ts.ScriptKind.JSX
+              : extension === 'js' || extension === 'mjs' || extension === 'cjs'
+                ? ts.ScriptKind.JS
+                : ts.ScriptKind.TS,
+        );
+        const syntaxDiagnostics = ((sourceFile as unknown as { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics || [])
+          .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
+        if (syntaxDiagnostics.length > 0) {
+          failures.push(`${filePath}: ${ts.flattenDiagnosticMessageText(syntaxDiagnostics[0].messageText, '\n')}`);
+        }
+      }
+    } catch (error) {
+      failures.push(`${filePath}: ${String((error as Error).message || error)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    return {
+      passed: false,
+      detail: failures[0],
+    };
+  }
+
+  return {
+    passed: true,
+  };
 }
 
 function isContractError(value: unknown): value is ContractError {

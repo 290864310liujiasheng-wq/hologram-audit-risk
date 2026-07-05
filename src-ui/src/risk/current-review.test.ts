@@ -207,9 +207,24 @@ test('attachRepairProposalToCurrentReview preserves generation metadata for the 
       high_severity_finding_ids: ['finding-1'],
       generated_at: '2026-06-21T00:00:00Z',
     },
+    repair_proposal_validation: {
+      secondary_audit: {
+        passed: true,
+        summary: '✅ 二次审计通过',
+      },
+      syntax_check: {
+        passed: true,
+        summary: '✅ 语法检查通过',
+      },
+      logic_change: {
+        summary: '⚠️ 逻辑变更提示：提案会改动 1 个文件并触达 1 条高风险 finding，请在审批前人工复核业务语义。',
+      },
+      blocked: false,
+    },
   });
 
   assert.equal(next.repair_generation_meta?.model, 'claude-sonnet-4-6');
+  assert.equal(next.repair_proposal_validation?.secondary_audit.summary, '✅ 二次审计通过');
 });
 
 test('attachRepairPreflightIssueToCurrentReview keeps the proposal visible while surfacing the issue', () => {
@@ -349,6 +364,20 @@ test('buildCurrentReviewSummaryResponse includes the gate decision and generatio
       high_severity_finding_ids: ['finding-1'],
       generated_at: '2026-06-21T00:00:00Z',
     },
+    repair_proposal_validation: {
+      secondary_audit: {
+        passed: true,
+        summary: '✅ 二次审计通过',
+      },
+      syntax_check: {
+        passed: true,
+        summary: '✅ 语法检查通过',
+      },
+      logic_change: {
+        summary: '⚠️ 逻辑变更提示：提案会改动 1 个文件并触达 1 条高风险 finding，请在审批前人工复核业务语义。',
+      },
+      blocked: false,
+    },
   });
 
   const response = buildCurrentReviewSummaryResponse(next);
@@ -357,10 +386,63 @@ test('buildCurrentReviewSummaryResponse includes the gate decision and generatio
   if (response.status === 'ok') {
     assert.equal(response.review.gate_decision.decision, 'block');
     assert.equal(response.review.repair_generation_meta?.provider_name, 'anthropic');
+    assert.equal(response.review.repair_proposal_validation?.syntax_check.summary, '✅ 语法检查通过');
     assert.equal(response.workbench_queue[0]?.step_id, 'review');
     assert.equal(response.repair_history.length, 0);
     assert.equal(response.repair_workbench.status_state, 'draft');
   }
+});
+
+test('buildRepairWorkbenchSnapshot exposes explicit proposal validation lines for the UI', () => {
+  const state = buildCurrentReviewState({
+    result: sample,
+    workspace_path: '/tmp/workspace',
+  });
+  const withProposal = attachRepairProposalToCurrentReview(state, {
+    repair_plan: state.repair_plan,
+    patch_proposal: {
+      patch_proposal_id: 'job-1:repair:proposal',
+      repair_plan_id: state.repair_plan.repair_plan_id,
+      summary: '修复风险',
+      rationale: '缩小 patch 面',
+      generated_at: '2026-06-21T00:00:00Z',
+      operations: [{
+        operation_id: 'op-1',
+        file_path: 'src/auth.ts',
+        new_content: 'export const fixed = true;',
+        summary: 'tighten guard',
+      }],
+    },
+    repair_generation_meta: {
+      repair_plan_id: state.repair_plan.repair_plan_id,
+      provider_name: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      file_count: 1,
+      focus_file_paths: ['src/auth.ts'],
+      high_severity_finding_ids: ['finding-1'],
+      generated_at: '2026-06-21T00:00:00Z',
+    },
+    repair_proposal_validation: {
+      secondary_audit: {
+        passed: true,
+        summary: '✅ 二次审计通过',
+      },
+      syntax_check: {
+        passed: true,
+        summary: '✅ 语法检查通过',
+      },
+      logic_change: {
+        summary: '⚠️ 逻辑变更提示：提案会改动 1 个文件并触达 1 条高风险 finding，请在审批前人工复核业务语义。',
+      },
+      blocked: false,
+    },
+  });
+
+  const snapshot = buildRepairWorkbenchSnapshot(withProposal);
+
+  assert.equal(snapshot.proposal_validation?.secondary_audit, '✅ 二次审计通过');
+  assert.equal(snapshot.proposal_validation?.syntax_check, '✅ 语法检查通过');
+  assert.equal(snapshot.proposal_validation?.logic_change, '⚠️ 逻辑变更提示：提案会改动 1 个文件并触达 1 条高风险 finding，请在审批前人工复核业务语义。');
 });
 
 test('buildCurrentReviewSummaryResponse includes provider readiness when attached', () => {

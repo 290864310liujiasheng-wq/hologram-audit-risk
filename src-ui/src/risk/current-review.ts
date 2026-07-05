@@ -3,9 +3,22 @@ import { buildRepairHistory, type AuditRecord, type RepairHistoryItem } from './
 import { finalizeMultiAgentReview, type MultiAgentReview } from './multi-agent';
 import type { LiveRepairReadiness, ProviderReadiness } from '../provider/provider-readiness';
 import { resolveRulePolicy, type ResolvedRulePolicy } from './rule-package';
-import { buildRepairPreflightSummary, createRepairPlan, type RepairGenerationMetadata, type RepairGenerationReadiness } from './self-heal';
+import {
+  buildRepairPreflightSummary,
+  createRepairPlan,
+  type RepairGenerationMetadata,
+  type RepairGenerationReadiness,
+} from './self-heal';
 import { deriveGateDecision, type GateDecision } from './review-core';
-import type { PatchProposal, RepairIssue, RepairPlan, RepairPreflightReport, RepairRollbackSnapshot, ReviewFinding } from './review-core';
+import type {
+  PatchProposal,
+  RepairIssue,
+  RepairPlan,
+  RepairPreflightReport,
+  RepairProposalValidationSummary,
+  RepairRollbackSnapshot,
+  ReviewFinding,
+} from './review-core';
 
 export interface WorkbenchQueueItem {
   step_id: 'review' | 'gate' | 'evidence' | 'approval' | 'repair';
@@ -36,6 +49,12 @@ export interface RepairWorkbenchSnapshot {
   live_repair_reason?: string;
   generation_meta?: string;
   proposal?: string;
+  proposal_validation?: {
+    secondary_audit: string;
+    syntax_check: string;
+    logic_change: string;
+    blocked_message?: string;
+  };
   issue_badge?: string;
   issue_stage?: string;
   issue_summary?: string;
@@ -69,6 +88,7 @@ export interface CurrentReviewState<TCheckResult extends RiskCheckResult = RiskC
   repair_issue?: RepairIssue;
   repair_generation_meta?: RepairGenerationMetadata;
   repair_preflight?: RepairPreflightReport;
+  repair_proposal_validation?: RepairProposalValidationSummary;
 }
 
 export type CurrentReviewSummaryResponse<TCheckResult extends RiskCheckResult = RiskCheckResult> =
@@ -258,6 +278,14 @@ export function buildRepairWorkbenchSnapshot<TCheckResult extends RiskCheckResul
     proposal: state.patch_proposal
       ? `补丁提案: ${state.patch_proposal.summary} · ${state.patch_proposal.operations.length} 个文件操作`
       : undefined,
+    proposal_validation: state.repair_proposal_validation
+      ? {
+          secondary_audit: state.repair_proposal_validation.secondary_audit.summary,
+          syntax_check: state.repair_proposal_validation.syntax_check.summary,
+          logic_change: state.repair_proposal_validation.logic_change.summary,
+          blocked_message: state.repair_proposal_validation.blocked_reason,
+        }
+      : undefined,
     issue_badge: state.repair_issue
       ? (state.repair_issue.error.retryable ? '提案降级，可重试' : '提案失败，需修正')
       : undefined,
@@ -362,6 +390,7 @@ export function attachRepairIssueToCurrentReview<TCheckResult extends RiskCheckR
   input: {
     issue: RepairIssue;
     repair_generation_meta?: RepairGenerationMetadata;
+    repair_proposal_validation?: RepairProposalValidationSummary;
   },
 ): CurrentReviewState<TCheckResult> {
   return {
@@ -370,6 +399,7 @@ export function attachRepairIssueToCurrentReview<TCheckResult extends RiskCheckR
     repair_issue: input.issue,
     repair_generation_meta: input.repair_generation_meta,
     repair_preflight: undefined,
+    repair_proposal_validation: input.repair_proposal_validation,
   };
 }
 
@@ -379,6 +409,7 @@ export function attachRepairProposalToCurrentReview<TCheckResult extends RiskChe
     repair_plan: RepairPlan;
     patch_proposal: PatchProposal;
     repair_generation_meta?: RepairGenerationMetadata;
+    repair_proposal_validation?: RepairProposalValidationSummary;
   },
 ): CurrentReviewState<TCheckResult> {
   return {
@@ -388,6 +419,7 @@ export function attachRepairProposalToCurrentReview<TCheckResult extends RiskChe
     repair_issue: undefined,
     repair_generation_meta: input.repair_generation_meta,
     repair_preflight: undefined,
+    repair_proposal_validation: input.repair_proposal_validation,
   };
 }
 

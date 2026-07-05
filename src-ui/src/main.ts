@@ -233,7 +233,7 @@ async function switchWorkspace(
 
   chatPanel.setProjectPath(folder);
   chatPanel.autoRestoreLastSession(folder).catch(() => {});
-  if (FileTreePanel.get().isOpen()) FileTreePanel.get().load(folder);
+  ensureWorkbenchShellOpen(folder);
   ws.runCheck(checkPanel);
   await invoke('workspace_start_watcher').catch(() => {});
 }
@@ -242,6 +242,15 @@ function setLoading(active: boolean, folder?: string): void {
   btnOpen.disabled = active;
   btnOpen.innerHTML = active ? `${iconSvg('dot')} 分析中...` : `${iconSvg('folder-open')} 打开文件夹`;
   if (active) statusText.textContent = `正在分析 ${folder || ''}...`;
+}
+
+function ensureWorkbenchShellOpen(projectPath?: string): void {
+  const ft = FileTreePanel.get();
+  if (projectPath) ft.load(projectPath).catch(() => {});
+  if (!ft.isOpen()) ft.show();
+  btnExplorer.classList.add('active');
+  if (!chatPanel.isOpen()) chatPanel.open();
+  if (!checkPanel.isOpen()) checkPanel.open();
 }
 
 function resetCheckPanelState(): void {
@@ -809,6 +818,7 @@ async function init(): Promise<void> {
     if (isMockMode()) {
       await switchWorkspace('/mock/nebula-project');
       statusText.textContent = '🎨 Mock 模式 — 风控工作台已加载';
+      ensureWorkbenchShellOpen('/mock/nebula-project');
       checkPanel.open();
       updateTabs();
       return;
@@ -856,6 +866,7 @@ async function init(): Promise<void> {
       await switchWorkspace(root, { skipAnalysis: true, cachedGraph: graph });
       statusText.textContent = isMockMode() ? '🎨 Mock 模式 — 所见即所得，秒级刷新' : '已加载缓存图谱';
       if (isMockMode()) {
+        ensureWorkbenchShellOpen(root);
         checkPanel.open();
         updateTabs();
       }

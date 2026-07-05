@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   buildDeliveryDoctorReport,
   buildDeliveryInitFiles,
@@ -63,6 +64,12 @@ test('validateDeliveryConfig rejects env-backed provider config without env var'
   assert.ok(error.includes('provider.env_var'), 'expected env validation error');
 });
 
+test('createDefaultDeliveryConfig includes auth base_url placeholder', () => {
+  const config = createDefaultDeliveryConfig('/tmp/workspace');
+
+  assert.equal(config.auth.base_url, '');
+});
+
 test('resolveDeliveryPolicies loads workspace rule packages and disabled rule ids into one policy source', () => {
   const workspaceRoot = '/tmp/hologram-phase5-policy';
   const config = createDefaultDeliveryConfig(workspaceRoot);
@@ -105,22 +112,11 @@ test('resolveDeliveryPolicies loads workspace rule packages and disabled rule id
 test('buildDeliveryMachineReport returns machine-readable review, policy, audit, and automation status', () => {
   const workspaceRoot = '/tmp/workspace';
   const config = createDefaultDeliveryConfig(workspaceRoot);
+  const auditEntries = buildChainedAuditEntries(workspaceRoot);
   const report = buildDeliveryMachineReport({
     config,
     checkResult: sampleCheck,
-    auditEntries: [{
-      ts: '2026-06-23T00:00:00Z',
-      tool: 'repair_apply',
-      path: workspaceRoot,
-      action: 'denied',
-      reason: 'Repair preflight failed.',
-      details: {
-        error_code: 'policy_blocked',
-        error_stage: 'preflight',
-        error_retryable: false,
-        patch_proposal_id: 'proposal-1',
-      },
-    }],
+    auditEntries,
     generatedAt: '2026-06-23T00:00:00Z',
     env: {},
     readFile: () => JSON.stringify([]),
@@ -133,6 +129,12 @@ test('buildDeliveryMachineReport returns machine-readable review, policy, audit,
   }
   assert.equal(report.audit.records[0]?.stage, 'preflight');
   assert.equal(report.automation.should_fail, true);
+  assert.equal(report.audit.integrity.status, 'verified');
+  assert.equal(report.audit.integrity.verified, true);
+  assert.equal(report.audit.integrity.entry_count, 2);
+  assert.equal(report.audit.integrity.last_hash, auditEntries[1]?.integrity_hash);
+  assert.equal(report.report_signature.algorithm, 'sha256');
+  assert.ok(report.report_signature.digest.length === 64, 'expected sha256 report digest');
 });
 
 test('shouldFailDeliveryGate respects the configured decision threshold', () => {
@@ -147,7 +149,9 @@ test('buildDeliveryInitFiles emits delivery manifest, rule package stubs, hook, 
   });
 
   assert.ok(Boolean(files['.hologram/delivery.json']), 'expected delivery config');
-  assert.ok(files['.githooks/pre-commit'].includes('phase5:report'), 'expected pre-commit hook to call phase5 report');
+  const deliveryConfig = JSON.parse(files['.hologram/delivery.json']);
+  assert.equal(deliveryConfig.auth.base_url, '');
+  assert.ok(files['.githooks/pre-commit'].includes('audit-risk') || files['.githooks/pre-commit'].includes('--bin audit-risk'), 'expected pre-commit hook to call audit-risk report');
   assert.ok(files['.github/workflows/hologram-risk.yml'].includes('HOLOGRAM_PLATFORM_REPO'), 'expected workflow to declare platform repo env');
 });
 
@@ -215,3 +219,93 @@ test('buildDeliveryDoctorReport highlights provider and gate blockers for admin 
   assert.ok(doctor.blockers.some((item) => item.includes('DEEPSEEK_API_KEY')), 'expected provider blocker');
   assert.ok(doctor.blockers.some((item) => item.includes('block')), 'expected gate blocker');
 });
+
+test('buildDeliveryDoctorReport blocks on broken audit integrity', () => {
+  const workspaceRoot = '/tmp/workspace';
+  const entries = buildChainedAuditEntries(workspaceRoot);
+  entries[1] = {
+    ...entries[1],
+    reason: 'tampered repair audit line',
+  };
+
+  const report = buildDeliveryMachineReport({
+    config: createDefaultDeliveryConfig(workspaceRoot),
+    checkResult: sampleCheck,
+    auditEntries: entries,
+    generatedAt: '2026-06-23T00:00:00Z',
+    env: { DEEPSEEK_API_KEY: 'configured' },
+    readFile: () => JSON.stringify([]),
+  });
+  const doctor = buildDeliveryDoctorReport({ report });
+
+  assert.equal(report.audit.integrity.status, 'failed');
+  assert.equal(doctor.overall_status, 'needs_attention');
+  assert.ok(doctor.blockers.some((item) => item.includes('Audit log integrity verification failed')), 'expected integrity blocker');
+});
+
+function buildChainedAuditEntries(workspaceRoot: string) {
+  const first = buildChainedAuditEntry({
+    ts: '2026-06-23T00:00:00Z',
+    tool: 'review_check',
+    path: workspaceRoot,
+    action: 'denied',
+    reason: 'Review blocked the risky change.',
+    details: {
+      timestamp: '2026-06-23T00:00:00Z',
+      finding_ids: ['finding-1'],
+      evidence_ids: ['evidence-1'],
+      gate_decision: {
+        decision: 'block',
+        reason: 'critical review finding',
+        finding_ids: ['finding-1'],
+      },
+      policy_snapshot_id: 'policy:review.default@v1',
+    },
+  });
+  const second = buildChainedAuditEntry({
+    ts: '2026-06-23T00:01:00Z',
+    tool: 'repair_apply',
+    path: workspaceRoot,
+    action: 'denied',
+    reason: 'Repair preflight failed.',
+    details: {
+      timestamp: '2026-06-23T00:01:00Z',
+      error_code: 'policy_blocked',
+      error_stage: 'preflight',
+      error_retryable: false,
+      patch_proposal_id: 'proposal-1',
+    },
+    prev_hash: first.integrity_hash,
+  });
+
+  return [first, second];
+}
+
+function buildChainedAuditEntry(input: {
+  ts: string;
+  tool: string;
+  path: string;
+  action: string;
+  reason: string;
+  details: Record<string, unknown>;
+  prev_hash?: string;
+}) {
+  const payload = {
+    ts: input.ts,
+    tool: input.tool,
+    path: input.path,
+    action: input.action,
+    reason: input.reason,
+    details: input.details,
+    prev_hash: input.prev_hash ?? null,
+  };
+
+  return {
+    ...payload,
+    integrity_hash: sha256(JSON.stringify(payload)),
+  };
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}

@@ -119,7 +119,7 @@ function runVerifyCommand(): void {
     run('node --import tsx src/risk/test-risk.ts', uiRoot),
     run('npx tsc --noEmit', uiRoot),
     run('npm run build', uiRoot),
-    run('cargo test --manifest-path ../engine/Cargo.toml --bin hologram-risk-check -- --nocapture', uiRoot),
+    run('cargo test --manifest-path ../engine/Cargo.toml --bin audit-risk -- --nocapture', uiRoot),
     run('cargo check', tauriRoot),
   ];
 
@@ -137,13 +137,13 @@ function runVerifyCommand(): void {
   }
   const externalWorkspace = createExternalSmokeWorkspace();
   const externalInit = run(
-    `node --import tsx "${resolve(uiRoot, 'scripts/phase5-delivery.ts')}" init --workspace "${externalWorkspace}" --force`,
+    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin audit-risk -- init "${externalWorkspace}" --force`,
     uiRoot,
   );
   mustPass(externalInit);
   const externalReportPath = resolve(externalWorkspace, '.hologram', 'latest-risk-report.json');
   const externalReport = run(
-    `node --import tsx "${resolve(uiRoot, 'scripts/phase5-delivery.ts')}" report -- --workspace "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}" --output "${externalReportPath}" --fail-on off`,
+    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin audit-risk -- report "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}" --output "${externalReportPath}" --fail-on off`,
     uiRoot,
   );
   mustPass(externalReport);
@@ -153,17 +153,17 @@ function runVerifyCommand(): void {
   );
   mustPass(externalHook);
   const externalRules = run(
-    `node --import tsx "${resolve(uiRoot, 'scripts/phase5-delivery.ts')}" rules --workspace "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}"`,
+    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin audit-risk -- rules "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}"`,
     uiRoot,
   );
   mustPass(externalRules);
   const externalAudit = run(
-    `node --import tsx "${resolve(uiRoot, 'scripts/phase5-delivery.ts')}" audit --workspace "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}" --query review --limit 5`,
+    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin audit-risk -- audit "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}" --query review --limit 5`,
     uiRoot,
   );
   mustPass(externalAudit);
   const externalDoctor = run(
-    `node --import tsx "${resolve(uiRoot, 'scripts/phase5-delivery.ts')}" doctor --workspace "${externalWorkspace}" --config "${resolve(externalWorkspace, '.hologram/delivery.json')}"`,
+    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin audit-risk -- doctor "${externalWorkspace}"`,
     uiRoot,
   );
   mustPass(externalDoctor);
@@ -249,14 +249,19 @@ function runDoctorCommand(args: Record<string, string | boolean>): void {
 
 function generateMachineReport(workspaceRoot: string, config: DeliveryConfig) {
   const deliveryCheck = run(
-    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin hologram-risk-check -- --workspace "${workspaceRoot}"`,
+    `cargo run --quiet --manifest-path "${resolve(engineRoot, 'Cargo.toml')}" --bin audit-risk -- check "${workspaceRoot}" --json`,
     repoRoot,
   );
-  mustPass(deliveryCheck);
+  if (!deliveryCheck.passed && deliveryCheck.exit_code !== 2) {
+    mustPass(deliveryCheck);
+  }
   const payload = JSON.parse(deliveryCheck.stdout_tail.join('\n') || '{}') as {
+    review?: {
+      raw_check?: unknown;
+    };
     check?: unknown;
   };
-  const checkResult = payload.check;
+  const checkResult = payload.review?.raw_check || payload.check;
   if (!checkResult || typeof checkResult !== 'object') {
     throw new Error('Headless delivery check did not return a check result.');
   }
@@ -285,15 +290,15 @@ function readAuditEntries(path: string, limit: number): RecentAuditEntry[] {
     return [];
   }
 
-  const lines = readFileSync(path, 'utf8')
+  return readFileSync(path, 'utf8')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .slice(-limit);
-
-  return lines
-    .map((line) => JSON.parse(line) as RecentAuditEntry)
-    .sort((left, right) => right.ts.localeCompare(left.ts));
+    .slice(-limit)
+    .map((line) => ({
+      ...(JSON.parse(line) as RecentAuditEntry),
+      raw_line: line,
+    }));
 }
 
 function run(command: string, cwd: string): CommandReport {

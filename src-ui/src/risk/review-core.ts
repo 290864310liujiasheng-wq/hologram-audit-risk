@@ -171,6 +171,22 @@ export interface PatchProposal {
   generated_at: string;
 }
 
+export interface RepairProposalValidationSummary {
+  secondary_audit: {
+    passed: boolean;
+    summary: string;
+  };
+  syntax_check: {
+    passed: boolean;
+    summary: string;
+  };
+  logic_change: {
+    summary: string;
+  };
+  blocked: boolean;
+  blocked_reason?: string;
+}
+
 export interface RepairRollbackSnapshot {
   rollback_id: string;
   repair_plan_id: string;
@@ -214,6 +230,8 @@ export interface ContractError {
   code:
     | 'invalid_request'
     | 'missing_evidence'
+    | 'proposal_new_risk'
+    | 'syntax_invalid'
     | 'provider_auth_invalid'
     | 'provider_upstream_failed'
     | 'provider_unavailable'
