@@ -11,3 +11,4 @@ pub mod engine;
 pub mod mcp;
 pub mod logging;
 pub mod watcher;
+pub mod cli;

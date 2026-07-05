@@ -1,7 +1,7 @@
 use crate::adapter::traits::LanguageAdapter;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use std::cell::RefCell;
-use tree_sitter::{Language, Parser};
+use tree_sitter::Parser;
 
 thread_local! {
     static PY_PARSER: RefCell<Option<Parser>> = RefCell::new(None);

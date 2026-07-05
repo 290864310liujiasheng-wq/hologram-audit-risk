@@ -418,10 +418,6 @@ fn file_key(loc: &str) -> String {
     loc.replace('\\', "/")
 }
 
-fn file_key_from_path(p: &str) -> String {
-    p.replace('\\', "/")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

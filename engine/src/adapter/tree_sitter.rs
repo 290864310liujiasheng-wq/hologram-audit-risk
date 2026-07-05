@@ -3,9 +3,8 @@ use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 use std::cell::RefCell;
 use tree_sitter::{Language, Parser};
 
-/// Thread-local parser cache — reuses parser across files of the same language.
-/// Avoids Parser::new() + set_language() allocation overhead for thousands of files.
 thread_local! {
+    // Reuse one parser per thread/language to avoid repeated parser allocation.
     static TL_PARSER: RefCell<Option<(Parser, String)>> = RefCell::new(None);
 }
 

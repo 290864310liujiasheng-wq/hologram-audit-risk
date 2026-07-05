@@ -650,8 +650,8 @@ impl Engine {
         info!("[engine watcher] {} file(s) changed, trying incremental update", count);
 
         // Try incremental update via engine_write
-        let inc_result = engine_write(|idx| {
-            let paths: Vec<(PathBuf, &str)> = changed_files
+        let inc_result = engine_write(|_idx| {
+            let _paths: Vec<(PathBuf, &str)> = changed_files
                 .iter()
                 .map(|(p, a)| (p.clone(), a.as_str()))
                 .collect();
