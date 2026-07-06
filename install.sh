@@ -37,6 +37,17 @@ done
 
 INSTALL_DIR="$PREFIX/bin"
 
+# Clean up temp files on any exit path (success, error, or interrupt) —
+# without this, a failure partway through the script (anything after
+# mktemp but not covered by an explicit rm -f) leaves stray files in /tmp.
+TMP_BIN=""
+TMP_SUMS=""
+cleanup() {
+  [ -n "$TMP_BIN" ] && rm -f "$TMP_BIN"
+  [ -n "$TMP_SUMS" ] && rm -f "$TMP_SUMS"
+}
+trap cleanup EXIT INT TERM
+
 # ── detect OS and architecture ───────────────────────────────────────────────
 
 OS="$(uname -s)"
@@ -78,35 +89,45 @@ TMP_BIN="$(mktemp)"
 
 say "Downloading from $DOWNLOAD_URL"
 if ! curl -sSfL "$DOWNLOAD_URL" -o "$TMP_BIN"; then
-  rm -f "$TMP_BIN"
   err "Download failed. Check that version $VERSION exists: https://github.com/$REPO/releases"
 fi
 
 # ── verify checksum if available ─────────────────────────────────────────────
+#
+# checksums.txt may briefly not exist yet right after a tag is pushed (the
+# checksums job runs only after all platform builds finish) or the fetch can
+# fail transiently. Either way, we must not silently continue as if the
+# binary were verified — warn explicitly so the user knows verification did
+# not happen this run.
 
 CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
 TMP_SUMS="$(mktemp)"
 
-if curl -sSfL "$CHECKSUM_URL" -o "$TMP_SUMS" 2>/dev/null; then
-  if command -v sha256sum >/dev/null 2>&1; then
-    EXPECTED="$(grep "$ASSET_NAME" "$TMP_SUMS" | awk '{print $1}')"
-    ACTUAL="$(sha256sum "$TMP_BIN" | awk '{print $1}')"
-    if [ -n "$EXPECTED" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      rm -f "$TMP_BIN" "$TMP_SUMS"
-      err "Checksum mismatch! Expected: $EXPECTED  Got: $ACTUAL"
-    fi
-    [ -n "$EXPECTED" ] && say "Checksum verified ✓"
-  elif command -v shasum >/dev/null 2>&1; then
-    EXPECTED="$(grep "$ASSET_NAME" "$TMP_SUMS" | awk '{print $1}')"
-    ACTUAL="$(shasum -a 256 "$TMP_BIN" | awk '{print $1}')"
-    if [ -n "$EXPECTED" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
-      rm -f "$TMP_BIN" "$TMP_SUMS"
-      err "Checksum mismatch! Expected: $EXPECTED  Got: $ACTUAL"
-    fi
-    [ -n "$EXPECTED" ] && say "Checksum verified ✓"
+HASH_TOOL=""
+if command -v sha256sum >/dev/null 2>&1; then
+  HASH_TOOL="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+  HASH_TOOL="shasum -a 256"
+fi
+
+if [ -z "$HASH_TOOL" ]; then
+  say "Warning: no sha256sum/shasum found — skipping checksum verification."
+elif ! curl -sSfL "$CHECKSUM_URL" -o "$TMP_SUMS" 2>/dev/null; then
+  say "Warning: could not fetch checksums.txt for $VERSION — skipping checksum verification."
+else
+  # Anchor on whitespace + exact asset name at end of line so a name that
+  # happens to be a prefix of another asset's name (e.g. a future
+  # "$ASSET_NAME-musl") can't produce a multi-line/ambiguous match.
+  EXPECTED="$(grep -E "[[:space:]]${ASSET_NAME}\$" "$TMP_SUMS" | awk '{print $1}')"
+  ACTUAL="$($HASH_TOOL "$TMP_BIN" | awk '{print $1}')"
+  if [ -z "$EXPECTED" ]; then
+    say "Warning: no checksum entry for $ASSET_NAME in checksums.txt — skipping verification."
+  elif [ "$ACTUAL" != "$EXPECTED" ]; then
+    err "Checksum mismatch! Expected: $EXPECTED  Got: $ACTUAL"
+  else
+    say "Checksum verified ✓"
   fi
 fi
-rm -f "$TMP_SUMS"
 
 # ── install ───────────────────────────────────────────────────────────────────
 
@@ -126,7 +147,6 @@ elif command -v sudo >/dev/null 2>&1; then
   sudo mv "$TMP_BIN" "$DEST"
   sudo chmod +x "$DEST"
 else
-  rm -f "$TMP_BIN"
   err "Cannot write to $INSTALL_DIR. Try: install.sh --prefix ~/.local"
 fi
 
@@ -140,5 +160,13 @@ else
   say "Installed: $(command -v $BINARY)"
 fi
 
-"$DEST" 2>&1 | head -3 || true
+# Smoke test by exit code only — do not print the binary's raw output here.
+# Its home screen uses ANSI color codes with the reset sequence on the very
+# last line; piping through `head -N` can truncate before that reset and
+# leave the user's terminal stuck in a colored state after this script exits.
+if "$DEST" --help >/dev/null 2>&1; then
+  say "Verified: $BINARY runs successfully."
+else
+  say "Warning: $BINARY was installed but the smoke test failed. Try running: $DEST --help"
+fi
 say "Done. Run \`$BINARY help\` to get started."

@@ -55,8 +55,14 @@ jobs:
 
       - name: Smoke test binary
         run: |
-          ./engine/target/release/audit-risk --help || true
-          ./engine/target/release/audit-risk 2>&1 | grep -q "audit-risk" || (echo "smoke test failed: expected audit-risk in output" && exit 1)
+          set -e
+          ./engine/target/release/audit-risk --help
+          if ! output="$(./engine/target/release/audit-risk 2>&1)"; then
+            echo "smoke test failed: zero-arg invocation exited non-zero"
+            echo "$output"
+            exit 1
+          fi
+          echo "$output" | grep -q "audit-risk" || (echo "smoke test failed: expected audit-risk in output"; echo "$output"; exit 1)
 
   risk-delivery:
     runs-on: ubuntu-latest

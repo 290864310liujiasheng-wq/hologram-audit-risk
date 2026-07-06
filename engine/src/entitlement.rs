@@ -1,13 +1,27 @@
 /// Entitlement signature verification.
 ///
 /// The server signs a **canonical subset** of the entitlement document:
-///   { features, issued_at, plan, status, user_id, valid_until }
+///   { features, issued_at, last_refresh_time, plan, status, user_id, valid_until }
 /// serialised as compact JSON with keys in lexicographic order (BTreeMap).
+///
+/// `last_refresh_time` MUST be signed: it is what gates whether the CLI
+/// re-contacts the server to pick up revocation. If it were left unsigned,
+/// a user could edit entitlement.json locally to set `last_refresh_time` to
+/// a far-future timestamp, permanently defeating `should_refresh_entitlement`
+/// and never re-checking with the server again — the client would keep
+/// treating an already-revoked (server-side) entitlement as valid for the
+/// entire remainder of its original `valid_until` + grace window, which can
+/// be arbitrarily long depending on plan length.
 ///
 /// `device_id` is intentionally excluded from the signed payload — it is
 /// derived on the client side from the local device_secret and is verified
 /// separately against the stored value.  The server vouches for "this user
-/// has this plan until this date"; the device binding is a client-side gate.
+/// has this plan until this date, as of this refresh time"; the device
+/// binding is a client-side gate on top of that.
+///
+/// `payment_pending` and `next_billing_at` are intentionally excluded —
+/// they are display-only hints and never participate in `is_pro_allowed()`,
+/// so tampering with them cannot grant unauthorized access.
 ///
 /// Key rotation: add the new public key to ENTITLEMENT_PUBLIC_KEYS.
 /// Keep the old key for the grace period, then remove it.
@@ -36,7 +50,7 @@ pub fn extract_canonical_signing_payload(raw_json: &str) -> Option<String> {
     let obj = value.as_object()?;
 
     let mut payload: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
-    for key in ["features", "issued_at", "plan", "status", "user_id", "valid_until"] {
+    for key in ["features", "issued_at", "last_refresh_time", "plan", "status", "user_id", "valid_until"] {
         payload.insert(key, obj.get(key)?.clone());
     }
 
@@ -227,6 +241,37 @@ mod tests {
             verify_entitlement_signature(&json2, &sig),
             SignatureVerifyResult::Valid,
             "device_id change must not invalidate signature"
+        );
+    }
+
+    #[test]
+    fn tampered_last_refresh_time_invalidates_signature() {
+        // Regression test for the revocation-bypass bug: last_refresh_time
+        // gates whether the client ever re-contacts the server to pick up a
+        // revocation. If it were excluded from the signed payload, editing
+        // it locally to a far-future date would silently and permanently
+        // defeat should_refresh_entitlement(), letting an already-revoked
+        // entitlement keep passing signature checks until its original
+        // valid_until + grace window naturally elapsed.
+        let json = make_entitlement("pro_personal_monthly", "active", &["observe"]);
+        let sig = sign_for_test(&json);
+
+        // Tamper with ONLY last_refresh_time via structured JSON edit —
+        // issued_at shares the same literal value in the fixture, so a naive
+        // string replace would touch both fields and understate what this
+        // test is isolating.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value["last_refresh_time"] = serde_json::Value::String("2999-01-01T00:00:00Z".to_string());
+        let tampered = value.to_string();
+
+        assert_ne!(
+            value["issued_at"], value["last_refresh_time"],
+            "sanity check: test must isolate last_refresh_time from issued_at"
+        );
+        assert_ne!(
+            verify_entitlement_signature(&tampered, &sig),
+            SignatureVerifyResult::Valid,
+            "tampering with last_refresh_time must invalidate the signature"
         );
     }
 

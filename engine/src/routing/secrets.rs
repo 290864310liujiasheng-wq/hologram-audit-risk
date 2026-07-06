@@ -241,14 +241,20 @@ pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Ve
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Truncate a matched secret to at most 12 chars for display (never log full keys).
+/// Truncate a matched secret to at most 12 bytes for display (never log full keys).
+/// Truncates at a char boundary — matched text can contain multi-byte UTF-8
+/// (e.g. Unicode whitespace matched by a regex `\s` class), and naive byte
+/// slicing at a fixed offset can land mid-character and panic.
 fn truncate_secret(s: &str) -> String {
     let s = s.trim();
-    if s.len() > 12 {
-        format!("{}...", &s[..12])
-    } else {
-        s.to_string()
+    if s.len() <= 12 {
+        return s.to_string();
     }
+    let mut end = 12;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 /// Extract string literals from a line (content between matching quote pairs).
@@ -476,6 +482,31 @@ mod tests {
         assert_eq!(signals[0]["signal"]["file_path"], "src/config.py");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_content_does_not_panic_on_multibyte_utf8_near_truncation_boundary() {
+        // Regression test: a Bearer-token match whose regex `\s` class consumes
+        // a non-ASCII whitespace character (U+00A0) positioned so the matched
+        // text's byte 12 lands mid-character. Before the fix, truncate_secret's
+        // fixed `&s[..12]` byte slice panicked with "not a char boundary" and
+        // crashed the whole `audit-risk check`/`watch` process on this input.
+        let scanner = scanner();
+        let line = "Bearer:====\u{00A0}'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'";
+        let findings = scanner.scan_content("weird.txt", line);
+        // Must not panic; content of findings is secondary to survival here.
+        assert!(!findings.is_empty());
+    }
+
+    #[test]
+    fn truncate_secret_handles_multibyte_boundary_without_panicking() {
+        // Direct unit coverage of the helper across a range of boundary offsets.
+        for pad in 0..16 {
+            let padding = "x".repeat(pad);
+            let s = format!("{padding}\u{00A0}{}", "A".repeat(40));
+            // Must not panic regardless of where the multi-byte char lands.
+            let _ = truncate_secret(&s);
+        }
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────

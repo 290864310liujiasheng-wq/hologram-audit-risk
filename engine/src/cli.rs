@@ -3997,7 +3997,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "i75pymAM13eX4xDqk87WCGMBEuXXrpYI+66t3CtfTKbgmA+jp5u/Z129EJJnr4E95vn3wWn8cIln/Z91M1lcCw=="
+            "signature": "tEeoeuo4uZvt2y5YzziEHqk8wyK9ERcmtlBEelo3061qnzruxT4VKix0N76oxva16d021MXZsFvaOg2fdGEABA=="
         }));
     }
     if url == "mock://refresh-active/api/entitlement/refresh" {
@@ -4013,7 +4013,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "i75pymAM13eX4xDqk87WCGMBEuXXrpYI+66t3CtfTKbgmA+jp5u/Z129EJJnr4E95vn3wWn8cIln/Z91M1lcCw=="
+            "signature": "tr7VZaqXk6Uf2r6rt8y+GAgDL0oGQ0s8NGtCx/2e8oFOC0rnfC1Di+SrG1l08UrI9WlZgjZxEhFdLAxCDxLfCA=="
         }));
     }
     if url == "mock://refresh-revoked/api/entitlement/refresh" {
@@ -4029,7 +4029,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "revoked",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "qjvku6Fib3f9oKVcP59wdR6qs24Odm14Mus9YD7DdgBaZJFlSQfrOtli2PDgui21yAmQXbcBx5MPk/mgh1rxCw=="
+            "signature": "zOkTncKPnbWDGxFdMY6QmFDLVumi5QRza9x2JKXr49myx4Y0buzx44mj7NOnkvF+EQV4eX1clQY2+jxV6GPbAA=="
         }));
     }
     if url == "mock://payment-pending/api/auth/exchange" || url == "mock://payment-timeout/api/auth/exchange" {
@@ -4045,7 +4045,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "mw1056a5W6bBhTRIkJFC+N9MxXoyIXkjc46LA2rMbgdPNTVq3NhJtY3WyDsdi5iJ7jOfyAc8ufdnK0PbCgcoCw=="
+            "signature": "VjxBSBheTBNcn1KZgll4HmsYyxDfyt+tmzLPwKptBI7bPear/mE5/o2yAf+d2TCANe3HUPHvxtLoOR7cZCgzDw=="
         }));
     }
     if url.starts_with("mock://payment-pending/api/payment/query?") {
@@ -4061,7 +4061,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "i75pymAM13eX4xDqk87WCGMBEuXXrpYI+66t3CtfTKbgmA+jp5u/Z129EJJnr4E95vn3wWn8cIln/Z91M1lcCw=="
+            "signature": "tEeoeuo4uZvt2y5YzziEHqk8wyK9ERcmtlBEelo3061qnzruxT4VKix0N76oxva16d021MXZsFvaOg2fdGEABA=="
         }));
     }
     if url.starts_with("mock://payment-timeout/api/payment/query?") {
@@ -4077,7 +4077,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
             },
-            "signature": "mw1056a5W6bBhTRIkJFC+N9MxXoyIXkjc46LA2rMbgdPNTVq3NhJtY3WyDsdi5iJ7jOfyAc8ufdnK0PbCgcoCw=="
+            "signature": "VjxBSBheTBNcn1KZgll4HmsYyxDfyt+tmzLPwKptBI7bPear/mE5/o2yAf+d2TCANe3HUPHvxtLoOR7cZCgzDw=="
         }));
     }
 
