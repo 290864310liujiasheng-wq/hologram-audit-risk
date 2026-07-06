@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
@@ -13,7 +14,8 @@ suite('audit-risk extension', () => {
 
     await vscode.commands.executeCommand('auditRisk.check');
 
-    const configPyUri = vscode.Uri.file(path.join(workspaceRoot!, 'src', 'config.py'));
+    const configPyPath = path.join(workspaceRoot!, 'src', 'config.py');
+    const configPyUri = vscode.Uri.file(configPyPath);
     const migrationUri = vscode.Uri.file(path.join(workspaceRoot!, 'migrations', '0001_init.sql'));
 
     const configDiagnostics = vscode.languages.getDiagnostics(configPyUri);
@@ -37,13 +39,19 @@ suite('audit-risk extension', () => {
     );
     assert.strictEqual(secretFinding!.source, 'audit-risk');
 
-    // The planted key is on line 4 (1-indexed) of src/config.py — confirm
-    // the 1-indexed CLI line number was correctly converted to VS Code's
-    // 0-indexed Range instead of being passed through as-is.
+    // Derive the expected line from the actual fixture file instead of a
+    // hardcoded line number — a hardcoded constant silently goes stale the
+    // moment anyone reformats the fixture (this happened once already: a
+    // fixture rewrite dropped a blank line and the hardcoded "line 4"
+    // assertion started failing even though the extension's line-number
+    // conversion was correct the whole time).
+    const configPySource = fs.readFileSync(configPyPath, 'utf8');
+    const oneIndexedApiKeyLine = configPySource.split('\n').findIndex((line) => line.includes('api_key')) + 1;
+    assert.ok(oneIndexedApiKeyLine > 0, 'fixture must contain an api_key line to anchor this assertion');
     assert.strictEqual(
       secretFinding!.range.start.line,
-      3,
-      'line 4 (1-indexed) in the CLI payload must map to line 3 (0-indexed) in the Range'
+      oneIndexedApiKeyLine - 1,
+      `1-indexed line ${oneIndexedApiKeyLine} in the CLI payload must map to 0-indexed line ${oneIndexedApiKeyLine - 1} in the Range`
     );
   });
 
