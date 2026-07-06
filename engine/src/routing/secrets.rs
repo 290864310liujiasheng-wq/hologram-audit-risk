@@ -1,6 +1,6 @@
 /// Secret scanning engine.
 ///
-/// Three detection layers (applied to each line of each changed file):
+/// Six detection layers (applied to each line of each changed file):
 ///
 /// 1. **Known prefix patterns** — fixed patterns like `sk-`, `AKIA`, `ghp_`.
 ///    Very low false-positive rate; catches the most dangerous leaks.
@@ -13,8 +13,24 @@
 ///    `secret`, `password` assigned string literals.
 ///    Catches secrets that look "innocent" in isolation.
 ///
+/// 4. **SQL injection via string building** — a SQL keyword inside an
+///    f-string/template-literal interpolation, or string concatenation,
+///    instead of a parameterized query placeholder passed separately to
+///    the driver.
+///
+/// 5. **Dangerous dynamic execution** — eval/exec/os.system/shell=True/
+///    child_process.exec/new Function(...) — code that runs a string as
+///    code or a shell command.
+///
+/// 6. **Overly permissive IAM/policy statements** — `"Action": "*"` or
+///    `"Resource": "*"` in policy-shaped JSON, the single most common
+///    over-privilege pattern AI assistants generate when asked for "a
+///    policy that lets this service read from S3" and reach for a
+///    wildcard instead of scoping it down.
+///
 /// Output signals use level 5 (critical) for definite known-prefix hits,
-/// level 4 (high) for entropy and assignment pattern hits.
+/// level 4 (high) for entropy, assignment, SQL injection, dangerous
+/// execution, and permissive IAM hits.
 use regex::Regex;
 use serde_json::{json, Value};
 
@@ -33,6 +49,9 @@ pub enum SecretKind {
     KnownPrefix(&'static str),
     HighEntropy,
     HardcodedAssignment,
+    SqlInjection,
+    DangerousExecution(&'static str),
+    PermissiveIam(&'static str),
 }
 
 pub struct SecretScanner {
@@ -42,6 +61,14 @@ pub struct SecretScanner {
     assignment_pattern: Regex,
     /// Sensitive variable name keywords
     sensitive_var_names: Regex,
+    /// SQL keyword + string-building patterns (f-string/template literal
+    /// interpolation, or `+` concatenation) instead of a parameterized
+    /// placeholder passed separately to the DB driver.
+    sql_injection_patterns: Vec<Regex>,
+    /// Dangerous dynamic execution: (display label, regex)
+    dangerous_execution_patterns: Vec<(&'static str, Regex)>,
+    /// Overly permissive IAM/policy statement patterns: (display label, regex)
+    permissive_iam_patterns: Vec<(&'static str, Regex)>,
 }
 
 impl Default for SecretScanner {
@@ -91,10 +118,55 @@ impl SecretScanner {
             r#"(?i)(api_?key|api_?secret|app_?secret|auth_?token|access_?token|secret_?key|private_?key|client_?secret|db_?pass|database_?pass|password|passwd|credentials?)"#,
         ).unwrap();
 
+        let sql_keyword = r"(?i)\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b";
+        let sql_injection_patterns = vec![
+            // Python f-string / JS template literal: SQL keyword appears
+            // before a `{...}`/`${...}` interpolation, inside the same
+            // quoted/backtick span.
+            Regex::new(&format!(r#"f["'][^"'\n]*{sql_keyword}[^"'\n]*\{{[^}}]+\}}[^"'\n]*["']"#)).unwrap(),
+            Regex::new(&format!(r#"`[^`\n]*{sql_keyword}[^`\n]*\$\{{[^}}]+\}}[^`\n]*`"#)).unwrap(),
+            // String concatenation: a quoted string containing a SQL
+            // keyword, immediately followed by `+` and an identifier (or
+            // the reverse order).
+            Regex::new(&format!(r#"["'][^"'\n]*{sql_keyword}[^"'\n]*["']\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
+            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*["'][^"'\n]*{sql_keyword}[^"'\n]*["']"#)).unwrap(),
+        ];
+
+        let dangerous_execution_patterns = vec![
+            ("eval()", Regex::new(r"\beval\s*\(").unwrap()),
+            // Bare Python-style exec(...) — NOT preceded by a `.`, so this
+            // does not double-match a method call like `child_process.exec(`.
+            // The regex crate has no lookbehind, so instead of "not preceded
+            // by a dot" we require the char right before `exec` to be
+            // anything OTHER than `.` (or be the start of the line).
+            ("exec()", Regex::new(r"(^|[^.\w])exec\s*\(").unwrap()),
+            ("os.system()", Regex::new(r"\bos\.system\s*\(").unwrap()),
+            ("shell=True", Regex::new(r"\bshell\s*=\s*True\b").unwrap()),
+            // JS-style method call: `.exec(` or `.execSync(`, always preceded
+            // by a dot — mutually exclusive with the bare exec() pattern above.
+            ("child_process.exec()", Regex::new(r"\.exec(Sync)?\s*\(").unwrap()),
+            ("new Function() from string", Regex::new(r"\bnew\s+Function\s*\(").unwrap()),
+            ("__import__()", Regex::new(r"__import__\s*\(").unwrap()),
+        ];
+
+        let permissive_iam_patterns = vec![
+            (
+                "IAM Action 通配符",
+                Regex::new(r#""Action"\s*:\s*(\[\s*)?"\*""#).unwrap(),
+            ),
+            (
+                "IAM Resource 通配符",
+                Regex::new(r#""Resource"\s*:\s*(\[\s*)?"\*""#).unwrap(),
+            ),
+        ];
+
         Self {
             known_prefixes,
             assignment_pattern,
             sensitive_var_names,
+            sql_injection_patterns,
+            dangerous_execution_patterns,
+            permissive_iam_patterns,
         }
     }
 
@@ -179,6 +251,51 @@ impl SecretScanner {
                     });
                 }
             }
+
+            // Layer 4: SQL injection via string building. Independent of
+            // layers 1-3 — a line can leak a secret AND build a query
+            // unsafely, these are different concerns and neither should
+            // suppress the other.
+            if self.sql_injection_patterns.iter().any(|pattern| pattern.is_match(line)) {
+                findings.push(SecretFinding {
+                    file_path: file_path.to_string(),
+                    line: line_number,
+                    kind: SecretKind::SqlInjection,
+                    matched_text: truncate_line_for_display(line),
+                    level: 4,
+                });
+            }
+
+            // Layer 5: dangerous dynamic execution. Report at most one
+            // finding per line even if multiple patterns match (e.g. a line
+            // combining `eval(` and `shell=True` is unusual but would
+            // otherwise double-report the same line).
+            if let Some((label, _)) = self
+                .dangerous_execution_patterns
+                .iter()
+                .find(|(_, pattern)| pattern.is_match(line))
+            {
+                findings.push(SecretFinding {
+                    file_path: file_path.to_string(),
+                    line: line_number,
+                    kind: SecretKind::DangerousExecution(label),
+                    matched_text: truncate_line_for_display(line),
+                    level: 4,
+                });
+            }
+
+            // Layer 6: overly permissive IAM/policy statements.
+            for (label, pattern) in &self.permissive_iam_patterns {
+                if pattern.is_match(line) {
+                    findings.push(SecretFinding {
+                        file_path: file_path.to_string(),
+                        line: line_number,
+                        kind: SecretKind::PermissiveIam(label),
+                        matched_text: truncate_line_for_display(line),
+                        level: 4,
+                    });
+                }
+            }
         }
 
         findings
@@ -198,6 +315,18 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
         ),
         SecretKind::HardcodedAssignment => format!(
             "敏感变量 `{}` 被直接赋值字符串字面量。密钥不得硬编码；请改用环境变量。",
+            f.matched_text
+        ),
+        SecretKind::SqlInjection => format!(
+            "疑似 SQL 注入：SQL 语句通过字符串拼接/插值构造，而不是用参数化占位符传给驱动。（{}）请改用参数化查询（如 %s / ? / :name 占位符 + 单独传参）。",
+            f.matched_text
+        ),
+        SecretKind::DangerousExecution(label) => format!(
+            "检测到危险的动态执行：{label}。（{}）如果参数包含外部输入，可能被用来执行任意代码或 shell 命令，请确认输入来源可信或改用更安全的调用方式。",
+            f.matched_text
+        ),
+        SecretKind::PermissiveIam(label) => format!(
+            "检测到过度宽松的权限声明：{label}。（{}）通配符权限违反最小权限原则，请把 Action/Resource 收窄到实际需要的范围。",
             f.matched_text
         ),
     };
@@ -257,6 +386,23 @@ fn truncate_secret(s: &str) -> String {
         return s.to_string();
     }
     let mut end = 12;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
+}
+
+/// Same char-boundary-safe truncation as `truncate_secret`, but with a much
+/// wider window — used for findings (SQL injection, dangerous execution,
+/// permissive IAM) where the displayed text is the risky *code span*, not a
+/// secret value, so cutting it to 12 chars would make the finding useless
+/// (e.g. an f-string SQL injection line would show only `f'SELECT * F...`).
+fn truncate_line_for_display(s: &str) -> String {
+    let s = s.trim();
+    if s.len() <= 100 {
+        return s.to_string();
+    }
+    let mut end = 100;
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
@@ -463,6 +609,284 @@ mod tests {
         // Assignment pattern may still fire — that's acceptable (it IS a secret assignment)
         // What matters: no known-prefix L5 hit
         assert!(!findings.iter().any(|f| f.level == 5), "placeholder must not be L5");
+    }
+
+    // ─── Layer 4: SQL injection ───────────────────────────────────────────────
+
+    #[test]
+    fn detects_python_fstring_sql_injection() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "db.py",
+            r#"query = f"SELECT * FROM users WHERE id = {user_id}""#,
+        );
+        assert!(
+            findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
+            "f-string SQL interpolation must be flagged"
+        );
+    }
+
+    #[test]
+    fn detects_js_template_literal_sql_injection() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "db.js",
+            "const query = `SELECT * FROM users WHERE id = ${userId}`;",
+        );
+        assert!(
+            findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
+            "template literal SQL interpolation must be flagged"
+        );
+    }
+
+    #[test]
+    fn detects_string_concatenation_sql_injection() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "db.py",
+            r#"query = "SELECT * FROM users WHERE id = " + user_id"#,
+        );
+        assert!(
+            findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
+            "string concatenation building a SQL query must be flagged"
+        );
+    }
+
+    #[test]
+    fn detects_reversed_string_concatenation_sql_injection() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "db.py",
+            r#"query = prefix + "DROP TABLE users""#,
+        );
+        assert!(
+            findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
+            "variable + SQL-keyword-string concatenation must be flagged (reversed order)"
+        );
+    }
+
+    #[test]
+    fn parameterized_query_is_not_flagged_as_sql_injection() {
+        let scanner = scanner();
+        // The canonical SAFE pattern: placeholder in the query string,
+        // parameters passed separately to the driver. Must not false-positive.
+        let findings = scanner.scan_content(
+            "db.py",
+            r#"cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))"#,
+        );
+        assert!(
+            !findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
+            "parameterized query with a placeholder must not be flagged"
+        );
+    }
+
+    #[test]
+    fn plain_sql_string_without_interpolation_is_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "db.py",
+            r#"query = "SELECT * FROM users WHERE active = true""#,
+        );
+        assert!(
+            !findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
+            "a static SQL string with no interpolation/concatenation must not be flagged"
+        );
+    }
+
+    // ─── Layer 5: dangerous dynamic execution ─────────────────────────────────
+
+    #[test]
+    fn detects_eval() {
+        let scanner = scanner();
+        let findings = scanner.scan_content("app.py", "result = eval(user_input)");
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("eval()"))));
+    }
+
+    #[test]
+    fn detects_bare_python_exec() {
+        let scanner = scanner();
+        let findings = scanner.scan_content("app.py", "exec(compile(source, '<string>', 'exec'))");
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
+    }
+
+    #[test]
+    fn detects_os_system() {
+        let scanner = scanner();
+        let findings = scanner.scan_content("app.py", "os.system(f'rm -rf {path}')");
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("os.system()"))));
+    }
+
+    #[test]
+    fn detects_shell_true() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "app.py",
+            "subprocess.run(cmd, shell=True)",
+        );
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("shell=True"))));
+    }
+
+    #[test]
+    fn detects_js_child_process_exec_method_call() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "app.js",
+            "child_process.exec(`ls ${dir}`, callback);",
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))),
+            "child_process.exec( method call must be flagged"
+        );
+        // Must not ALSO double-report as the bare exec() pattern.
+        assert!(
+            !findings.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))),
+            "a method call must not also match the bare exec() pattern"
+        );
+    }
+
+    #[test]
+    fn detects_new_function_from_string() {
+        let scanner = scanner();
+        let findings = scanner.scan_content("app.js", "const fn = new Function('return ' + userCode);");
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("new Function() from string"))));
+    }
+
+    #[test]
+    fn bare_exec_and_method_exec_are_mutually_exclusive() {
+        let scanner = scanner();
+        // Pure Python exec() at start of line — no leading dot.
+        let bare = scanner.scan_content("a.py", "exec(user_code)");
+        assert!(bare.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
+        assert!(!bare.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))));
+
+        // JS method call — leading dot.
+        let method = scanner.scan_content("a.js", "proc.exec(cmd)");
+        assert!(method.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))));
+        assert!(!method.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
+    }
+
+    #[test]
+    fn safe_function_calls_are_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "app.py",
+            "result = calculate_total(items)\nlogger.execute_query(sql, params)",
+        );
+        assert!(
+            findings.is_empty(),
+            "ordinary function calls that merely contain 'exec' as a substring of a longer identifier must not be flagged: {:?}",
+            findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    // ─── Layer 6: permissive IAM ───────────────────────────────────────────────
+
+    #[test]
+    fn detects_wildcard_iam_action() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "policy.json",
+            r#"    "Action": "*","#,
+        );
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::PermissiveIam("IAM Action 通配符"))));
+    }
+
+    #[test]
+    fn detects_wildcard_iam_resource() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "policy.json",
+            r#"    "Resource": "*""#,
+        );
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::PermissiveIam("IAM Resource 通配符"))));
+    }
+
+    #[test]
+    fn detects_wildcard_iam_action_array_form() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "policy.json",
+            r#"    "Action": ["*"],"#,
+        );
+        assert!(findings
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::PermissiveIam("IAM Action 通配符"))));
+    }
+
+    #[test]
+    fn scoped_iam_action_is_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "policy.json",
+            r#"    "Action": "s3:GetObject","#,
+        );
+        assert!(
+            !findings.iter().any(|f| matches!(f.kind, SecretKind::PermissiveIam(_))),
+            "a scoped IAM action must not be flagged as permissive"
+        );
+    }
+
+    #[test]
+    fn scoped_iam_resource_is_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "policy.json",
+            r#"    "Resource": "arn:aws:s3:::my-bucket/*""#,
+        );
+        assert!(
+            !findings.iter().any(|f| matches!(f.kind, SecretKind::PermissiveIam(_))),
+            "a resource ARN that merely ends with a wildcard suffix (scoped to one bucket) must not be flagged"
+        );
+    }
+
+    #[test]
+    fn finding_to_signal_describes_new_kinds_correctly() {
+        let sql = SecretFinding {
+            file_path: "db.py".to_string(),
+            line: 1,
+            kind: SecretKind::SqlInjection,
+            matched_text: "f-string example".to_string(),
+            level: 4,
+        };
+        let signal = finding_to_signal(&sql);
+        assert!(signal["signal"]["description"].as_str().unwrap().contains("SQL 注入"));
+
+        let exec_finding = SecretFinding {
+            file_path: "app.py".to_string(),
+            line: 1,
+            kind: SecretKind::DangerousExecution("eval()"),
+            matched_text: "eval example".to_string(),
+            level: 4,
+        };
+        let signal = finding_to_signal(&exec_finding);
+        assert!(signal["signal"]["description"].as_str().unwrap().contains("危险的动态执行"));
+        assert!(signal["signal"]["description"].as_str().unwrap().contains("eval()"));
+
+        let iam_finding = SecretFinding {
+            file_path: "policy.json".to_string(),
+            line: 1,
+            kind: SecretKind::PermissiveIam("IAM Action 通配符"),
+            matched_text: "\"Action\": \"*\"".to_string(),
+            level: 4,
+        };
+        let signal = finding_to_signal(&iam_finding);
+        assert!(signal["signal"]["description"].as_str().unwrap().contains("过度宽松"));
     }
 
     #[test]
