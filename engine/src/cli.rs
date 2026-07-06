@@ -2899,6 +2899,51 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
 }
 
+/// Fixed inner content width the box UI was authored against. Every panel
+/// line in the human-mode screens was written assuming this width; this is
+/// NOT an arbitrary choice we can shrink to fit a narrower terminal without
+/// risking already-authored lines overflowing the new, smaller inner width.
+const BOX_WIDTH: usize = 92;
+/// Below this many terminal columns, drawing the BOX_WIDTH box would
+/// overflow the real terminal and wrap mid-line — the exact failure mode
+/// that used to render as unreadable solid color bars. Below this
+/// threshold we switch to Plain mode instead of trying to shrink the box,
+/// because shrinking would require re-wrapping every already-authored
+/// content line to a new width, which is a much larger surface to get
+/// right than simply not drawing a box at all.
+const MIN_TERMINAL_WIDTH_FOR_BOX: usize = BOX_WIDTH + 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    /// Draw the bordered box UI at the fixed, content-authored width.
+    Boxed,
+    /// No box, no fixed-width padding math at all — headings and indented
+    /// lines only, relying on the terminal's own line-wrapping. Used when
+    /// the terminal is too narrow for the box. Because there is no manual
+    /// width calculation in this mode, it cannot overflow regardless of
+    /// terminal width, content length, or CJK/ASCII mix — the failure mode
+    /// this whole rendering path is prone to is structurally impossible
+    /// here rather than merely handled.
+    Plain,
+}
+
+/// Query the real terminal width. Returns `None` when stdout is not a TTY
+/// (piped, redirected to a file, or running under a harness with no
+/// controlling terminal) — in that case we keep the existing fixed-width
+/// box, matching every prior release's behavior for redirected output.
+fn detect_terminal_width() -> Option<usize> {
+    terminal_size::terminal_size().map(|(terminal_size::Width(w), _)| w as usize)
+}
+
+/// Pure decision function, deliberately separated from the OS query above
+/// so it can be unit tested without a real terminal.
+fn decide_render_mode(detected_width: Option<usize>) -> RenderMode {
+    match detected_width {
+        Some(width) if width < MIN_TERMINAL_WIDTH_FOR_BOX => RenderMode::Plain,
+        _ => RenderMode::Boxed,
+    }
+}
+
 fn render_product_shell(
     status_lines: &[String],
     problem_lines: &[String],
@@ -2907,6 +2952,7 @@ fn render_product_shell(
     next_steps: &[String],
     note_lines: &[String],
 ) -> String {
+    let mode = decide_render_mode(detect_terminal_width());
     let bg = "\u{1b}[48;5;232m";
     let panel = "\u{1b}[48;5;234m";
     let border = "\u{1b}[38;5;240m";
@@ -2918,6 +2964,27 @@ fn render_product_shell(
     let yellow = "\u{1b}[38;5;220m";
     let blue = "\u{1b}[38;5;39m";
     let reset = "\u{1b}[0m";
+
+    if mode == RenderMode::Plain {
+        let mut lines = Vec::new();
+        lines.push(format!("{bright}audit-risk{reset}"));
+        lines.push(format!("{muted}AI 编码风控平台 — 为 AI 生成的代码提供实时审查、规则拦截和不可篡改的审计证据{reset}"));
+        lines.push(String::new());
+        lines.push(render_panel_plain("当前概览", status_lines, title, text, muted, reset));
+        lines.push(render_panel_plain(
+            "问题说明",
+            &compose_problem_block(problem_lines, why_lines, advice_lines),
+            yellow,
+            text,
+            muted,
+            reset,
+        ));
+        lines.push(render_panel_plain("下一步", next_steps, blue, text, muted, reset));
+        if !note_lines.is_empty() {
+            lines.push(render_panel_plain("说明", note_lines, green, text, muted, reset));
+        }
+        return lines.join("\n");
+    }
 
     let mut lines = Vec::new();
     lines.push(format!("{bg}{bright}  audit-risk{reset}"));
@@ -2974,6 +3041,40 @@ fn render_product_shell(
     lines.join("\n")
 }
 
+/// Borderless counterpart to render_panel — heading + indented lines, no
+/// fixed-width padding math at all. See RenderMode::Plain for why this
+/// exists instead of a narrower box.
+fn render_panel_plain(
+    heading: &str,
+    lines: &[String],
+    accent: &str,
+    text: &str,
+    muted: &str,
+    reset: &str,
+) -> String {
+    let mut rows = Vec::new();
+    rows.push(String::new());
+    rows.push(format!("{accent}── {heading} ──{reset}"));
+    if lines.is_empty() {
+        rows.push(format!("{muted}· 暂无{reset}"));
+    } else {
+        for line in lines {
+            if line.is_empty() {
+                rows.push(String::new());
+                continue;
+            }
+            if line == "这是什么问题" || line == "为什么要管" || line == "建议动作" {
+                rows.push(format!("{accent}{line}{reset}"));
+            } else {
+                rows.push(format!("{text}{}{reset}", decorate_bullet_line(line)));
+            }
+        }
+    }
+    rows.join("\n")
+}
+
+
+
 fn compose_problem_block(
     problem_lines: &[String],
     why_lines: &[String],
@@ -3000,7 +3101,7 @@ fn render_panel(
     muted: &str,
     reset: &str,
 ) -> String {
-    let width = 92usize;
+    let width = BOX_WIDTH;
     let inner = width.saturating_sub(4);
     let mut rows = Vec::new();
     rows.push(format!(
@@ -4563,6 +4664,71 @@ mod tests {
         // Total width must be inner_width (40) + 4 (│ + space + space + │)
         assert_eq!(ascii_visible_width, 44);
         assert_eq!(cjk_visible_width, 44);
+    }
+
+    #[test]
+    fn decide_render_mode_uses_plain_below_box_width_threshold() {
+        // A terminal narrower than the box needs must fall back to Plain —
+        // this is the actual fix for "narrow terminal still overflows even
+        // with correct CJK width math": we stop trying to draw a fixed
+        // 92-column box in a smaller terminal at all.
+        assert_eq!(super::decide_render_mode(Some(40)), super::RenderMode::Plain);
+        assert_eq!(super::decide_render_mode(Some(79)), super::RenderMode::Plain);
+        assert_eq!(super::decide_render_mode(Some(95)), super::RenderMode::Plain);
+    }
+
+    #[test]
+    fn decide_render_mode_uses_boxed_at_or_above_threshold() {
+        assert_eq!(super::decide_render_mode(Some(96)), super::RenderMode::Boxed);
+        assert_eq!(super::decide_render_mode(Some(120)), super::RenderMode::Boxed);
+        assert_eq!(super::decide_render_mode(Some(500)), super::RenderMode::Boxed);
+    }
+
+    #[test]
+    fn decide_render_mode_defaults_to_boxed_when_not_a_tty() {
+        // Piped/redirected output (terminal_size returns None) keeps the
+        // pre-existing fixed-width box behavior — there's no real viewport
+        // to adapt to, and this matches every prior release's behavior for
+        // `audit-risk check . > report.txt` or `| less`.
+        assert_eq!(super::decide_render_mode(None), super::RenderMode::Boxed);
+    }
+
+    #[test]
+    fn plain_mode_never_emits_box_drawing_characters() {
+        // The whole point of Plain mode is that it cannot overflow because
+        // it does no fixed-width padding math at all. Confirm it contains
+        // none of the box-drawing glyphs the Boxed renderer uses.
+        let rendered = super::render_panel_plain(
+            "问题说明",
+            &vec![
+                "严重 · migrations/0001_init.sql:0 · Migration file changed — may irreversibly alter data schema. Requires manual review, and this sentence is deliberately much longer than any fixed box width so it would have overflowed a narrow box.".to_string(),
+            ],
+            "",
+            "",
+            "",
+            "",
+        );
+        for glyph in ["╭", "╮", "╰", "╯", "│", "├", "┤"] {
+            assert!(!rendered.contains(glyph), "plain mode must not draw box borders, found {glyph}");
+        }
+        assert!(rendered.contains("问题说明"));
+        assert!(rendered.contains("Migration file changed"));
+    }
+
+    #[test]
+    fn plain_mode_preserves_empty_state_and_bullet_formatting() {
+        let empty = super::render_panel_plain("下一步", &[], "", "", "", "");
+        assert!(empty.contains("暂无"));
+
+        let with_bullets = super::render_panel_plain(
+            "下一步",
+            &vec!["- `audit-risk check .`".to_string()],
+            "",
+            "",
+            "",
+            "",
+        );
+        assert!(with_bullets.contains("•"), "bullet dash should still be decorated in plain mode");
     }
 
     #[test]
