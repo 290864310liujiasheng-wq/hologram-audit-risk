@@ -91,6 +91,24 @@ function runAuditRiskCheck(binaryPath: string, workspaceRoot: string): Promise<A
   });
 }
 
+/**
+ * Severity labels shown in the enriched hover message — mirrors the labels
+ * the CLI's own terminal output uses (严重/高危/中危/低危), so the wording is
+ * consistent whether you're looking at a terminal or the editor.
+ */
+function severityLabel(severity: string): string {
+  switch (severity) {
+    case 'critical':
+      return '严重';
+    case 'high':
+      return '高危';
+    case 'medium':
+      return '中危';
+    default:
+      return '低危';
+  }
+}
+
 function findingsToDiagnosticsByFile(
   findings: AuditRiskFinding[],
   workspaceRoot: string
@@ -110,11 +128,22 @@ function findingsToDiagnosticsByFile(
     // needs some valid range even for whole-file findings.
     const startLine = Math.max(0, finding.location.start_line - 1);
     const endLine = Math.max(startLine, finding.location.end_line - 1);
+    // The CLI's JSON schema only carries line numbers, not column offsets,
+    // so the inline squiggle underlines the whole line rather than just the
+    // risky substring — a real limitation of today's payload, not something
+    // the extension can improve on its own without a CLI schema change.
     const range = new vscode.Range(startLine, 0, endLine, Number.MAX_SAFE_INTEGER);
+
+    // Hover content: lead with the plain-language explanation (already
+    // written for a human reader by the CLI), then a compact severity +
+    // rule-id line so the tooltip carries the same context the Problems
+    // panel and terminal output already show, instead of just the bare
+    // sentence.
+    const message = `${finding.plain_explanation}\n[${severityLabel(finding.severity)} · ${finding.rule_id}]`;
 
     const diagnostic = new vscode.Diagnostic(
       range,
-      finding.plain_explanation,
+      message,
       severityToDiagnosticSeverity(finding.severity)
     );
     diagnostic.source = 'audit-risk';

@@ -69,4 +69,46 @@ suite('audit-risk extension', () => {
       'diagnostics must be empty after auditRisk.clear'
     );
   });
+
+  test('inline diagnostics attach to the real open editor with an enriched hover message', async () => {
+    const workspaceRoot = process.env.AUDIT_RISK_TEST_WORKSPACE;
+    const configPyPath = path.join(workspaceRoot!, 'src', 'config.py');
+    const configPyUri = vscode.Uri.file(configPyPath);
+
+    await vscode.commands.executeCommand('auditRisk.check');
+
+    // Actually open the document in an editor — this is what step 2 is
+    // about: confirming the diagnostic is attached to a live, visible
+    // document (which is what makes VS Code render the inline squiggle),
+    // not just present in the headless getDiagnostics() query used by the
+    // other tests.
+    const document = await vscode.workspace.openTextDocument(configPyUri);
+    const editor = await vscode.window.showTextDocument(document);
+    assert.strictEqual(editor.document.uri.fsPath, configPyPath);
+
+    const diagnostics = vscode.languages.getDiagnostics(configPyUri);
+    const secretFinding = diagnostics.find((d) => d.message.includes('API key'));
+    assert.ok(secretFinding, 'expected the secret finding to still be present with the editor open');
+
+    // The hover message must carry both the human-readable explanation
+    // (unchanged from the CLI) AND the enriched severity/rule_id line added
+    // in this step — confirms the tooltip shown when hovering the inline
+    // squiggle has real context, not just a bare sentence.
+    assert.ok(
+      secretFinding!.message.includes('严重') || secretFinding!.message.includes('高危'),
+      `enriched message must include a Chinese severity label, got: ${secretFinding!.message}`
+    );
+    assert.ok(
+      secretFinding!.message.includes(secretFinding!.code as string),
+      'enriched message must include the rule_id shown alongside the diagnostic code'
+    );
+
+    // The diagnostic's range must fall within the document's actual line
+    // count — if the range pointed past the end of the file, VS Code would
+    // silently fail to render the squiggle at all.
+    assert.ok(
+      secretFinding!.range.start.line < document.lineCount,
+      'diagnostic range must point at a real line within the open document'
+    );
+  });
 });
