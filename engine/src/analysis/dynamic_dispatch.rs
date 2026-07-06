@@ -461,7 +461,9 @@ function init() {
         let added = synthesize_js_fallback(&mut g, "api.js", source);
         // .then() with arrow function — at minimum should not crash
         // (arrow_function detection may need fine-tuning per tree-sitter version)
-        assert!(added >= 0);
+        // `added` is a usize; reaching this line without panicking is the
+        // actual assertion. `added >= 0` was always true and asserted nothing.
+        let _ = added;
     }
 
     #[test]

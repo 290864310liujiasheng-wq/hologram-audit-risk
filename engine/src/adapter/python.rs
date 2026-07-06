@@ -229,6 +229,8 @@ mod tests {
         assert_eq!(e1.len(), 0);
         let (n2, e2, _) = adapter.analyze("bad.py", "this is not valid python @@@");
         assert!(n2.len() >= 1);
-        assert!(e2.len() >= 0);
+        // e2.len() is a usize; reaching this line without panicking on
+        // malformed input is the actual assertion. `>= 0` was always true.
+        let _ = e2;
     }
 }

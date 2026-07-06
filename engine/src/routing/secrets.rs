@@ -44,6 +44,12 @@ pub struct SecretScanner {
     sensitive_var_names: Regex,
 }
 
+impl Default for SecretScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SecretScanner {
     pub fn new() -> Self {
         let known_prefixes = vec![
