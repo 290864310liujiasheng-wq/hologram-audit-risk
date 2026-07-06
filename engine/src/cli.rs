@@ -691,7 +691,7 @@ fn run_watch_command(
 ) -> Result<CommandOutcome, CliRuntimeError> {
     let workspace_path = resolve_existing_workspace_path(workspace)?;
     if observe {
-        ensure_pro_feature("observe")?;
+        ensure_pro_feature("observe", &workspace_path)?;
     }
     let mut stdout = io::stdout();
     let observe_runtime = if observe {
@@ -1161,13 +1161,13 @@ fn run_notify_command(
     webhook_url: Option<&str>,
     output_mode: DefaultOutputMode,
 ) -> Result<CommandOutcome, CliRuntimeError> {
-    ensure_pro_feature("notify")?;
-    if !test {
-        return Err(CliRuntimeError::environment("notify currently only supports --test."));
-    }
     let workspace_path = workspace.map(PathBuf::from).unwrap_or(std::env::current_dir().map_err(|error| {
         CliRuntimeError::environment(format!("failed to determine current directory: {error}"))
     })?);
+    ensure_pro_feature("notify", &workspace_path)?;
+    if !test {
+        return Err(CliRuntimeError::environment("notify currently only supports --test."));
+    }
     let resolved_webhook = resolve_webhook_url(&workspace_path, webhook_url)?;
     let payload = json!({
         "event": "audit-risk.notify_test",
@@ -1194,9 +1194,6 @@ fn run_report_command(
     output_mode: DefaultOutputMode,
     history_compare: bool,
 ) -> Result<CommandOutcome, CliRuntimeError> {
-    if history_compare {
-        ensure_pro_feature("history_compare")?;
-    }
     let cwd = std::env::current_dir()
         .map_err(|error| CliRuntimeError::environment(format!("failed to determine current directory: {error}")))?;
     if let Some(workspace) = args.workspace.as_ref() {
@@ -1207,6 +1204,14 @@ fn run_report_command(
         );
     } else {
         args.workspace = Some(default_workspace_root(&cwd).display().to_string());
+    }
+    if history_compare {
+        let workspace_path = PathBuf::from(
+            args.workspace
+                .as_ref()
+                .expect("workspace was just set above"),
+        );
+        ensure_pro_feature("history_compare", &workspace_path)?;
     }
     let output = run_phase5_secondary_command("report", args)?;
     let exit_code = output.exit_code;
@@ -1226,11 +1231,11 @@ fn run_report_command(
 }
 
 fn run_observe_command(workspace: Option<&str>) -> Result<CommandOutcome, CliRuntimeError> {
-    ensure_pro_feature("observe")?;
     let workspace_path = workspace.map(PathBuf::from).unwrap_or(std::env::current_dir().map_err(|error| {
         CliRuntimeError::environment(format!("无法读取当前目录：{error}"))
     })?);
     let workspace_path = resolve_existing_path(&workspace_path.display().to_string())?;
+    ensure_pro_feature("observe", &workspace_path)?;
     let runtime = start_observe_runtime(&workspace_path)?;
     Ok(CommandOutcome::text(
         0,
@@ -2581,29 +2586,132 @@ struct AuthEntitlementEnvelope {
     signature: String,
 }
 
-fn ensure_pro_feature(feature: &str) -> Result<(), CliRuntimeError> {
+/// Real, current signal used to personalize the Pro paywall message instead
+/// of a static feature list. Computed from data the Core tier already
+/// produces (the same check pipeline `check`/`watch` use, and a plain
+/// line-count of the existing audit log) — never a claim about what
+/// Pro-tier detection would additionally find, since Core and Pro currently
+/// run the identical detection engine. The paywall is honest about what
+/// changes (command availability), not about a detection-depth difference
+/// that doesn't exist.
+#[derive(Debug, Clone, Default)]
+struct ProGateContext {
+    critical_count: usize,
+    high_count: usize,
+    audit_record_count: Option<usize>,
+}
+
+/// Compute `ProGateContext` for `feature` against `workspace`. Best-effort:
+/// any failure (unreadable workspace, no cached report, no prior audit log)
+/// falls back to an empty context, which renders the pre-existing generic
+/// message — personalization is an enhancement, never a hard requirement.
+///
+/// Deliberately reads the cached `.hologram/latest-risk-report.json` (the
+/// same file `read_last_review_summary` already reads for the home screen)
+/// instead of triggering a fresh `engine_analyze`. The engine keeps a single
+/// process-global instance (`static ENGINE: LazyLock<RwLock<Option<Engine>>>`
+/// in engine.rs) — calling into it from a gate-check path that can run
+/// concurrently with other engine-touching code (tests, or in principle a
+/// second command) races that shared singleton. A plain file read has no
+/// such hazard and matches the existing degrade-gracefully pattern used
+/// elsewhere in this file.
+fn build_pro_gate_context(feature: &str, workspace: &Path) -> ProGateContext {
+    if feature == "history_compare" {
+        let audit_path = workspace.join(DEFAULT_AUDIT_JSONL_PATH);
+        let audit_record_count = fs::read_to_string(&audit_path)
+            .ok()
+            .map(|raw| raw.lines().filter(|line| !line.trim().is_empty()).count());
+        return ProGateContext {
+            audit_record_count,
+            ..Default::default()
+        };
+    }
+
+    let report_path = workspace.join(DEFAULT_REPORT_OUTPUT_PATH);
+    let report = match fs::read_to_string(&report_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    {
+        Some(report) => report,
+        None => return ProGateContext::default(),
+    };
+    let findings = report
+        .pointer("/current_review/findings")
+        .or_else(|| report.pointer("/review/findings"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let critical_count = findings
+        .iter()
+        .filter(|f| f["severity"].as_str() == Some("critical"))
+        .count();
+    let high_count = findings
+        .iter()
+        .filter(|f| f["severity"].as_str() == Some("high"))
+        .count();
+    ProGateContext {
+        critical_count,
+        high_count,
+        audit_record_count: None,
+    }
+}
+
+fn ensure_pro_feature(feature: &str, workspace: &Path) -> Result<(), CliRuntimeError> {
     let status = load_or_refresh_entitlement_status(&entitlement_dir());
     if status.is_pro_allowed() {
         return Ok(());
     }
-    Err(CliRuntimeError::environment(render_pro_gate_message(feature, &status)))
+    let context = build_pro_gate_context(feature, workspace);
+    Err(CliRuntimeError::environment(render_pro_gate_message(feature, &status, &context)))
 }
 
-fn render_pro_gate_message(feature: &str, status: &EntitlementStatus) -> String {
+fn render_pro_gate_message(feature: &str, status: &EntitlementStatus, context: &ProGateContext) -> String {
     let (name, detail) = match feature {
         "observe" => ("手机观察", "把最近一次审查结果开成只读看板，方便你用手机或旁路设备盯状态。"),
         "notify" => ("告警推送", "把高风险审查结果推到 webhook，适合提交前或守护模式提醒。"),
         "history_compare" => ("历史风险对比", "把当前结果和历史审计样本放在一起看趋势，避免只凭单次扫描做判断。"),
         _ => ("Pro 增强功能", "解锁增强能力。"),
     };
+
+    // Ground the pitch in the user's real, current situation instead of an
+    // abstract feature list — but only when we actually have real data.
+    // Core and Pro run the identical detection engine today, so this must
+    // never claim Pro would find MORE; it only makes the value of the
+    // gated command concrete against risk the user already has.
+    let mut status_lines = vec![
+        format!("当前视图：{name}"),
+        format!("当前版本：{}", pro_status_label(status)),
+        format!("价格：Pro 个人版 {PRO_PERSONAL_PRICE_LABEL}"),
+    ];
+
+    let personalized_detail = if feature == "history_compare" {
+        match context.audit_record_count {
+            Some(n) if n > 0 => {
+                status_lines.push(format!("当前项目：已有 {n} 条历史审计记录"));
+                format!("你已经积累了 {n} 条历史审计记录 —— {detail}")
+            }
+            _ => {
+                status_lines.push("当前项目：暂无历史审计记录".to_string());
+                format!("继续用 check/watch 积累审计记录后，{detail}")
+            }
+        }
+    } else {
+        let urgent = context.critical_count + context.high_count;
+        if urgent > 0 {
+            status_lines.push(format!(
+                "当前项目：{} 条严重风险、{} 条高危风险待处理",
+                context.critical_count, context.high_count
+            ));
+            format!("你的项目当前有 {urgent} 条中高危以上风险待处理 —— {detail}")
+        } else {
+            detail.to_string()
+        }
+    };
+
     render_product_shell(
-        &[
-            format!("当前视图：{name}"),
-            format!("当前版本：{}", pro_status_label(status)),
-            format!("价格：Pro 个人版 {PRO_PERSONAL_PRICE_LABEL}"),
-        ],
+        &status_lines,
         &[format!("{name} 是 Pro 个人版功能。")],
-        &[detail.to_string()],
+        &[personalized_detail],
         &[
             "先登录，再由授权状态机决定能不能放行。".to_string(),
             "Core 免费能力不会因为这个页面被锁死。".to_string(),
@@ -4629,7 +4737,7 @@ mod tests {
         let root_path = std::env::temp_dir().join(format!("audit-risk-shell-layout-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root_path).expect("workspace root");
         let status = super::load_entitlement_status_from_dir(&root_path);
-        let gate = super::render_pro_gate_message("observe", &status);
+        let gate = super::render_pro_gate_message("observe", &status, &super::ProGateContext::default());
         assert!(gate.contains("当前概览"));
         assert!(gate.contains("问题说明"));
         assert!(gate.contains("下一步"));
@@ -4839,6 +4947,7 @@ mod tests {
         let gate = super::render_pro_gate_message(
             "history_compare",
             &super::load_entitlement_status_from_dir(&root_path),
+            &super::ProGateContext::default(),
         );
         assert!(gate.contains("历史风险对比"));
         assert!(gate.contains("audit-risk auth login"));
@@ -4857,6 +4966,127 @@ mod tests {
         assert!(watch_error.message.contains("手机观察"));
 
         let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn pro_gate_context_defaults_when_no_cached_report_exists() {
+        let root_path = std::env::temp_dir().join(format!("audit-risk-gate-context-empty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root_path).expect("workspace root");
+
+        let context = super::build_pro_gate_context("observe", &root_path);
+        assert_eq!(context.critical_count, 0);
+        assert_eq!(context.high_count, 0);
+        assert_eq!(context.audit_record_count, None);
+
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn pro_gate_context_reads_findings_from_cached_report_without_touching_the_engine() {
+        // Regression test: build_pro_gate_context used to call
+        // build_workspace_check_payload(), which calls engine_init/
+        // engine_analyze against the single process-global `static ENGINE`
+        // in engine.rs. That raced any other test running concurrently on
+        // the same global singleton — confirmed by 10 unrelated mcp::tests
+        // failures appearing only under `cargo test` (parallel), never
+        // under `cargo test <name>` (isolated). Fixed by reading the cached
+        // report file instead, which is pure I/O with no shared state.
+        let root_path = std::env::temp_dir().join(format!("audit-risk-gate-context-report-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root_path.join(".hologram")).expect("hologram dir");
+        let report = serde_json::json!({
+            "review": {
+                "findings": [
+                    {"severity": "critical"},
+                    {"severity": "critical"},
+                    {"severity": "high"},
+                    {"severity": "low"},
+                ]
+            }
+        });
+        std::fs::write(
+            root_path.join(".hologram/latest-risk-report.json"),
+            serde_json::to_string(&report).unwrap(),
+        )
+        .expect("write cached report");
+
+        let context = super::build_pro_gate_context("observe", &root_path);
+        assert_eq!(context.critical_count, 2);
+        assert_eq!(context.high_count, 1);
+
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn pro_gate_context_reads_current_review_shaped_report_too() {
+        // The TS-generated `audit-risk report` output nests findings under
+        // `current_review` rather than `review` — both shapes must work.
+        let root_path = std::env::temp_dir().join(format!("audit-risk-gate-context-current-review-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root_path.join(".hologram")).expect("hologram dir");
+        let report = serde_json::json!({
+            "current_review": {
+                "findings": [{"severity": "critical"}]
+            }
+        });
+        std::fs::write(
+            root_path.join(".hologram/latest-risk-report.json"),
+            serde_json::to_string(&report).unwrap(),
+        )
+        .expect("write cached report");
+
+        let context = super::build_pro_gate_context("notify", &root_path);
+        assert_eq!(context.critical_count, 1);
+
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn pro_gate_context_counts_audit_log_lines_for_history_compare() {
+        let root_path = std::env::temp_dir().join(format!("audit-risk-gate-context-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root_path.join(".hologram")).expect("hologram dir");
+        std::fs::write(
+            root_path.join(".hologram/audit.jsonl"),
+            "{\"a\":1}\n{\"a\":2}\n\n{\"a\":3}\n",
+        )
+        .expect("write audit log");
+
+        let context = super::build_pro_gate_context("history_compare", &root_path);
+        assert_eq!(context.audit_record_count, Some(3), "blank lines must not be counted");
+
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn pro_gate_message_personalizes_status_line_with_real_finding_counts() {
+        let status = super::load_entitlement_status_from_dir(&std::env::temp_dir());
+        let context = super::ProGateContext {
+            critical_count: 2,
+            high_count: 1,
+            audit_record_count: None,
+        };
+        let message = super::render_pro_gate_message("observe", &status, &context);
+        assert!(message.contains("2 条严重风险"));
+        assert!(message.contains("1 条高危风险"));
+        assert!(message.contains("3 条中高危以上风险"));
+    }
+
+    #[test]
+    fn pro_gate_message_personalizes_history_compare_with_audit_record_count() {
+        let status = super::load_entitlement_status_from_dir(&std::env::temp_dir());
+        let context = super::ProGateContext {
+            audit_record_count: Some(12),
+            ..Default::default()
+        };
+        let message = super::render_pro_gate_message("history_compare", &status, &context);
+        assert!(message.contains("已有 12 条历史审计记录"));
+    }
+
+    #[test]
+    fn pro_gate_message_falls_back_to_generic_text_when_context_is_empty() {
+        let status = super::load_entitlement_status_from_dir(&std::env::temp_dir());
+        let message = super::render_pro_gate_message("observe", &status, &super::ProGateContext::default());
+        // Must not fabricate risk numbers that don't exist.
+        assert!(!message.contains("条严重风险"));
+        assert!(message.contains("把最近一次审查结果开成只读看板"));
     }
 
     #[test]
