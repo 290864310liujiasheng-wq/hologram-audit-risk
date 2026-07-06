@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
+use unicode_width::UnicodeWidthStr;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use walkdir::WalkDir;
@@ -3063,7 +3065,13 @@ fn decorate_bullet_line(line: &str) -> String {
 
 fn panel_line(content: &str, inner_width: usize, panel: &str, border: &str, reset: &str) -> String {
     let visible = strip_ansi(content);
-    let pad = inner_width.saturating_sub(visible.chars().count());
+    // Use terminal display width, not char count — CJK characters render as
+    // 2 columns wide in virtually all terminals. Counting them as 1 (via
+    // .chars().count()) under-measures the line, over-pads it past the
+    // intended box width, and the background-color escape bleeds across
+    // the rest of the row once the line wraps past the terminal's actual
+    // column width.
+    let pad = inner_width.saturating_sub(UnicodeWidthStr::width(visible.as_str()));
     format!("{panel}{border}│ {content}{}{border} │{reset}", " ".repeat(pad))
 }
 
@@ -4527,6 +4535,34 @@ mod tests {
         assert!(gate.contains("\u{1b}[48;5;"));
         assert!(gate.contains("╭"));
         let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn panel_line_aligns_right_border_for_cjk_heavy_content() {
+        // Regression test: panel_line used to measure line length with
+        // .chars().count(), which counts each CJK character as width 1 even
+        // though terminals render them as width 2. That under-measurement
+        // over-padded every line containing Chinese text (which is nearly
+        // all of this UI's output), pushing rows past the intended box
+        // width and causing the background-color escape to bleed once the
+        // line wrapped in a real terminal — visually a solid colored bar
+        // instead of readable text. Confirmed with a real screenshot in a
+        // real terminal before and after this fix.
+        let ascii_line = super::panel_line("hello", 40, "", "", "");
+        let cjk_line = super::panel_line("当前视图：项目审查（示例仓库路径）", 40, "", "", "");
+
+        // Every rendered line must have the SAME total visible width
+        // (border char + space + inner content + pad + space + border char),
+        // regardless of whether the content is ASCII or CJK.
+        let ascii_visible_width = unicode_width::UnicodeWidthStr::width(super::strip_ansi(&ascii_line).as_str());
+        let cjk_visible_width = unicode_width::UnicodeWidthStr::width(super::strip_ansi(&cjk_line).as_str());
+        assert_eq!(
+            ascii_visible_width, cjk_visible_width,
+            "ASCII and CJK content must produce the same total row width so the right border stays aligned"
+        );
+        // Total width must be inner_width (40) + 4 (│ + space + space + │)
+        assert_eq!(ascii_visible_width, 44);
+        assert_eq!(cjk_visible_width, 44);
     }
 
     #[test]
