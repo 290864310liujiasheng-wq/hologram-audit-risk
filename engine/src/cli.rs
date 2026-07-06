@@ -2688,7 +2688,7 @@ fn render_pro_gate_message(feature: &str, status: &EntitlementStatus, context: &
         match context.audit_record_count {
             Some(n) if n > 0 => {
                 status_lines.push(format!("当前项目：已有 {n} 条历史审计记录"));
-                format!("你已经积累了 {n} 条历史审计记录 —— {detail}")
+                ansi_bold_highlight(&format!("你已经积累了 {n} 条历史审计记录 —— {detail}"))
             }
             _ => {
                 status_lines.push("当前项目：暂无历史审计记录".to_string());
@@ -2702,7 +2702,7 @@ fn render_pro_gate_message(feature: &str, status: &EntitlementStatus, context: &
                 "当前项目：{} 条严重风险、{} 条高危风险待处理",
                 context.critical_count, context.high_count
             ));
-            format!("你的项目当前有 {urgent} 条中高危以上风险待处理 —— {detail}")
+            ansi_bold_highlight(&format!("你的项目当前有 {urgent} 条中高危以上风险待处理 —— {detail}"))
         } else {
             detail.to_string()
         }
@@ -3371,7 +3371,8 @@ fn severity_label(severity: &str) -> &'static str {
 }
 
 fn format_finding_line(entry: &Value) -> String {
-    let severity = severity_label(entry.get("severity").and_then(Value::as_str).unwrap_or("low"));
+    let severity_str = entry.get("severity").and_then(Value::as_str).unwrap_or("low");
+    let severity = severity_label(severity_str);
     let explanation = entry
         .get("plain_explanation")
         .and_then(Value::as_str)
@@ -3387,7 +3388,16 @@ fn format_finding_line(entry: &Value) -> String {
             )
         })
         .unwrap_or_else(|| "unknown".to_string());
-    format!("{severity} · {location} · {explanation}")
+    let line = format!("{severity} · {location} · {explanation}");
+    // Color by severity so the eye lands on critical/high findings first —
+    // matches the coloring watch mode already applies, now shared by
+    // check/report/diff's panel-based finding preview too.
+    match severity_str {
+        "critical" | "high" => ansi_red(&line),
+        "medium" => ansi_yellow(&line),
+        "low" => ansi_dim(&line),
+        _ => line,
+    }
 }
 
 fn render_check_screen(payload: &Value) -> Result<String, CliRuntimeError> {
@@ -4569,6 +4579,14 @@ fn ansi_dim(value: &str) -> String {
     format!("\u{1b}[2m{value}\u{1b}[0m")
 }
 
+/// Bold + bright yellow — used to make a single callout line stand out
+/// within a panel (e.g. the personalized Pro-gate detail) without touching
+/// background color, which would need explicit scope management inside
+/// panel_line to avoid bleeding into the padding/border that follows.
+fn ansi_bold_highlight(value: &str) -> String {
+    format!("\u{1b}[1;38;5;220m{value}\u{1b}[0m")
+}
+
 fn normalize_path(path: impl AsRef<str>) -> String {
     path.as_ref().replace('\\', "/")
 }
@@ -4876,6 +4894,40 @@ mod tests {
     }
 
     #[test]
+    fn format_finding_line_colors_by_severity() {
+        let critical = json!({"severity": "critical", "plain_explanation": "x", "location": {"file_path": "a.py", "start_line": 1}});
+        let high = json!({"severity": "high", "plain_explanation": "x", "location": {"file_path": "a.py", "start_line": 1}});
+        let medium = json!({"severity": "medium", "plain_explanation": "x", "location": {"file_path": "a.py", "start_line": 1}});
+        let low = json!({"severity": "low", "plain_explanation": "x", "location": {"file_path": "a.py", "start_line": 1}});
+
+        assert!(super::format_finding_line(&critical).contains("\u{1b}[31m"), "critical must be red");
+        assert!(super::format_finding_line(&high).contains("\u{1b}[31m"), "high must be red");
+        assert!(super::format_finding_line(&medium).contains("\u{1b}[33m"), "medium must be yellow");
+        assert!(super::format_finding_line(&low).contains("\u{1b}[2m"), "low must be dim");
+    }
+
+    #[test]
+    fn check_screen_finding_preview_carries_severity_color_through_the_panel() {
+        // Regression guard: render_panel wraps every content line uniformly
+        // in the panel's default text color. Confirm an embedded severity
+        // color on a finding line survives that wrapping instead of being
+        // silently overwritten, and that the CJK-width padding math (which
+        // strips ANSI before measuring) still lines up the right border.
+        let payload = json!({
+            "workspace_root": "/tmp/customer-repo",
+            "review": {
+                "gate_decision": {"decision": "block", "reason": "阻断示例", "finding_count": 1},
+                "findings": [
+                    {"severity": "critical", "plain_explanation": "严重问题示例", "location": {"file_path": "a.py", "start_line": 1}}
+                ]
+            }
+        });
+        let rendered = super::render_check_screen(&payload).expect("check shell");
+        assert!(rendered.contains("\u{1b}[31m"), "embedded red must survive panel wrapping");
+        assert!(rendered.contains("严重问题示例"));
+    }
+
+    #[test]
     fn check_screen_covers_warn_and_block_gate_labels() {
         for (decision, expected) in [("warn", "告警"), ("block", "阻断")] {
             let payload = json!({
@@ -5087,6 +5139,27 @@ mod tests {
         // Must not fabricate risk numbers that don't exist.
         assert!(!message.contains("条严重风险"));
         assert!(message.contains("把最近一次审查结果开成只读看板"));
+    }
+
+    #[test]
+    fn pro_gate_message_highlights_personalized_detail_but_not_generic_fallback() {
+        let status = super::load_entitlement_status_from_dir(&std::env::temp_dir());
+
+        let personalized = super::render_pro_gate_message(
+            "observe",
+            &status,
+            &super::ProGateContext { critical_count: 1, high_count: 0, audit_record_count: None },
+        );
+        assert!(
+            personalized.contains("\u{1b}[1;38;5;220m"),
+            "a real, data-backed callout should be visually highlighted"
+        );
+
+        let generic = super::render_pro_gate_message("observe", &status, &super::ProGateContext::default());
+        assert!(
+            !generic.contains("\u{1b}[1;38;5;220m"),
+            "the plain fallback text is not a callout and must not be highlighted"
+        );
     }
 
     #[test]
