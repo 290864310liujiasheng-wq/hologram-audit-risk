@@ -79,7 +79,7 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
 }
 
 /// run_full_check — equivalent of Python preflight.py run_full_check()
-pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _project_root: &str) -> Value {
+pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], project_root: &str) -> Value {
     // First open: establish baseline quietly — don't audit the whole project.
     if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
         return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
@@ -101,7 +101,19 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], _
     let mut signals = SignalGenerator::new().generate(before, after, changed_files, l4_count, cycle_count);
 
     // Secret scanning: scan the content of every changed file.
-    let secret_signals = crate::routing::secrets::scan_changed_files(changed_files);
+    // `changed_files` are relative to `project_root` (from `git status --short`
+    // inside the workspace dir) — they must be resolved against project_root,
+    // not the current process cwd, or every read silently misses.
+    let project_root_path = Path::new(project_root);
+    let absolute_changed_files: Vec<String> = if project_root.is_empty() {
+        changed_files.to_vec()
+    } else {
+        changed_files
+            .iter()
+            .map(|f| project_root_path.join(f).to_string_lossy().into_owned())
+            .collect()
+    };
+    let secret_signals = crate::routing::secrets::scan_changed_files(&absolute_changed_files, changed_files);
     signals.extend(secret_signals);
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(&signals, &config);

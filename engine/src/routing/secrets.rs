@@ -207,17 +207,32 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
     })
 }
 
-/// Scan `changed_files` from the filesystem and return signals.
+/// Scan the file at each `read_paths[i]` and report findings under the
+/// corresponding `display_paths[i]`.
+///
+/// `read_paths` must be resolvable from the current process (typically
+/// absolute, or relative to the caller's cwd). `display_paths` are what
+/// gets shown to the user/audit log — usually the workspace-relative path,
+/// so findings don't leak the developer's local absolute filesystem layout.
+///
+/// If the two slices have different lengths, falls back to using
+/// `read_paths` for display too (defensive — should not happen in practice).
 /// Files that cannot be read (binary, missing) are silently skipped.
-pub fn scan_changed_files(changed_files: &[String]) -> Vec<Value> {
+pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Vec<Value> {
     let scanner = SecretScanner::new();
     let mut signals = Vec::new();
-    for path in changed_files {
-        let content = match std::fs::read_to_string(path) {
+    let use_display_paths = read_paths.len() == display_paths.len();
+    for (index, read_path) in read_paths.iter().enumerate() {
+        let content = match std::fs::read_to_string(read_path) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        for finding in scanner.scan_content(path, &content) {
+        let display_path = if use_display_paths {
+            &display_paths[index]
+        } else {
+            read_path
+        };
+        for finding in scanner.scan_content(display_path, &content) {
             signals.push(finding_to_signal(&finding));
         }
     }
@@ -441,8 +456,26 @@ mod tests {
     #[test]
     fn scan_changed_files_skips_missing_file() {
         // Should not panic on a file that doesn't exist
-        let signals = scan_changed_files(&["/tmp/nonexistent_audit_risk_test_file.rs".to_string()]);
+        let paths = vec!["/tmp/nonexistent_audit_risk_test_file.rs".to_string()];
+        let signals = scan_changed_files(&paths, &paths);
         assert!(signals.is_empty());
+    }
+
+    #[test]
+    fn scan_changed_files_reports_under_display_path_not_read_path() {
+        let dir = std::env::temp_dir().join(format!("audit-risk-secrets-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let abs_file = dir.join("config.py");
+        std::fs::write(&abs_file, r#"api_key = "sk-abcdefghijklmnopqrstuvwxyz123456""#).expect("write file");
+
+        let read_paths = vec![abs_file.to_string_lossy().into_owned()];
+        let display_paths = vec!["src/config.py".to_string()];
+        let signals = scan_changed_files(&read_paths, &display_paths);
+
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0]["signal"]["file_path"], "src/config.py");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────

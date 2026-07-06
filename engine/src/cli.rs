@@ -3853,7 +3853,6 @@ fn complete_auth_exchange(
     base_url: &str,
 ) -> Result<AuthExchangeResult, CliRuntimeError> {
     let session_id = session.session_id.as_str();
-    let user_id = "user-1";
     let poll_result: AuthPollResponse = auth_http_json_typed(
         "GET",
         &format!("{}/api/auth/poll?session_id={}", base_url.trim_end_matches('/'), session_id),
@@ -3874,11 +3873,14 @@ fn complete_auth_exchange(
         Some(&exchange_body),
     )?;
     exchange_result.entitlement.device_id = device_id.clone();
+    // The server is the source of truth for user_id — it comes back on the
+    // exchange response itself, never hardcode a placeholder here.
+    let user_id = exchange_result.entitlement.user_id.clone();
     let base_entitlement = serde_json::to_value(&exchange_result.entitlement)
         .map_err(|error| CliRuntimeError::internal(format!("无法编码 auth exchange entitlement：{error}")))?;
     let base_signature = exchange_result.signature.clone();
 
-    exchange_result = match maybe_resolve_payment_pending(base_url, exchange_result, user_id, &device_id) {
+    exchange_result = match maybe_resolve_payment_pending(base_url, exchange_result, &user_id, &device_id) {
         Ok(value) => value,
         Err(error) => {
             let mut pending_entitlement = base_entitlement.clone();
