@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
+import { FindingsTreeProvider, openFinding } from './findingsTreeProvider';
 
 /**
  * Severity strings the audit-risk CLI's `--json` output uses. Mapped to
@@ -157,10 +158,22 @@ function findingsToDiagnosticsByFile(
   return byFile;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+/** Exposed via `extension.exports` so the integration test suite can
+ * inspect the sidebar tree provider's state without needing UI automation
+ * (which isn't available in the headless/CI test runner). Not part of any
+ * public API contract for other extensions. */
+export interface AuditRiskExports {
+  findingsTree: FindingsTreeProvider;
+}
+
+export function activate(context: vscode.ExtensionContext): AuditRiskExports {
   const diagnostics = vscode.languages.createDiagnosticCollection('auditRisk');
   const output = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
-  context.subscriptions.push(diagnostics, output);
+  const findingsTree = new FindingsTreeProvider();
+  const treeView = vscode.window.createTreeView('auditRisk.findings', {
+    treeDataProvider: findingsTree,
+  });
+  context.subscriptions.push(diagnostics, output, treeView);
 
   async function runCheckCommand(): Promise<void> {
     const folders = vscode.workspace.workspaceFolders;
@@ -199,6 +212,7 @@ export function activate(context: vscode.ExtensionContext): void {
     for (const [filePath, fileDiagnostics] of byFile) {
       diagnostics.set(vscode.Uri.file(filePath), fileDiagnostics);
     }
+    findingsTree.update(payload.review.findings, payload.review.gate_decision, payload.workspace_root);
 
     const gate = payload.review.gate_decision;
     const findingCount = payload.review.findings.length;
@@ -217,12 +231,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   function clearCommand(): void {
     diagnostics.clear();
+    findingsTree.clear();
     output.appendLine('[audit-risk] 已清除审查结果。');
   }
 
   context.subscriptions.push(
     vscode.commands.registerCommand('auditRisk.check', runCheckCommand),
-    vscode.commands.registerCommand('auditRisk.clear', clearCommand)
+    vscode.commands.registerCommand('auditRisk.clear', clearCommand),
+    vscode.commands.registerCommand('auditRisk.openFinding', openFinding)
   );
 
   const runOnSave = vscode.workspace.getConfiguration('auditRisk').get<boolean>('runOnSave');
@@ -233,6 +249,8 @@ export function activate(context: vscode.ExtensionContext): void {
       })
     );
   }
+
+  return { findingsTree };
 }
 
 export function deactivate(): void {

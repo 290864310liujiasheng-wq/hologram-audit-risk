@@ -29,6 +29,14 @@
         "category": "audit-risk"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "auditRisk.findings",
+          "name": "audit-risk 审查结果"
+        }
+      ]
+    },
     "configuration": {
       "title": "audit-risk",
       "properties": {

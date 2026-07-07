@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { AuditRiskExports } from '../../extension';
+import type { FindingTreeItem } from '../../findingsTreeProvider';
 
 suite('audit-risk extension', () => {
   test('auditRisk.check populates the Problems panel with real findings', async () => {
@@ -110,5 +112,86 @@ suite('audit-risk extension', () => {
       secretFinding!.range.start.line < document.lineCount,
       'diagnostic range must point at a real line within the open document'
     );
+  });
+
+  test('sidebar findings tree shows the gate decision and groups findings by severity', async () => {
+    const extension = vscode.extensions.getExtension<AuditRiskExports>('audit-risk.audit-risk');
+    assert.ok(extension, 'extension audit-risk.audit-risk must be discoverable');
+    const exports = await extension!.activate();
+
+    await vscode.commands.executeCommand('auditRisk.check');
+
+    const rootItems = exports.findingsTree.getChildren();
+    assert.ok(rootItems.length >= 1, 'root must contain at least the gate item');
+
+    const gateItem = rootItems.find((item) => item.kind === 'gate');
+    assert.ok(gateItem, 'root must contain a gate decision item');
+    assert.ok(
+      gateItem!.label && gateItem!.label.toString().includes('Gate'),
+      `gate item label must describe the gate decision, got: ${gateItem!.label}`
+    );
+
+    // The fixture plants 3 critical/high-severity findings (2 structural +
+    // 1 secret) and no medium/low ones — confirm the severity groups match
+    // reality instead of asserting a specific hardcoded count that could
+    // silently drift from the fixture.
+    const severityGroups = rootItems.filter((item) => item.kind === 'severityGroup');
+    assert.ok(severityGroups.length > 0, 'must have at least one severity group when findings exist');
+    assert.ok(
+      severityGroups.every((group) => group.label && /（\d+）/.test(group.label.toString())),
+      'each severity group label must show a finding count in parentheses'
+    );
+
+    // Drill into the first severity group and confirm its children are
+    // real finding items with a working "open" command wired up (this is
+    // what makes clicking a tree item jump to the file/line).
+    const firstGroup = severityGroups[0];
+    const findingItems: FindingTreeItem[] = exports.findingsTree.getChildren(firstGroup);
+    assert.ok(findingItems.length > 0, 'severity group must expand to at least one finding');
+    for (const item of findingItems) {
+      assert.strictEqual(item.kind, 'finding');
+      assert.ok(item.finding, 'each finding tree item must carry its underlying finding data');
+      assert.ok(item.command, 'each finding tree item must have a click command wired up');
+      assert.strictEqual(item.command!.command, 'auditRisk.openFinding');
+    }
+  });
+
+  test('sidebar findings tree shows an empty-state message before any check has run and after clear', async () => {
+    const extension = vscode.extensions.getExtension<AuditRiskExports>('audit-risk.audit-risk');
+    const exports = await extension!.activate();
+
+    await vscode.commands.executeCommand('auditRisk.clear');
+    const afterClear = exports.findingsTree.getChildren();
+    assert.strictEqual(afterClear.length, 1);
+    assert.strictEqual(afterClear[0].kind, 'empty');
+  });
+
+  test('auditRisk.openFinding opens the file and reveals the finding line', async () => {
+    const workspaceRoot = process.env.AUDIT_RISK_TEST_WORKSPACE;
+    const extension = vscode.extensions.getExtension<AuditRiskExports>('audit-risk.audit-risk');
+    const exports = await extension!.activate();
+
+    await vscode.commands.executeCommand('auditRisk.check');
+    const rootItems = exports.findingsTree.getChildren();
+    const severityGroup = rootItems.find((item) => item.kind === 'severityGroup');
+    assert.ok(severityGroup, 'expected at least one severity group to click into');
+    const findingItems: FindingTreeItem[] = exports.findingsTree.getChildren(severityGroup);
+    const configPyFinding = findingItems.find((item) => item.finding?.location.file_path.includes('config.py'));
+    assert.ok(configPyFinding, 'expected a finding pointing at config.py');
+
+    await vscode.commands.executeCommand(
+      'auditRisk.openFinding',
+      configPyFinding!.finding,
+      workspaceRoot
+    );
+
+    const activeEditor = vscode.window.activeTextEditor;
+    assert.ok(activeEditor, 'clicking a finding must open an editor');
+    assert.ok(
+      activeEditor!.document.uri.fsPath.endsWith(path.join('src', 'config.py')),
+      `expected config.py to be opened, got: ${activeEditor!.document.uri.fsPath}`
+    );
+    const expectedLine = Math.max(0, configPyFinding!.finding!.location.start_line - 1);
+    assert.strictEqual(activeEditor!.selection.active.line, expectedLine);
   });
 });

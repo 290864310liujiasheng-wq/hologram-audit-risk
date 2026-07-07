@@ -99,3 +99,9 @@ src-tauri/python/*
 scripts/python-3.14.4-embed-amd64.zip
 _check_debug.log
 test-results/
+
+# Local MCP config — contains machine-specific absolute paths (per-developer).
+# Copy .mcp.json.example to .mcp.json and adjust paths for your machine.
+.mcp.json
+.mcp.json.bak
+.mcp.json.macfix-backup-*

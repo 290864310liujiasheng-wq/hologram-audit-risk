@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hologram": {
+      "command": "/absolute/path/to/repo/engine/target/release/hologram-engine",
+      "args": ["serve", "--project-root", "/absolute/path/to/repo"]
+    }
+  }
+}
