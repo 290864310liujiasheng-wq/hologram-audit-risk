@@ -116,6 +116,14 @@ pub enum CliCommand {
     Auth {
         action: AuthAction,
     },
+    RepairPlan {
+        workspace: String,
+        finding_id: String,
+    },
+    RepairApply {
+        workspace: String,
+        plan_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,6 +432,43 @@ pub fn parse_cli_command(args: &[String]) -> Result<ParsedCliCommand, UsageError
                 default_output: DefaultOutputMode::Human,
             })
         }
+        "repair" => {
+            let subaction = rest.first().map(String::as_str);
+            match subaction {
+                Some("plan") => {
+                    let rest2 = &rest[1..];
+                    let workspace = required_positional("repair plan", rest2, 0, "<workspace>")?;
+                    let finding_id = take_option(rest2, "--finding")?
+                        .ok_or_else(|| UsageError::new("`repair plan` 需要 `--finding <finding_id>`。"))?;
+                    let output_mode = resolve_output_mode(rest2, DefaultOutputMode::Json);
+                    reject_unknown_flags(rest2, &["--finding", "--json"])?;
+                    Ok(ParsedCliCommand {
+                        command: CliCommand::RepairPlan { workspace, finding_id },
+                        tier: CommandTier::Secondary,
+                        default_output: output_mode,
+                    })
+                }
+                Some("apply") => {
+                    let rest2 = &rest[1..];
+                    let workspace = required_positional("repair apply", rest2, 0, "<workspace>")?;
+                    let plan_id = take_option(rest2, "--plan")?
+                        .ok_or_else(|| UsageError::new("`repair apply` 需要 `--plan <plan_id>`。"))?;
+                    let output_mode = resolve_output_mode(rest2, DefaultOutputMode::Json);
+                    reject_unknown_flags(rest2, &["--plan", "--json"])?;
+                    Ok(ParsedCliCommand {
+                        command: CliCommand::RepairApply { workspace, plan_id },
+                        tier: CommandTier::Secondary,
+                        default_output: output_mode,
+                    })
+                }
+                Some(other) => Err(UsageError::new(format!(
+                    "`repair` 不认识 `{other}`。可用命令：audit-risk repair plan <workspace> --finding <id> / repair apply <workspace> --plan <id>"
+                ))),
+                None => Err(UsageError::new(
+                    "`repair` 需要一个动作：audit-risk repair plan / repair apply",
+                )),
+            }
+        }
         _ => Err(UsageError::new(format!(
             "不认识这个命令：`{subcommand}`。\n\n运行 `audit-risk help` 查看全部命令。"
         ))),
@@ -600,6 +645,12 @@ fn execute_command(parsed: ParsedCliCommand) -> Result<CommandOutcome, CliRuntim
         } => run_notify_command(workspace.as_deref(), test, webhook_url.as_deref(), output_mode),
         CliCommand::Observe { workspace } => run_observe_command(workspace.as_deref()),
         CliCommand::Auth { action } => run_auth_command(action),
+        CliCommand::RepairPlan { workspace, finding_id } => {
+            run_repair_plan_command(&workspace, &finding_id)
+        }
+        CliCommand::RepairApply { workspace, plan_id } => {
+            run_repair_apply_command(&workspace, &plan_id)
+        }
     }
 }
 
@@ -1228,6 +1279,461 @@ fn run_report_command(
         };
         Ok(CommandOutcome::text(exit_code, rendered))
     }
+}
+
+fn run_repair_plan_command(workspace: &str, finding_id: &str) -> Result<CommandOutcome, CliRuntimeError> {
+    let workspace_path = resolve_existing_workspace_path(workspace)?;
+
+    // Load delivery.json to find provider config — user must have run `audit-risk init` first.
+    let delivery_path = workspace_path.join(".hologram/delivery.json");
+    let delivery: serde_json::Value = fs::read_to_string(&delivery_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .ok_or_else(|| {
+            CliRuntimeError::environment(
+                "找不到 .hologram/delivery.json。请先运行 `audit-risk init <workspace>` 完成初始化。".to_string(),
+            )
+        })?;
+
+    let provider = delivery.get("provider").ok_or_else(|| {
+        CliRuntimeError::environment("delivery.json 缺少 provider 配置，请检查 .hologram/delivery.json。".to_string())
+    })?;
+
+    // Resolve the API key from environment variable (key_source: env).
+    let key_source = provider.get("key_source").and_then(|v| v.as_str()).unwrap_or("env");
+    let api_key = if key_source == "env" {
+        let env_var = provider.get("env_var").and_then(|v| v.as_str()).unwrap_or("");
+        if env_var.is_empty() {
+            return Err(CliRuntimeError::environment(
+                "delivery.json provider.env_var 未配置，无法读取 API Key。".to_string(),
+            ));
+        }
+        std::env::var(env_var).ok().filter(|v| !v.trim().is_empty()).ok_or_else(|| {
+            CliRuntimeError::environment(format!(
+                "环境变量 {env_var} 未设置或为空。请设置好 API Key 后重试。"
+            ))
+        })?
+    } else {
+        return Err(CliRuntimeError::environment(
+            "当前只支持 key_source=env 的 provider 配置。".to_string(),
+        ));
+    };
+
+    let provider_name = provider.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let model = provider.get("model").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let base_url = provider.get("base_url").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Run check to get the latest findings, then look up the requested finding_id.
+    let payload = build_workspace_check_payload(&workspace_path)?;
+    let findings = payload["review"]["findings"]
+        .as_array()
+        .ok_or_else(|| CliRuntimeError::internal("check payload missing review.findings".to_string()))?;
+
+    let finding = findings
+        .iter()
+        .find(|f| f.get("finding_id").and_then(|v| v.as_str()) == Some(finding_id))
+        .ok_or_else(|| {
+            CliRuntimeError::environment(format!(
+                "找不到 finding_id={finding_id}。请先运行 `audit-risk check <workspace> --json` 确认 finding ID。"
+            ))
+        })?;
+
+    let severity = finding.get("severity").and_then(|v| v.as_str()).unwrap_or("low");
+    let file_path = finding["location"].get("file_path").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let start_line = finding["location"].get("start_line").and_then(|v| v.as_u64()).unwrap_or(1);
+    let end_line = finding["location"].get("end_line").and_then(|v| v.as_u64()).unwrap_or(start_line);
+    let explanation = finding.get("plain_explanation").and_then(|v| v.as_str()).unwrap_or("");
+    let rule_id = finding.get("rule_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Read source file content for context (capped at 200 lines to avoid huge prompts).
+    let abs_file = if std::path::Path::new(file_path).is_absolute() {
+        std::path::PathBuf::from(file_path)
+    } else {
+        workspace_path.join(file_path)
+    };
+    let source_lines: Vec<String> = fs::read_to_string(&abs_file)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let context_start = start_line.saturating_sub(10).max(1) as usize;
+    let context_end = (end_line as usize + 10).min(source_lines.len());
+    let source_context = source_lines
+        .get(context_start.saturating_sub(1)..context_end)
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{}: {}", context_start + i, line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Build prompt and call the model via HTTP.
+    let prompt = format!(
+        "你是一个代码安全修复助手。以下是一条风险 finding，请给出最小化、安全的修复方案。\n\n\
+        风险说明：{explanation}\n\
+        规则：{rule_id}\n\
+        严重程度：{severity}\n\
+        文件：{file_path}（第 {start_line}-{end_line} 行）\n\n\
+        相关源码（行号: 内容）：\n{source_context}\n\n\
+        请返回一个 JSON 对象，格式如下（只返回 JSON，不要其他文字）：\n\
+        {{\n\
+          \"summary\": \"一句话说明修复了什么\",\n\
+          \"rationale\": \"为什么这样修复能消除风险\",\n\
+          \"operations\": [\n\
+            {{\n\
+              \"file_path\": \"{file_path}\",\n\
+              \"start_line\": {start_line},\n\
+              \"end_line\": {end_line},\n\
+              \"old_content\": \"原始代码行（完整）\",\n\
+              \"new_content\": \"修复后的代码行（完整）\",\n\
+              \"summary\": \"这一处改动的说明\"\n\
+            }}\n\
+          ]\n\
+        }}"
+    );
+
+    let proposal_value = call_model_for_repair(base_url, provider_name, model, &api_key, &prompt)?;
+
+    // Validate the proposal: summary/rationale/operation.summary must not be placeholder text.
+    let summary = proposal_value.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+    let rationale = proposal_value.get("rationale").and_then(|v| v.as_str()).unwrap_or("");
+    for (field, value) in [("summary", summary), ("rationale", rationale)] {
+        let lower = value.to_lowercase();
+        if lower.is_empty() || matches!(lower.trim(), "fix" | "todo" | "update" | "修复" | "待办") {
+            return Err(CliRuntimeError::internal(format!(
+                "模型返回的 {field} 是占位文本，无法作为有效修复方案。"
+            )));
+        }
+    }
+
+    // Validate operations cover the finding's file path.
+    let operations = proposal_value.get("operations").and_then(|v| v.as_array()).ok_or_else(|| {
+        CliRuntimeError::internal("模型返回的修复方案缺少 operations 字段。".to_string())
+    })?;
+    let covers_target = operations.iter().any(|op| {
+        op.get("file_path").and_then(|v| v.as_str()).map(|p| normalize_path(p) == normalize_path(file_path)).unwrap_or(false)
+    });
+    if !covers_target {
+        return Err(CliRuntimeError::internal(format!(
+            "模型返回的修复方案未覆盖目标文件 {file_path}，已拒绝。"
+        )));
+    }
+
+    // Generate plan_id and persist to .hologram/repair-plans/.
+    let plan_id = format!("rp_{}", pseudo_id(&format!("{finding_id}{}", now_iso())));
+    let expires_at = repair_plan_expiry_iso();
+    let plan = json!({
+        "plan_id": plan_id,
+        "finding_id": finding_id,
+        "file_path": file_path,
+        "start_line": start_line,
+        "end_line": end_line,
+        "severity": severity,
+        "rule_id": rule_id,
+        "strategy": "语义修复",
+        "risk_note": "此修复会改动源码，请在确认前人工复核业务语义。",
+        "required_tests": ["git diff --check"],
+        "operations": operations,
+        "summary": summary,
+        "rationale": rationale,
+        "provider_name": provider_name,
+        "model": model,
+        "created_at": now_iso(),
+        "expires_at": expires_at,
+        "approval_state": "waiting_approval",
+    });
+
+    let plans_dir = workspace_path.join(".hologram/repair-plans");
+    fs::create_dir_all(&plans_dir).map_err(|e| CliRuntimeError::internal(format!("无法创建 repair-plans 目录：{e}")))?;
+    let plan_path = plans_dir.join(format!("{plan_id}.json"));
+    fs::write(&plan_path, serde_json::to_string_pretty(&plan).unwrap_or_default())
+        .map_err(|e| CliRuntimeError::internal(format!("无法写入修复方案文件：{e}")))?;
+
+    // Append audit event.
+    append_repair_audit_event(&workspace_path, "repair_planned", &plan_id, finding_id, "修复方案已生成，等待用户确认。");
+
+    let mut output = build_structured_output_envelope("repair", "ok", Some(&workspace_path.display().to_string()));
+    if let Some(obj) = output.as_object_mut() {
+        obj.insert("repair".into(), plan);
+    }
+    Ok(CommandOutcome::json(0, output))
+}
+
+fn run_repair_apply_command(workspace: &str, plan_id: &str) -> Result<CommandOutcome, CliRuntimeError> {
+    let workspace_path = resolve_existing_workspace_path(workspace)?;
+
+    // Load the saved plan.
+    let plan_path = workspace_path.join(format!(".hologram/repair-plans/{plan_id}.json"));
+    let plan: serde_json::Value = fs::read_to_string(&plan_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .ok_or_else(|| {
+            CliRuntimeError::environment(format!(
+                "找不到修复方案 {plan_id}。方案可能已过期（10 分钟有效）或 plan_id 有误。"
+            ))
+        })?;
+
+    // Check expiry.
+    if let Some(expires_at) = plan.get("expires_at").and_then(|v| v.as_str()) {
+        if is_repair_plan_expired(expires_at) {
+            return Err(CliRuntimeError::environment(format!(
+                "修复方案 {plan_id} 已过期。请重新运行 `audit-risk repair plan` 生成新方案。"
+            )));
+        }
+    }
+
+    let finding_id = plan.get("finding_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let operations = plan.get("operations").and_then(|v| v.as_array()).ok_or_else(|| {
+        CliRuntimeError::internal("修复方案 operations 字段缺失或格式有误。".to_string())
+    })?;
+
+    // Preflight: run required_tests before touching any file.
+    let required_tests: Vec<&str> = plan
+        .get("required_tests")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_else(|| vec!["git diff --check"]);
+
+    let mut preflight_results = Vec::new();
+    for cmd in &required_tests {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let (prog, args) = parts.split_first().unwrap_or((&"true", &[]));
+        let result = Command::new(prog)
+            .args(args)
+            .current_dir(&workspace_path)
+            .output();
+        let passed = result.as_ref().map(|out| out.status.success()).unwrap_or(false);
+        let stdout = result.as_ref().map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string()).unwrap_or_default();
+        let stderr = result.as_ref().map(|out| String::from_utf8_lossy(&out.stderr).trim().to_string()).unwrap_or_default();
+        preflight_results.push(json!({
+            "command": cmd,
+            "passed": passed,
+            "stdout": stdout,
+            "stderr": stderr,
+        }));
+        if !passed {
+            append_repair_audit_event(&workspace_path, "repair_preflight_failed", plan_id, finding_id,
+                &format!("预检命令失败：{cmd}。修复已阻断。"));
+            let mut output = build_structured_output_envelope("repair", "error", Some(&workspace_path.display().to_string()));
+            if let Some(obj) = output.as_object_mut() {
+                obj.insert("apply".into(), json!({
+                    "plan_id": plan_id,
+                    "preflight": {
+                        "passed": false,
+                        "failed_command": cmd,
+                        "results": preflight_results,
+                    },
+                    "error": format!("预检命令 `{cmd}` 失败，修复已阻断。请先解决上述问题再重试。"),
+                }));
+            }
+            return Ok(CommandOutcome::json(3, output));
+        }
+    }
+
+    // Apply: write each operation's new_content to the target file.
+    let mut applied_files: Vec<String> = Vec::new();
+    let mut rollback_snapshots: Vec<(std::path::PathBuf, String)> = Vec::new();
+
+    for op in operations {
+        let rel_path = op.get("file_path").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let abs_path = if std::path::Path::new(rel_path).is_absolute() {
+            std::path::PathBuf::from(rel_path)
+        } else {
+            workspace_path.join(rel_path)
+        };
+
+        // Snapshot original for rollback.
+        let original_content = fs::read_to_string(&abs_path).unwrap_or_default();
+        rollback_snapshots.push((abs_path.clone(), original_content.clone()));
+
+        let start_line = op.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+        let end_line = op.get("end_line").and_then(|v| v.as_u64()).unwrap_or(start_line as u64) as usize;
+        let new_content = op.get("new_content").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut lines: Vec<String> = original_content.lines().map(str::to_string).collect();
+        let replace_start = start_line.saturating_sub(1);
+        let replace_end = end_line.min(lines.len());
+
+        if replace_start >= lines.len() {
+            // Append if target is past end of file.
+            lines.push(new_content.to_string());
+        } else {
+            lines.splice(replace_start..replace_end, std::iter::once(new_content.to_string()));
+        }
+
+        let new_file_content = lines.join("\n") + if original_content.ends_with('\n') { "\n" } else { "" };
+
+        if let Err(write_err) = fs::write(&abs_path, &new_file_content) {
+            // Write failed — roll back everything written so far.
+            for (rollback_path, rollback_content) in &rollback_snapshots {
+                let _ = fs::write(rollback_path, rollback_content);
+            }
+            append_repair_audit_event(&workspace_path, "repair_rolled_back", plan_id, finding_id,
+                &format!("写入失败，已回滚：{write_err}"));
+            return Err(CliRuntimeError::internal(format!(
+                "写入 {} 失败，所有已修改文件已回滚：{write_err}",
+                abs_path.display()
+            )));
+        }
+
+        applied_files.push(normalize_path(rel_path));
+    }
+
+    // Clean up plan file (it's been applied).
+    let _ = fs::remove_file(&plan_path);
+
+    append_repair_audit_event(&workspace_path, "repair_applied", plan_id, finding_id,
+        &format!("修复已成功应用，涉及文件：{}", applied_files.join(", ")));
+
+    let mut output = build_structured_output_envelope("repair", "ok", Some(&workspace_path.display().to_string()));
+    if let Some(obj) = output.as_object_mut() {
+        obj.insert("apply".into(), json!({
+            "plan_id": plan_id,
+            "applied_files": applied_files,
+            "preflight": {
+                "passed": true,
+                "commands_run": required_tests,
+                "results": preflight_results,
+            },
+            "audit_ref": DEFAULT_AUDIT_JSONL_PATH,
+        }));
+    }
+    Ok(CommandOutcome::json(0, output))
+}
+
+/// Call the provider model with a plain HTTP POST and return the parsed proposal JSON.
+fn call_model_for_repair(
+    base_url: &str,
+    provider_name: &str,
+    model: &str,
+    api_key: &str,
+    prompt: &str,
+) -> Result<serde_json::Value, CliRuntimeError> {
+    // Build a minimal OpenAI-compatible chat request that both DeepSeek and OpenAI accept.
+    // Anthropic uses a different envelope — detect by provider name.
+    let is_anthropic = provider_name.to_lowercase().contains("anthropic");
+
+    let (url, body, auth_header) = if is_anthropic {
+        let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+        let body = json!({
+            "model": model,
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}]
+        });
+        (url, body, format!("x-api-key: {api_key}"))
+    } else {
+        let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+        let body = json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2
+        });
+        (url, body, format!("Authorization: Bearer {api_key}"))
+    };
+
+    let body_str = serde_json::to_string(&body)
+        .map_err(|e| CliRuntimeError::internal(format!("无法序列化请求体：{e}")))?;
+
+    // Use curl as the HTTP client — avoids adding an async runtime or HTTP crate dependency.
+    let auth_parts: Vec<&str> = auth_header.splitn(2, ": ").collect();
+    let (header_name, header_value) = if auth_parts.len() == 2 {
+        (auth_parts[0], auth_parts[1])
+    } else {
+        return Err(CliRuntimeError::internal("认证头格式有误。".to_string()));
+    };
+
+    let result = Command::new("curl")
+        .args([
+            "-s", "-X", "POST", &url,
+            "-H", "Content-Type: application/json",
+            "-H", &format!("{header_name}: {header_value}"),
+            "-d", &body_str,
+            "--max-time", "60",
+        ])
+        .output()
+        .map_err(|e| CliRuntimeError::internal(format!("无法调用 curl：{e}。请确认系统已安装 curl。")))?;
+
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        return Err(CliRuntimeError::internal(format!("curl 请求失败：{stderr}")));
+    }
+
+    let raw = String::from_utf8_lossy(&result.stdout);
+    let response: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| CliRuntimeError::internal(format!("模型响应不是有效 JSON：{e}")))?;
+
+    // Extract text content from OpenAI-compatible or Anthropic response.
+    let text = if is_anthropic {
+        response["content"][0]["text"].as_str()
+    } else {
+        response["choices"][0]["message"]["content"].as_str()
+    }
+    .ok_or_else(|| {
+        CliRuntimeError::internal(format!(
+            "模型响应中找不到文本内容。原始响应：{}",
+            &raw.chars().take(300).collect::<String>()
+        ))
+    })?;
+
+    // Extract JSON from the response text (model might wrap it in ```json blocks).
+    let json_text = extract_json_from_text(text);
+    serde_json::from_str(json_text.as_deref().unwrap_or(text))
+        .map_err(|e| CliRuntimeError::internal(format!("无法解析模型返回的 JSON：{e}")))
+}
+
+/// Strip ```json ... ``` fences if the model wrapped the response.
+fn extract_json_from_text(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if let Some(inner) = trimmed.strip_prefix("```json").and_then(|s| s.strip_suffix("```")) {
+        return Some(inner.trim().to_string());
+    }
+    if let Some(inner) = trimmed.strip_prefix("```").and_then(|s| s.strip_suffix("```")) {
+        return Some(inner.trim().to_string());
+    }
+    None
+}
+
+/// Append a minimal repair audit event to .hologram/audit.jsonl.
+fn append_repair_audit_event(workspace: &Path, event_type: &str, plan_id: &str, finding_id: &str, reason: &str) {
+    let audit_path = workspace.join(DEFAULT_AUDIT_JSONL_PATH);
+    if let Some(parent) = audit_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let event = json!({
+        "event_type": event_type,
+        "plane": "repair",
+        "subject_ref": plan_id,
+        "finding_id": finding_id,
+        "reason": reason,
+        "timestamp": now_iso(),
+    });
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&audit_path) {
+        let _ = writeln!(file, "{}", serde_json::to_string(&event).unwrap_or_default());
+    }
+}
+
+/// Generate a short deterministic-ish id from a seed string (no randomness needed for plan IDs).
+fn pseudo_id(seed: &str) -> String {
+    // Use a simple djb2-style hash to produce a short hex string.
+    let mut hash: u64 = 5381;
+    for byte in seed.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
+    }
+    format!("{hash:016x}")
+}
+
+/// ISO timestamp 10 minutes from now for plan expiry.
+fn repair_plan_expiry_iso() -> String {
+    // chrono is already used elsewhere in this file (now_iso uses it).
+    let expiry = chrono::Utc::now() + chrono::Duration::minutes(10);
+    expiry.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// Return true if the plan's expires_at timestamp is in the past.
+fn is_repair_plan_expired(expires_at: &str) -> bool {
+    chrono::DateTime::parse_from_rfc3339(expires_at)
+        .map(|exp| exp < chrono::Utc::now())
+        .unwrap_or(false)
 }
 
 fn run_observe_command(workspace: Option<&str>) -> Result<CommandOutcome, CliRuntimeError> {
@@ -5822,5 +6328,87 @@ mod tests {
         let summary = super::render_watch_summary_human(&payload, false).expect("human summary");
         assert!(summary.contains("\u{1b}[33m"));
         assert!(summary.contains("[medium] src/a.ts:3 medium finding"));
+    }
+
+    #[test]
+    fn parses_repair_plan_command() {
+        let parsed = parse_cli_command(&args(&[
+            "repair", "plan", "/tmp/repo", "--finding", "l5_violations:0", "--json",
+        ]))
+        .expect("repair plan should parse");
+        assert_eq!(parsed.tier, CommandTier::Secondary);
+        assert_eq!(parsed.default_output, DefaultOutputMode::Json);
+        assert!(
+            matches!(
+                &parsed.command,
+                CliCommand::RepairPlan { workspace, finding_id }
+                    if workspace == "/tmp/repo" && finding_id == "l5_violations:0"
+            ),
+            "unexpected command: {:?}",
+            parsed.command
+        );
+    }
+
+    #[test]
+    fn parses_repair_apply_command() {
+        let parsed = parse_cli_command(&args(&[
+            "repair", "apply", "/tmp/repo", "--plan", "rp_abc123def456", "--json",
+        ]))
+        .expect("repair apply should parse");
+        assert_eq!(parsed.tier, CommandTier::Secondary);
+        assert_eq!(parsed.default_output, DefaultOutputMode::Json);
+        assert!(
+            matches!(
+                &parsed.command,
+                CliCommand::RepairApply { workspace, plan_id }
+                    if workspace == "/tmp/repo" && plan_id == "rp_abc123def456"
+            ),
+            "unexpected command: {:?}",
+            parsed.command
+        );
+    }
+
+    #[test]
+    fn repair_plan_rejects_missing_finding_flag() {
+        let err = parse_cli_command(&args(&["repair", "plan", "/tmp/repo"]))
+            .expect_err("missing --finding should be a usage error");
+        assert!(
+            err.message().contains("--finding"),
+            "error must mention --finding, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn repair_apply_rejects_missing_plan_flag() {
+        let err = parse_cli_command(&args(&["repair", "apply", "/tmp/repo"]))
+            .expect_err("missing --plan should be a usage error");
+        assert!(
+            err.message().contains("--plan"),
+            "error must mention --plan, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn repair_unknown_subaction_returns_usage_error() {
+        let err = parse_cli_command(&args(&["repair", "execute", "/tmp/repo"]))
+            .expect_err("unknown repair subaction should be a usage error");
+        assert!(
+            err.message().contains("execute") || err.message().contains("repair"),
+            "error must mention the bad subaction, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn repair_with_no_subaction_returns_usage_error() {
+        let err = parse_cli_command(&args(&["repair"]))
+            .expect_err("bare repair with no subaction should be a usage error");
+        assert!(
+            err.message().contains("repair"),
+            "error must mention repair, got: {}",
+            err.message()
+        );
     }
 }

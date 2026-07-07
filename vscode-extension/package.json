@@ -27,8 +27,30 @@
         "command": "auditRisk.clear",
         "title": "audit-risk: 清除审查结果",
         "category": "audit-risk"
+      },
+      {
+        "command": "auditRisk.openFinding",
+        "title": "audit-risk: 打开风险位置",
+        "category": "audit-risk"
+      },
+      {
+        "command": "auditRisk.repair",
+        "title": "audit-risk: 修复此风险",
+        "category": "audit-risk"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "auditRisk.openFinding",
+          "when": "false"
+        },
+        {
+          "command": "auditRisk.repair",
+          "when": "false"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {

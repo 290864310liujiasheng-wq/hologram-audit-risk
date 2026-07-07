@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
 import { FindingsTreeProvider, openFinding } from './findingsTreeProvider';
+import { RepairCodeActionProvider, repairCommand, hasDeliveryConfig } from './repairCodeActionProvider';
 
 /**
  * Severity strings the audit-risk CLI's `--json` output uses. Mapped to
@@ -238,7 +239,32 @@ export function activate(context: vscode.ExtensionContext): AuditRiskExports {
   context.subscriptions.push(
     vscode.commands.registerCommand('auditRisk.check', runCheckCommand),
     vscode.commands.registerCommand('auditRisk.clear', clearCommand),
-    vscode.commands.registerCommand('auditRisk.openFinding', openFinding)
+    vscode.commands.registerCommand('auditRisk.openFinding', openFinding),
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: 'file' },
+      new RepairCodeActionProvider(),
+      { providedCodeActionKinds: RepairCodeActionProvider.providedCodeActionKinds }
+    ),
+    vscode.commands.registerCommand(
+      'auditRisk.repair',
+      async (uri: vscode.Uri, diagnostic: vscode.Diagnostic, findingRef: string) => {
+        const folders = vscode.workspace.workspaceFolders;
+        if (folders && folders.length > 0) {
+          const workspaceRoot = folders[0].uri.fsPath;
+          if (!hasDeliveryConfig(workspaceRoot)) {
+            const sel = await vscode.window.showErrorMessage(
+              'audit-risk: 当前工作区未完成初始化，无法生成修复方案。请先运行 `audit-risk init <workspace>` 并配置 provider。',
+              '打开终端'
+            );
+            if (sel === '打开终端') {
+              vscode.commands.executeCommand('workbench.action.terminal.new');
+            }
+            return;
+          }
+        }
+        await repairCommand(uri, diagnostic, findingRef, () => diagnostics, runCheckCommand, output);
+      }
+    )
   );
 
   const runOnSave = vscode.workspace.getConfiguration('auditRisk').get<boolean>('runOnSave');
