@@ -124,6 +124,8 @@ This section records the current truth for the adopted repo.
 - 已取得 preflight allow/block 闭环样本：allow 样本中 `git diff --check` 通过、`repair_apply` gate 为 `allow` 且 patch 成功落盘；block 样本中当前 review / CheckPanel / repair audit 同步暴露 `repair.test.required_command_failed`、失败命令 `git diff --check` 和 gate reason `修复前验证命令必须全部通过`。
 - 已补 provider 边界矩阵：`auth_invalid`、`rate_limit`、`timeout`、`upstream_5xx`、`proxy_407`、`tls_handshake_failed`、`tls_cert_revoked`、`connection_reset`、`socket_hang_up` 均已有稳定复现样本，并在 `current_review` / `CheckPanel` / repair audit 三处维持同码值口径。
 - 当前仍缺但不再阻断第三阶段收口：`anthropic` 真实 live proposal 成功样本与更多真实上游故障 trace；当前已由 `deepseek` 真样本和稳定复现样本覆盖阶段验收面。
+- 2026-07-07：已新增 `vscode-extension` 的 audit-risk findings 侧边栏面板 owner：`vscode-extension/src/findingsTreeProvider.ts` 把 review findings 按严重程度分组渲染，展示 gate 决策，并支持点击 finding 跳转到 `file:line`（默认展开）；`extension.ts` 注册 `auditRisk.findings` 树视图与 `auditRisk.openFinding` 命令，`package.json` 注册 explorer 视图；已补 6 个集成测试（`vscode-extension/src/test/suite/extension.test.ts`）全部通过，`tsc -p ./` 编译通过。此前用于截图验证的临时 `AUDIT_RISK_AUTO_CHECK_ON_ACTIVATE` 代码已在提交前删除。改动已落 commit `91b6e0b`。
+- 2026-07-07：`.mcp.json` 含本机绝对路径，已从 git 移除跟踪并加入 `.gitignore`（保留本地文件），改为提供 `.mcp.json.example` 占位模板，避免商业化交付时泄露本机路径或对客户失效。
 
 下一步安全任务：
 
