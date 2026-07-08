@@ -78,8 +78,30 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
     })
 }
 
+/// True for files audit-risk manages itself (its own state dir and generated
+/// automation). Changes to these are the tool bookkeeping its own scaffolding,
+/// not user-facing risk — flagging `.hologram/delivery.json` or the generated
+/// CI workflow as a "critical config change" is just noise that buries the
+/// real findings (leaked keys, injection) further down the list.
+fn is_tool_artifact(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    p == ".hologram"
+        || p.starts_with(".hologram/")
+        || p == ".githooks/pre-commit"
+        || p == ".github/workflows/hologram-risk.yml"
+}
+
 /// run_full_check — equivalent of Python preflight.py run_full_check()
 pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], project_root: &str) -> Value {
+    // Drop audit-risk's own managed files so its scaffolding never shows up as
+    // user risk. Everything below sees only genuine workspace changes.
+    let filtered_changed: Vec<String> = changed_files
+        .iter()
+        .filter(|f| !is_tool_artifact(f))
+        .cloned()
+        .collect();
+    let changed_files: &[String] = &filtered_changed;
+
     // First open: establish baseline quietly — don't audit the whole project.
     if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
         return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);

@@ -7,6 +7,14 @@ fn count_l4_edges(graph: &Graph) -> usize {
     graph.edges.values().filter(|e| e.coupling_depth >= 4).count()
 }
 
+/// Reduce an internal node id to a human-readable symbol name for display.
+/// Node ids can carry a full dotted path (e.g.
+/// `.private.tmp.app.src.utils.load_config`); users only need the trailing
+/// symbol (`load_config`), not the leaked absolute path.
+fn short_symbol(node_id: &str) -> &str {
+    node_id.rsplit(['.', '/']).next().unwrap_or(node_id)
+}
+
 pub struct SignalGenerator {
     matcher: PatternMatcher,
 }
@@ -52,7 +60,7 @@ impl SignalGenerator {
         for edge in after.edges.values() {
             if edge.coupling_depth >= 3 && changed_files.iter().any(|f|
                 after.nodes.get(&edge.source).and_then(|n| n.location.as_deref()).unwrap_or("").contains(f)) {
-                signals.push(json!({"signal":{"description":format!("{} -> {} writes shared data.", edge.source, edge.target),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+                signals.push(json!({"signal":{"description":format!("{} 与 {} 之间存在共享数据写入耦合，改动其一可能影响另一处。", short_symbol(&edge.source), short_symbol(&edge.target)),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
             }
         }
 

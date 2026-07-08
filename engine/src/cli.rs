@@ -278,6 +278,20 @@ pub fn parse_cli_command(args: &[String]) -> Result<ParsedCliCommand, UsageError
             })
         }
         "diff" => {
+            // diff compares two paths (old vs new). New users often expect it to
+            // review the current git diff — steer them to `check .` instead of
+            // dumping a bare "requires <after>".
+            if take_flag(rest, "--help") || take_flag(rest, "-h") || positional_arguments(rest).len() < 2 {
+                return Err(UsageError::new(
+                    "用法：audit-risk diff <旧> <新>\n\
+                     \n\
+                     对比两个目录或文件的风险差异，<旧> 和 <新> 都是路径。\n\
+                     例 1：audit-risk diff ./v1 ./v2\n\
+                     例 2：audit-risk diff old.py new.py --json\n\
+                     \n\
+                     只想审查当前工作区/Git 改动？用 `audit-risk check .`。",
+                ));
+            }
             let before = required_positional(subcommand, rest, 0, "<before>")?;
             let after = required_positional(subcommand, rest, 1, "<after>")?;
             let pretty = take_flag(rest, "--pretty");
@@ -926,14 +940,58 @@ fn run_init_command(
                 .to_string(),
         ));
     }
+    // Activate the generated pre-commit hook. Writing `.githooks/pre-commit`
+    // does nothing on its own — git ignores it until core.hooksPath points
+    // there. Without this the "blocks risky commits" promise silently never
+    // fires. We only set it when it's a git repo and hooksPath isn't already
+    // pointing somewhere the user chose.
+    let hook_activation = activate_pre_commit_hook(&workspace_path);
     let mut output = build_structured_output_envelope("init", "ok", Some(&workspace_path.display().to_string()));
     if let Some(object) = output.as_object_mut() {
         object.insert("created_files".into(), json!(created));
+        object.insert("hook_activation".into(), json!(hook_activation));
     }
     if output_mode == DefaultOutputMode::Json {
         Ok(CommandOutcome::json(0, output))
     } else {
         Ok(CommandOutcome::text(0, render_init_screen(&output)?))
+    }
+}
+
+/// Point git at `.githooks` so the generated pre-commit hook actually runs.
+/// Returns a human-readable status for the init screen.
+fn activate_pre_commit_hook(workspace_path: &Path) -> String {
+    let is_git_repo = workspace_path.join(".git").exists();
+    if !is_git_repo {
+        return "未激活：当前目录不是 Git 仓库，`git init` 后运行 `git config core.hooksPath .githooks` 即可启用提交前拦截。".to_string();
+    }
+    let current = Command::new("git")
+        .arg("-C")
+        .arg(workspace_path)
+        .args(["config", "--get", "core.hooksPath"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    match current {
+        Some(existing) if existing != ".githooks" => format!(
+            "未改动：core.hooksPath 已指向 `{existing}`。如需启用 audit-risk 钩子，请手动合并或改为 `.githooks`。"
+        ),
+        _ => {
+            let set = Command::new("git")
+                .arg("-C")
+                .arg(workspace_path)
+                .args(["config", "core.hooksPath", ".githooks"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if set {
+                "已激活：core.hooksPath 已设为 `.githooks`，提交前会自动运行 audit-risk check --fail-on block。".to_string()
+            } else {
+                "未激活：设置 core.hooksPath 失败，请手动运行 `git config core.hooksPath .githooks`。".to_string()
+            }
+        }
     }
 }
 
@@ -1097,12 +1155,12 @@ fn run_doctor_command(
                             .and_then(Value::as_str)
                             .unwrap_or_default();
                         if env_var.is_empty() {
-                            blockers.push("provider env_var is missing".to_string());
+                            blockers.push("delivery.json 里 provider.env_var 为空，无法定位密钥来源。".to_string());
                             "error"
                         } else if std::env::var(env_var).ok().map(|value| !value.trim().is_empty()).unwrap_or(false) {
                             "ok"
                         } else {
-                            notes.push(format!("provider env var is not set: {env_var}"));
+                            notes.push(format!("Provider 密钥环境变量未设置：{env_var}。它用于调用模型生成白话解释；不配置时结构化审查仍可用，只是没有模型解释。设置方法：export {env_var}=<你的密钥>。"));
                             "needs_attention"
                         }
                     }
@@ -1117,7 +1175,7 @@ fn run_doctor_command(
             }));
         }
         None => {
-            notes.push("provider config not found in delivery.json".to_string());
+            notes.push("delivery.json 里没有找到 provider 配置。".to_string());
             checks.push(json!({
                 "name": "provider_config",
                 "status": "needs_attention",
@@ -1160,7 +1218,7 @@ fn run_doctor_command(
             "detail": detail,
         }));
     } else {
-        notes.push("auth service base URL is not configured".to_string());
+        notes.push("未配置 auth 服务地址。仅 Pro 登录/授权需要，Core 免费功能不受影响；如需开通 Pro，在 delivery.json 的 auth.base_url 填入服务地址。".to_string());
         checks.push(json!({
             "name": "auth_service",
             "status": "needs_attention",
@@ -2013,7 +2071,59 @@ fn derive_findings(check: &Value) -> Vec<Value> {
             }
         }
     }
+    // Rank so the most actionable findings surface first: severity high→low,
+    // then findings pinned to a concrete file:line above whole-project signals.
+    // This keeps a leaked key or injection from being buried under structural
+    // "shared data" notes that share the same severity.
+    findings.sort_by(|a, b| {
+        finding_priority(b)
+            .cmp(&finding_priority(a))
+            .then_with(|| finding_specificity(b).cmp(&finding_specificity(a)))
+    });
     findings
+}
+
+/// Higher = more urgent. Keyed off severity plus the finding's semantic class
+/// (leaked secrets / injection / dangerous execution outrank generic structure).
+fn finding_priority(finding: &Value) -> i32 {
+    let severity_rank = match finding.get("severity").and_then(Value::as_str) {
+        Some("critical") => 400,
+        Some("high") => 300,
+        Some("medium") => 200,
+        Some("low") => 100,
+        _ => 0,
+    };
+    let explanation = finding
+        .get("plain_explanation")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    // Nudge the highest-consequence classes above same-severity peers.
+    let class_bonus = if explanation.contains("密钥") || explanation.contains("secret") || explanation.contains("key") {
+        50
+    } else if explanation.contains("注入") || explanation.contains("injection") {
+        40
+    } else if explanation.contains("危险") || explanation.contains("执行") {
+        30
+    } else {
+        0
+    };
+    severity_rank + class_bonus
+}
+
+/// 1 when the finding points at a concrete file:line, 0 for whole-project signals.
+fn finding_specificity(finding: &Value) -> i32 {
+    let loc = finding.get("location").and_then(Value::as_object);
+    let has_file = loc
+        .and_then(|l| l.get("file_path"))
+        .and_then(Value::as_str)
+        .map(|f| !f.is_empty() && f != "unknown")
+        .unwrap_or(false);
+    let has_line = loc
+        .and_then(|l| l.get("start_line"))
+        .and_then(Value::as_u64)
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    i32::from(has_file && has_line)
 }
 
 fn derive_gate_decision(check: &Value, findings: &[Value]) -> Value {
@@ -2495,11 +2605,22 @@ fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<
             "webhook_url": "",
         }
     });
-    let platform_root = normalize_path(platform_root.display().to_string());
+    // The generated pre-commit hook calls `audit-risk` from PATH (or an
+    // explicit AUDIT_RISK_BIN). It deliberately does NOT bake in this build
+    // machine's path or `cargo run` — a customer installs a binary and has
+    // neither the repo nor a Rust toolchain.
+    let _ = platform_root;
     vec![
         (
             ".hologram/delivery.json".to_string(),
             format!("{}\n", serde_json::to_string_pretty(&config).unwrap_or_else(|_| "{}".to_string())),
+            false,
+        ),
+        (
+            ".hologram/.gitignore".to_string(),
+            // Volatile runtime state — never commit. delivery.json / rules stay
+            // tracked (they're config the team shares).
+            "# audit-risk 运行时状态，不要提交\nhologram.db\nhologram.db-shm\nhologram.db-wal\nbaseline.json\nlatest-risk-report.json\n".to_string(),
             false,
         ),
         (
@@ -2538,7 +2659,7 @@ fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<
         ),
         (
             DEFAULT_PRE_COMMIT_PATH.to_string(),
-            format!("#!/bin/sh\nset -eu\n\nPLATFORM_ROOT=\"${{AUDIT_RISK_PLATFORM_ROOT:-${{HOLOGRAM_PLATFORM_ROOT:-{platform_root}}}}}\"\nWORKSPACE_ROOT=\"${{1:-$PWD}}\"\n\ncargo run --quiet --manifest-path \"$PLATFORM_ROOT/engine/Cargo.toml\" --bin audit-risk -- report \"$WORKSPACE_ROOT\" --fail-on block --json > \"$WORKSPACE_ROOT/{DEFAULT_REPORT_OUTPUT_PATH}\"\n"),
+            "#!/bin/sh\nset -eu\n\n# audit-risk 提交前门禁：阻断级风险会拦下提交。\n# 需要 audit-risk 在 PATH 中；自定义安装路径可设置 AUDIT_RISK_BIN。\n# 临时跳过：git commit --no-verify\n#\n# 启用本钩子：git config core.hooksPath .githooks（audit-risk init 会自动尝试设置）\n\nBIN=\"${AUDIT_RISK_BIN:-audit-risk}\"\nROOT=\"${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"\n\nif ! command -v \"$BIN\" >/dev/null 2>&1 && [ ! -x \"$BIN\" ]; then\n  echo \"[audit-risk] 未找到 audit-risk 可执行文件；跳过检查。请把它加入 PATH 或设置 AUDIT_RISK_BIN。\" >&2\n  exit 0\nfi\n\nexec \"$BIN\" check \"$ROOT\" --fail-on block\n".to_string(),
             true,
         ),
         (
@@ -2603,6 +2724,11 @@ fn git_changed_files(workspace: &Path) -> Vec<String> {
         .arg(workspace)
         .arg("status")
         .arg("--short")
+        // Expand untracked directories into individual files. Without this,
+        // a brand-new folder shows up as a single `?? src/` entry — the exact
+        // "AI just generated a batch of new files" case — and every per-file
+        // scan (secrets included) silently misses because it gets a directory.
+        .arg("--untracked-files=all")
         .output();
 
     match output {
@@ -3843,7 +3969,8 @@ fn render_help_screen() -> String {
             "`audit-risk init <目录>`".to_string(),
             "`audit-risk doctor [目录]`".to_string(),
             "`audit-risk watch <目录>`".to_string(),
-            "`audit-risk check <目录>`".to_string(),
+            "`audit-risk check <目录>`  # 审查当前工作区/Git 改动".to_string(),
+            "`audit-risk diff <旧> <新>`  # 对比两个目录或文件".to_string(),
             "`audit-risk report [目录]`".to_string(),
             "`audit-risk report <目录> --history-compare`".to_string(),
             "`audit-risk observe [目录]`".to_string(),
@@ -3976,13 +4103,20 @@ fn render_diff_screen(payload: &Value) -> Result<String, CliRuntimeError> {
         .pointer("/review/findings")
         .and_then(Value::as_array)
         .ok_or_else(|| CliRuntimeError::internal("diff payload is missing review.findings"))?;
+    let finding_preview = findings
+        .iter()
+        .take(3)
+        .map(format_finding_line)
+        .collect::<Vec<_>>();
     Ok(render_product_shell(
         &[
             "当前视图：变更对比审查".to_string(),
             format!("对比目标：{after_root}"),
             format!("审查结论：{}", gate_decision_label(gate)),
         ],
-        &[format!("本次对比共识别 {} 条风险线索。", findings.len())],
+        &std::iter::once(format!("本次对比共识别 {} 条风险线索。", findings.len()))
+            .chain(finding_preview)
+            .collect::<Vec<_>>(),
         &["在目录或文件对比场景里，风险往往不是出在单个文件，而是出在新旧行为差异。".to_string()],
         &[
             "先看高风险差异，再决定是否需要更细的人工复审。".to_string(),
@@ -4009,6 +4143,14 @@ fn render_init_screen(payload: &Value) -> Result<String, CliRuntimeError> {
         .filter_map(Value::as_str)
         .map(|item| format!("已生成：{item}"))
         .collect::<Vec<_>>();
+    let hook_activation = payload
+        .get("hook_activation")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut suggestions = created_files.clone();
+    if !hook_activation.is_empty() {
+        suggestions.push(format!("提交前拦截：{hook_activation}"));
+    }
     Ok(render_product_shell(
         &[
             "当前视图：项目接入".to_string(),
@@ -4020,7 +4162,7 @@ fn render_init_screen(payload: &Value) -> Result<String, CliRuntimeError> {
             "没有接入文件时，后续的规则、审计路径和自动化入口就没有统一真源。".to_string(),
             "先把骨架生成出来，后面的体检、守护和报告才有地方落。".to_string(),
         ],
-        &created_files,
+        &suggestions,
         &[
             "`audit-risk doctor .`".to_string(),
             "`audit-risk watch .`".to_string(),
@@ -6030,7 +6172,7 @@ mod tests {
     }
 
     #[test]
-    fn init_files_render_pre_commit_hook_without_broken_platform_root_interpolation() {
+    fn init_files_render_portable_pre_commit_hook() {
         let files = build_default_init_files(
             std::path::Path::new("/tmp/customer-repo"),
             std::path::Path::new("/opt/audit-risk-platform"),
@@ -6041,10 +6183,29 @@ mod tests {
             .map(|(_, content, _)| content.clone())
             .expect("expected pre-commit hook");
 
-        assert!(hook.contains("PLATFORM_ROOT=\"${AUDIT_RISK_PLATFORM_ROOT:-${HOLOGRAM_PLATFORM_ROOT:-/opt/audit-risk-platform}}\""));
-        assert!(hook.contains("cargo run --quiet --manifest-path \"$PLATFORM_ROOT/engine/Cargo.toml\" --bin audit-risk -- report"));
-        assert!(hook.contains("--json > \"$WORKSPACE_ROOT/.hologram/latest-risk-report.json\""));
-        assert!(!hook.contains("$/opt/audit-risk-platform"));
+        // The hook must be portable: call `audit-risk` from PATH, never bake in
+        // this build machine's path or require a Rust toolchain / `cargo run`.
+        assert!(hook.contains("BIN=\"${AUDIT_RISK_BIN:-audit-risk}\""));
+        assert!(hook.contains("check \"$ROOT\" --fail-on block"));
+        assert!(!hook.contains("cargo run"));
+        assert!(!hook.contains("/opt/audit-risk-platform"));
+        assert!(!hook.contains("PLATFORM_ROOT"));
+    }
+
+    #[test]
+    fn init_files_include_gitignore_for_volatile_state() {
+        let files = build_default_init_files(
+            std::path::Path::new("/tmp/customer-repo"),
+            std::path::Path::new("/opt/audit-risk-platform"),
+        );
+        let gitignore = files
+            .iter()
+            .find(|(path, _, _)| path == ".hologram/.gitignore")
+            .map(|(_, content, _)| content.clone())
+            .expect("expected .hologram/.gitignore");
+        assert!(gitignore.contains("hologram.db"));
+        assert!(gitignore.contains("baseline.json"));
+        assert!(gitignore.contains("latest-risk-report.json"));
     }
 
     #[test]
