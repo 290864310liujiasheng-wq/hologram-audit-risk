@@ -946,7 +946,7 @@ fn run_doctor_command(
     let workspace_path = workspace
         .map(|value| resolve_workspace_argument(&cwd, value))
         .unwrap_or_else(|| default_workspace_root(&cwd));
-    let normalized_workspace = normalize_path(&workspace_path.display().to_string());
+    let normalized_workspace = normalize_path(workspace_path.display().to_string());
 
     let mut checks = Vec::new();
     let mut blockers = Vec::new();
@@ -1003,7 +1003,7 @@ fn run_doctor_command(
     checks.push(json!({
         "name": "hologram_dir",
         "status": hologram_dir_status,
-        "detail": normalize_path(&hologram_dir.display().to_string()),
+        "detail": normalize_path(hologram_dir.display().to_string()),
     }));
 
     let delivery_config_path = workspace_path.join(".hologram/delivery.json");
@@ -1013,14 +1013,14 @@ fn run_doctor_command(
                 Ok(_) => checks.push(json!({
                     "name": "delivery_config",
                     "status": "ok",
-                    "detail": normalize_path(&delivery_config_path.display().to_string()),
+                    "detail": normalize_path(delivery_config_path.display().to_string()),
                 })),
                 Err(error) => {
                     blockers.push(format!("delivery config is not valid JSON: {error}"));
                     checks.push(json!({
                         "name": "delivery_config",
                         "status": "error",
-                        "detail": normalize_path(&delivery_config_path.display().to_string()),
+                        "detail": normalize_path(delivery_config_path.display().to_string()),
                     }));
                 }
             },
@@ -1029,7 +1029,7 @@ fn run_doctor_command(
                 checks.push(json!({
                     "name": "delivery_config",
                     "status": "error",
-                    "detail": normalize_path(&delivery_config_path.display().to_string()),
+                    "detail": normalize_path(delivery_config_path.display().to_string()),
                 }));
             }
         }
@@ -1038,7 +1038,7 @@ fn run_doctor_command(
         checks.push(json!({
             "name": "delivery_config",
             "status": "needs_attention",
-            "detail": normalize_path(&delivery_config_path.display().to_string()),
+            "detail": normalize_path(delivery_config_path.display().to_string()),
         }));
     }
 
@@ -1046,7 +1046,7 @@ fn run_doctor_command(
         let path = workspace_path.join(relative_path);
         let mut check = json!({
             "name": name,
-            "detail": normalize_path(&path.display().to_string()),
+            "detail": normalize_path(path.display().to_string()),
         });
         match fs::read_to_string(&path) {
             Ok(raw) => match serde_json::from_str::<Value>(&raw) {
@@ -1137,7 +1137,7 @@ fn run_doctor_command(
     checks.push(json!({
         "name": "audit_path",
         "status": audit_status,
-        "detail": normalize_path(&audit_path.display().to_string()),
+        "detail": normalize_path(audit_path.display().to_string()),
     }));
 
     let auth_service = auth_base_url_for_workspace(&workspace_path);
@@ -1178,7 +1178,7 @@ fn run_doctor_command(
         "name": "entitlement_cache",
         "status": entitlement_state,
         "detail": {
-            "path": normalize_path(&entitlement_dir().display().to_string()),
+            "path": normalize_path(entitlement_dir().display().to_string()),
             "state": format!("{:?}", entitlement_cache.state).to_lowercase(),
             "plan": entitlement_cache.plan,
             "payment_pending": entitlement_cache.payment_pending,
@@ -1223,7 +1223,7 @@ fn run_notify_command(
     let payload = json!({
         "event": "audit-risk.notify_test",
         "generated_at": now_iso(),
-        "workspace_root": normalize_path(&workspace_path.display().to_string()),
+        "workspace_root": normalize_path(workspace_path.display().to_string()),
     });
     let test_result = send_webhook_test(&resolved_webhook, &payload)?;
     let mut output = build_structured_output_envelope("notify", if test_result.ok { "ok" } else { "error" }, Some(&workspace_path.display().to_string()));
@@ -1749,7 +1749,7 @@ fn run_observe_command(workspace: Option<&str>) -> Result<CommandOutcome, CliRun
             &[
                 "当前视图：手机观察".to_string(),
                 "运行状态：已开启".to_string(),
-                format!("目标目录：{}", normalize_path(&workspace_path.display().to_string())),
+                format!("目标目录：{}", normalize_path(workspace_path.display().to_string())),
             ],
             &[format!(
                 "本机地址：{}；局域网地址：{}",
@@ -1928,8 +1928,8 @@ fn build_diff_payload(before: &Path, after: &Path) -> Result<Value, CliRuntimeEr
             &after_workspace,
             changed_files,
             json!({
-                "before_root": normalize_path(&before_workspace.display().to_string()),
-                "after_root": normalize_path(&after_workspace.display().to_string()),
+                "before_root": normalize_path(before_workspace.display().to_string()),
+                "after_root": normalize_path(after_workspace.display().to_string()),
                 "node_count": after_analysis.node_count,
                 "edge_count": after_analysis.edge_count,
                 "community_count": after_analysis.community_count,
@@ -2238,7 +2238,7 @@ fn render_watch_start_screen(workspace: &Path, observe_runtime: Option<&ObserveR
     render_product_shell(
         &[
             "当前视图：持续守护".to_string(),
-            format!("工作目录：{}", normalize_path(&workspace.display().to_string())),
+            format!("工作目录：{}", normalize_path(workspace.display().to_string())),
             "运行状态：已启动，正在做首次扫描".to_string(),
         ],
         &["守护模式会在你保存文件后自动重新审查，不需要手工重复敲 check。".to_string()],
@@ -2345,7 +2345,7 @@ fn workspace_snapshot(workspace: &Path) -> Result<BTreeMap<String, u128>, CliRun
             continue;
         }
         let relative = normalize_path(
-            &path
+            path
                 .strip_prefix(workspace)
                 .unwrap_or(path)
                 .display()
@@ -2426,7 +2426,7 @@ fn diff_changed_files(before: &Path, after: &Path) -> Result<Vec<String>, CliRun
             .filter(|entry| entry.file_type().is_file())
         {
             let relative = normalize_path(
-                &entry
+                entry
                     .path()
                     .strip_prefix(root)
                     .unwrap_or(entry.path())
@@ -2456,7 +2456,7 @@ fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<
     let config = json!({
         "version": "phase5.v1",
         "workspace": {
-            "root": normalize_path(&workspace_root.display().to_string()),
+            "root": normalize_path(workspace_root.display().to_string()),
             "changed_files_source": "git_status",
         },
         "provider": {
@@ -2495,7 +2495,7 @@ fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<
             "webhook_url": "",
         }
     });
-    let platform_root = normalize_path(&platform_root.display().to_string());
+    let platform_root = normalize_path(platform_root.display().to_string());
     vec![
         (
             ".hologram/delivery.json".to_string(),
@@ -2718,7 +2718,7 @@ fn start_observe_runtime(workspace: &Path) -> Result<ObserveRuntime, CliRuntimeE
     let local_url = format!("http://127.0.0.1:{}", local_addr.port());
     let state = Arc::new(Mutex::new(json!({
         "status": "waiting_for_first_scan",
-        "workspace_root": normalize_path(&workspace.display().to_string()),
+        "workspace_root": normalize_path(workspace.display().to_string()),
     })));
     let state_for_thread = Arc::clone(&state);
     let dashboard_title = config.dashboard_title.clone();
@@ -3705,6 +3705,7 @@ fn compose_problem_block(
     rows
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_panel(
     heading: &str,
     lines: &[String],
@@ -3795,7 +3796,7 @@ fn strip_ansi(value: &str) -> String {
     let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\u{1b}' {
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == 'm' {
                     break;
                 }
@@ -3935,7 +3936,7 @@ fn render_check_screen(payload: &Value) -> Result<String, CliRuntimeError> {
             format!("风险条数：{} 条", findings.len()),
         ],
         &std::iter::once(reason.to_string())
-            .chain(finding_preview.clone().into_iter())
+            .chain(finding_preview.clone())
             .collect::<Vec<_>>(),
         &[match gate {
             "allow" => "当前没有触发需要拦截的风险，这次变更可以继续推进。".to_string(),
@@ -4066,7 +4067,7 @@ fn render_doctor_screen(payload: &Value) -> Result<String, CliRuntimeError> {
         .collect::<Vec<_>>();
     let problem_lines = if blockers.is_empty() {
         std::iter::once("当前没有阻断项。".to_string())
-            .chain(preview.clone().into_iter())
+            .chain(preview.clone())
             .collect::<Vec<_>>()
     } else {
         blockers.clone()
@@ -4120,7 +4121,7 @@ fn render_report_screen(report: &Value) -> Result<String, CliRuntimeError> {
             format!("审计完整性：{integrity}"),
         ],
         &[
-            format!("这份报告已经按当前 workspace 收口了 review、policy、audit 和 automation 四个面。"),
+            "这份报告已经按当前 workspace 收口了 review、policy、audit 和 automation 四个面。".to_string(),
             format!("生成时间：{generated_at}"),
         ],
         &[
@@ -4218,7 +4219,7 @@ fn render_home_screen(cwd: &Path) -> String {
     };
     render_product_shell(
         &[
-            format!("当前目录：{}", normalize_path(&cwd.display().to_string())),
+            format!("当前目录：{}", normalize_path(cwd.display().to_string())),
             format!("目录状态：{workspace_line}"),
             format!("版本状态：{}", pro_status_label(&entitlement)),
         ],
@@ -4398,7 +4399,7 @@ fn auth_login_text_for_dir_with_base_url(
     dir: &Path,
     auth_base_url: Option<&str>,
 ) -> Result<String, CliRuntimeError> {
-    fs::create_dir_all(&dir).map_err(|error| {
+    fs::create_dir_all(dir).map_err(|error| {
         CliRuntimeError::environment(format!("无法创建授权目录 {}：{error}", dir.display()))
     })?;
 
@@ -4444,15 +4445,15 @@ fn auth_login_text_for_dir_with_base_url(
                 ],
                 &[format!(
                     "session_id：{session_id}；会话文件：{}；设备标识：{}",
-                    normalize_path(&session_path.display().to_string()),
-                    normalize_path(&device_secret_path.display().to_string()),
+                    normalize_path(session_path.display().to_string()),
+                    normalize_path(device_secret_path.display().to_string()),
                 )],
                 &["这一步只负责把 CLI 侧登录合同和本地状态机走通，不会伪造 Pro 成功态。".to_string()],
                 &[
                     format!("登录地址：{}", session.login_url),
                     format!("轮询地址：{}", session.poll_url),
-                    format!("entitlement：{}", normalize_path(&exchange_result.entitlement_path.display().to_string())),
-                    format!("signature：{}", normalize_path(&exchange_result.signature_path.display().to_string())),
+                    format!("entitlement：{}", normalize_path(exchange_result.entitlement_path.display().to_string())),
+                    format!("signature：{}", normalize_path(exchange_result.signature_path.display().to_string())),
                 ],
                 &[
                     "`audit-risk auth status`".to_string(),
@@ -4473,8 +4474,8 @@ fn auth_login_text_for_dir_with_base_url(
         ],
         &[format!(
             "会话文件：{}；设备标识：{}",
-            normalize_path(&session_path.display().to_string()),
-            normalize_path(&device_secret_path.display().to_string()),
+            normalize_path(session_path.display().to_string()),
+            normalize_path(device_secret_path.display().to_string()),
         )],
         &["当前仓库只实现 CLI 侧合同和本地授权状态机；服务端未接入前不会伪造 Pro 授权。".to_string()],
         &[
@@ -4857,7 +4858,7 @@ fn auth_http_json_typed<T: for<'de> Deserialize<'de>>(
     body: Option<&impl Serialize>,
 ) -> Result<T, CliRuntimeError> {
     let body_value = body
-        .map(|body| serde_json::to_value(body))
+        .map(serde_json::to_value)
         .transpose()
         .map_err(|error| CliRuntimeError::internal(format!("无法序列化 auth 请求：{error}")))?;
     let value = auth_http_json(method, url, body_value.as_ref())?;

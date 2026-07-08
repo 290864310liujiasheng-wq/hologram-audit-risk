@@ -5,12 +5,18 @@ use tree_sitter::{Language, Parser};
 
 thread_local! {
     // Reuse one parser per thread/language to avoid repeated parser allocation.
-    static TL_PARSER: RefCell<Option<(Parser, String)>> = RefCell::new(None);
+    static TL_PARSER: RefCell<Option<(Parser, String)>> = const { RefCell::new(None) };
 }
 
 /// Generic tree-sitter adapter covering all languages beyond Python and JS/TS.
 /// Each language is matched explicitly due to inconsistent crate APIs.
 pub struct TreeSitterAdapter;
+
+impl Default for TreeSitterAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TreeSitterAdapter {
     pub fn new() -> Self { Self }

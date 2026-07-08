@@ -9,6 +9,9 @@ use serde::Serialize;
 use crate::graph::{EdgeKind, Graph, Node};
 use crate::storage::sqlite::SqliteDb;
 
+/// One adjacency entry: (neighbor_id, edge_kind, coupling_depth, temporal_delay_sec).
+type AdjEntry = (String, EdgeKind, u8, Option<f64>);
+
 /// Progress info for hologram_status MCP tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct LoadProgress {
@@ -24,9 +27,9 @@ pub struct LoadProgress {
 pub struct MemoryIndex {
     nodes: HashMap<String, Node>,
     /// source → [(target, edge_kind, coupling_depth, temporal_delay_sec)]
-    out_adj: HashMap<String, Vec<(String, EdgeKind, u8, Option<f64>)>>,
+    out_adj: HashMap<String, Vec<AdjEntry>>,
     /// target → [(source, edge_kind, coupling_depth, temporal_delay_sec)]
-    in_adj: HashMap<String, Vec<(String, EdgeKind, u8, Option<f64>)>>,
+    in_adj: HashMap<String, Vec<AdjEntry>>,
     /// symbol name → node IDs (exact match only; substring/prefix → FTS5)
     name_index: HashMap<String, Vec<String>>,
     /// file path → node IDs in that file
@@ -65,7 +68,7 @@ impl MemoryIndex {
         let edge_count = g.edges.len();
         idx.out_adj.reserve(node_count);
         idx.in_adj.reserve(node_count);
-        for (_eid, edge) in &g.edges {
+        for edge in g.edges.values() {
             idx.out_adj
                 .entry(edge.source.clone())
                 .or_default()
@@ -318,7 +321,7 @@ impl MemoryIndex {
                 continue;
             }
             // Check both outgoing and incoming
-            let both: Vec<Vec<&(String, EdgeKind, u8, Option<f64>)>> = vec![
+            let both: Vec<Vec<&AdjEntry>> = vec![
                 self.out_adj
                     .get(&current)
                     .map(|v| v.iter().collect())
@@ -450,7 +453,7 @@ impl MemoryIndex {
         self.nodes.values()
     }
 
-    pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &[(String, EdgeKind, u8, Option<f64>)])> {
+    pub fn edges_iter(&self) -> impl Iterator<Item = (&str, &[AdjEntry])> {
         self.out_adj
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_slice()))

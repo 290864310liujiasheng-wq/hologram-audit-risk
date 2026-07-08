@@ -134,10 +134,8 @@ pub fn detect_communities(graph: &Graph, seed: u64) -> Vec<Community> {
 
         // Renumber communities contiguously
         let mut new_comm_ids: HashMap<usize, usize> = HashMap::new();
-        let mut next_id = 0;
-        for &c in community_nodes.keys() {
+        for (next_id, &c) in community_nodes.keys().enumerate() {
             new_comm_ids.insert(c, next_id);
-            next_id += 1;
         }
         let mut new_community_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
         for (old_c, nodes) in &community_nodes {
@@ -244,8 +242,7 @@ fn run_louvain(
             }
         }
         let mut new_comm_ids: HashMap<usize, usize> = HashMap::new();
-        let mut next_id = 0;
-        for &c in community_nodes.keys() { new_comm_ids.insert(c, next_id); next_id += 1; }
+        for (next_id, &c) in community_nodes.keys().enumerate() { new_comm_ids.insert(c, next_id); }
         let mut new_community_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
         for (old_c, nodes) in &community_nodes { new_community_nodes.insert(new_comm_ids[old_c], nodes.clone()); }
         community_nodes = new_community_nodes;

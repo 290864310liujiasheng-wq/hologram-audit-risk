@@ -9,6 +9,9 @@ use tracing::info;
 
 use crate::graph::{EdgeKind, Node, NodeKind};
 
+/// A full edge row: (source, target, kind, coupling_depth, temporal_delay_sec).
+type EdgeRow = (String, String, EdgeKind, u8, Option<f64>);
+
 /// Wrapper around the single hologram.db connection.
 pub struct SqliteDb {
     conn: Connection,
@@ -250,7 +253,7 @@ impl SqliteDb {
     }
 
     /// Returns (source, target, kind, coupling_depth, temporal_delay_sec) tuples.
-    pub fn load_all_edges(&self) -> Result<Vec<(String, String, EdgeKind, u8, Option<f64>)>, String> {
+    pub fn load_all_edges(&self) -> Result<Vec<EdgeRow>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT source, target, kind, coupling_depth, temporal_delay_sec FROM edges")
@@ -343,7 +346,7 @@ impl SqliteDb {
 
     pub fn fts_search(&self, query: &str, limit: usize) -> Result<Vec<String>, String> {
         // Sanitize: escape FTS5 special characters, use simple MATCH
-        let safe = query.replace('"', "").replace('\'', "");
+        let safe = query.replace(['"', '\''], "");
         let pattern = format!("\"{}\"", safe);
         let mut stmt = self
             .conn
@@ -355,10 +358,8 @@ impl SqliteDb {
             .query_map(params![pattern, limit as i64], |row| row.get(0))
             .map_err(|e| format!("fts query: {}", e))?;
         let mut ids = Vec::new();
-        for row in rows {
-            if let Ok(id) = row {
-                ids.push(id);
-            }
+        for id in rows.flatten() {
+            ids.push(id);
         }
         Ok(ids)
     }

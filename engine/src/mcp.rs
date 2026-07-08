@@ -361,7 +361,7 @@ impl McpServer {
             return McpServer::error_response(id, -32602, "node_id is required");
         }
         // Engine MemoryIndex path (primary)
-        match engine::engine_read(|idx| {
+        if let Ok(value) = engine::engine_read(|idx| {
             let node = match idx.get_node(&node_id) {
                 Some(n) => n.clone(),
                 None => return json!({"error": format!("Node {} not found", node_id)}),
@@ -373,13 +373,13 @@ impl McpServer {
                 "node": node_to_value(&node),
                 "neighbor_count": nb.len(),
                 "neighbors": nb.iter().map(|(_, t, d)| json!({"id": t, "coupling_depth": d})).collect::<Vec<_>>(),
-                "incoming": incoming.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
-                "outgoing": outgoing.iter().map(|e| edge_to_value(e)).collect::<Vec<_>>(),
+                "incoming": incoming.iter().map(edge_to_value).collect::<Vec<_>>(),
+                "outgoing": outgoing.iter().map(edge_to_value).collect::<Vec<_>>(),
             })
         }) {
-            Ok(value) => return Self::result_or_error(id, value),
-            Err(_) => {} // fall through to with_graph fallback
+            return Self::result_or_error(id, value);
         }
+        // Err → fall through to with_graph fallback
         self.with_graph(id, |g| {
             let node = match g.get_node(&node_id) {
                 Some(n) => n,
@@ -446,7 +446,7 @@ impl McpServer {
         }
         let decision_history = engine::engine_query_timeline(20).unwrap_or_default();
         // Engine MemoryIndex path (primary)
-        match engine::engine_read(|idx| {
+        if let Ok(value) = engine::engine_read(|idx| {
             let node = match idx.get_node(&node_id) {
                 Some(n) => n.clone(),
                 None => return json!({"error": format!("Node {} not found", node_id)}),
@@ -459,10 +459,7 @@ impl McpServer {
                 "dependency_count": dep_count,
                 "dependent_count": out_count,
             })
-        }) {
-            Ok(value) => return Self::result_or_error(id, value),
-            Err(_) => {}
-        }
+        }) { return Self::result_or_error(id, value) }
         self.with_graph(id, |g| {
             let node = match g.get_node(&node_id) {
                 Some(n) => n,
@@ -721,7 +718,7 @@ impl McpServer {
                 return McpServer::tool_result(id, json!({
                     "query": query_str,
                     "count": results.len(),
-                    "results": results.iter().map(|n| node_to_value(n)).collect::<Vec<_>>(),
+                    "results": results.iter().map(node_to_value).collect::<Vec<_>>(),
                     "engine": "fts5",
                 }));
             }
@@ -810,7 +807,7 @@ impl McpServer {
                     });
                 }
             };
-            let diff = before.diff(&after);
+            let diff = before.diff(after);
             let added_nodes: Vec<_> = diff.added_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let removed_nodes: Vec<_> = diff.removed_nodes.iter().map(|n| json!({"id": n.id, "name": n.name, "kind": n.kind.as_str()})).collect();
             let modified_nodes: Vec<_> = diff.modified_nodes.iter().map(|(old, new)| json!({
@@ -919,7 +916,7 @@ impl McpServer {
             "passed": check_result["passed"],
             "violation_count": check_result["violation_count"],
         });
-        let _ = engine::engine_record_timeline_with_props(&event_type, None::<&str>, &summary, &props);
+        let _ = engine::engine_record_timeline_with_props(event_type, None::<&str>, &summary, &props);
 
         McpServer::tool_result(id, check_result)
     }
@@ -1013,7 +1010,7 @@ impl McpServer {
             // Apply rename via Engine
             if let Err(e) = engine::engine_write(|idx| {
                 for nid in &matched_ids {
-                    idx.rename_node_name(nid, &new_name);
+                    idx.rename_node_name(nid, new_name);
                 }
             }) {
                 return McpServer::error_response(id, -32000, &e);

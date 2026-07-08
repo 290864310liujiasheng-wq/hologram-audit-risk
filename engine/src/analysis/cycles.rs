@@ -43,6 +43,7 @@ fn run_tarjan(node_ids: &[&String], adj: &[Vec<usize>]) -> Vec<serde_json::Value
     let mut on_stack = vec![false; n];
     let mut stack = Vec::new();
     let mut sccs = Vec::new();
+    #[allow(clippy::too_many_arguments)]
     fn strongconnect(v: usize, adj: &[Vec<usize>], idx: &mut [u32], lowlink: &mut [u32],
         on_stack: &mut [bool], stack: &mut Vec<usize>, index: &mut u32, sccs: &mut Vec<Vec<usize>>) {
         idx[v] = *index; lowlink[v] = *index; *index += 1;

@@ -5,8 +5,8 @@ use crate::adapter::traits::LanguageAdapter;
 use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 
 thread_local! {
-    static TS_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
-    static JS_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
+    static TS_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
+    static JS_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
 }
 
 /// Combined JavaScript / TypeScript / TSX adapter.
@@ -14,6 +14,12 @@ thread_local! {
 pub struct TypeScriptAdapter {
     ts_lang: Language,
     js_lang: Language,
+}
+
+impl Default for TypeScriptAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TypeScriptAdapter {
@@ -50,8 +56,8 @@ impl LanguageAdapter for TypeScriptAdapter {
         };
 
         let file_id = file_path
-            .trim_end_matches(|c| matches!(c, '.'))
-            .rsplit(|c| c == '/' || c == '\\')
+            .trim_end_matches('.')
+            .rsplit(['/', '\\'])
             .next()
             .unwrap_or(file_path)
             .replace('.', "_");
@@ -151,7 +157,7 @@ fn walk_ts_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (Vec<N
             "call_expression" => {
                 if let Some(func) = node.child_by_field_name("function") {
                     if let Ok(name) = func.utf8_text(source.as_bytes()) {
-                        if name.contains('.') || name.chars().next().map_or(false, |c| c.is_uppercase()) {
+                        if name.contains('.') || name.chars().next().is_some_and(|c| c.is_uppercase()) {
                             edge_counter += 1;
                             let mut e = Edge::new(format!("call_{}_{}", file_id, edge_counter), file_id, name, EdgeKind::Calls);
                             e.cross_file = true;

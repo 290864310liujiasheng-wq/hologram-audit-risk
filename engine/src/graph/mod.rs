@@ -1,5 +1,6 @@
 mod node;
 mod edge;
+#[allow(clippy::module_inception)]
 mod graph;
 pub mod merge;
 pub mod resolver;

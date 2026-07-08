@@ -143,6 +143,12 @@ pub struct Engine {
     watcher_running: Arc<AtomicBool>,
 }
 
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Engine {
     /// Create a new uninitialized engine.
     pub fn new() -> Self {
@@ -257,7 +263,7 @@ impl Engine {
                 .as_ref()
                 .ok_or_else(|| "Engine not initialized — call init() first".to_string())?;
 
-            store.read(|idx| graph_from_index(idx))
+            store.read(graph_from_index)
         };
         Ok(f(&graph))
     }
@@ -494,10 +500,10 @@ impl Engine {
                 match rx.recv_timeout(poll_interval) {
                     Ok(Ok(event)) => {
                         // Filter: only source file changes
-                        let is_source = match event.kind {
-                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => true,
-                            _ => false,
-                        };
+                        let is_source = matches!(
+                            event.kind,
+                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                        );
                         if !is_source {
                             continue;
                         }

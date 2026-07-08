@@ -59,7 +59,7 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path, parse_cac
         // Use parse cache when available; fall back to disk read
         let source_opt = parse_cache.get(&abs_key).map(|(s, _)| s.clone());
         let source: String;
-        let source_ref: &str;
+        
         if let Some(cached) = source_opt {
             source = cached;
         } else {
@@ -69,7 +69,7 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path, parse_cac
                 Err(_) => continue,
             }
         }
-        source_ref = &source;
+        let source_ref: &str = &source;
         if is_django_url_file(file) {
             let routes = detect_django_routes(file, source_ref);
             added += inject_routes(graph, &routes);
@@ -103,14 +103,13 @@ pub fn detect_framework_routes(graph: &mut Graph, project_root: &Path, parse_cac
                 let routes = detect_gin_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
             }
-        } else if is_nestjs_candidate(file) {
-            if source_ref.contains("@Controller") || source_ref.contains("@Get")
-                || source_ref.contains("@Post")
+        } else if is_nestjs_candidate(file)
+            && (source_ref.contains("@Controller") || source_ref.contains("@Get")
+                || source_ref.contains("@Post"))
             {
                 let routes = detect_nestjs_routes(file, source_ref);
                 added += inject_routes(graph, &routes);
             }
-        }
     }
 
     added

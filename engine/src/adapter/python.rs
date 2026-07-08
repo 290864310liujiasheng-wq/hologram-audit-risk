@@ -4,12 +4,18 @@ use std::cell::RefCell;
 use tree_sitter::Parser;
 
 thread_local! {
-    static PY_PARSER: RefCell<Option<Parser>> = RefCell::new(None);
+    static PY_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
 }
 
 /// Python adapter using tree-sitter for AST parsing.
 /// Uses a thread-local parser to avoid per-file allocation overhead.
 pub struct PythonAdapter;
+
+impl Default for PythonAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PythonAdapter {
     pub fn new() -> Self {
@@ -149,7 +155,7 @@ fn walk_python_tree(tree: &tree_sitter::Tree, source: &str, file_id: &str) -> (V
                     }
                 }
                 for child in node.children(&mut cursor) {
-                    if child.kind() == "dotted_name" && child.utf8_text(source.as_bytes()).map_or(false, |n| n != module_name) {
+                    if child.kind() == "dotted_name" && child.utf8_text(source.as_bytes()).is_ok_and(|n| n != module_name) {
                         if let Ok(name) = child.utf8_text(source.as_bytes()) {
                             edge_counter += 1;
                             let target = if module_name.is_empty() { name.to_string() } else { format!("{}.{}", module_name, name) };

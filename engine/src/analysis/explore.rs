@@ -224,7 +224,7 @@ fn tokenize(query: &str) -> Vec<String> {
 /// PascalCase: first char uppercase ASCII, at least 4 chars.
 fn is_pascal_case(s: &str) -> bool {
     s.len() >= 4
-        && s.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+        && s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
@@ -239,7 +239,7 @@ fn disambiguate<'a>(candidates: &[&'a Node], pascal_tokens: &[String]) -> Vec<&'
     let in_context: Vec<&Node> = candidates.iter().filter(|n| {
         // Get the container: everything before the last :: in the qualified name.
         // The id typically looks like "src.module.ClassName.method"
-        let container = n.id.rsplitn(2, '.').nth(1).unwrap_or("");
+        let container = n.id.rsplit_once('.').map(|x| x.0).unwrap_or("");
         pascal_tokens.iter().any(|pt| {
             container.eq_ignore_ascii_case(pt)
                 || container.contains(pt.as_str())
@@ -277,13 +277,13 @@ fn compute_flow(ctx: &ExploreCtx) -> serde_json::Value {
                 let to = &ctx.named_nodes[j];
                 if let Some(path) = bfs_path(ctx, &from.id, &to.id, edge_kind_filter.as_ref(), false)
                 {
-                    if best_path.as_ref().map_or(true, |p| path.len() > p.len()) {
+                    if best_path.as_ref().is_none_or(|p| path.len() > p.len()) {
                         best_path = Some(path);
                     }
                 }
                 if let Some(path) = bfs_path(ctx, &to.id, &from.id, edge_kind_filter.as_ref(), true)
                 {
-                    if best_path.as_ref().map_or(true, |p| path.len() > p.len()) {
+                    if best_path.as_ref().is_none_or(|p| path.len() > p.len()) {
                         best_path = Some(path);
                     }
                 }
@@ -368,8 +368,8 @@ fn bfs_path(
             if explore_count >= MAX_EXPLORE {
                 break;
             }
-            if let Some(ref ef) = edge_filter {
-                if edge.kind != **ef {
+            if let Some(ef) = edge_filter {
+                if edge.kind != *ef {
                     continue;
                 }
             }
@@ -615,8 +615,8 @@ fn read_file_section(
 
     // Expand window while under char budget
     let mut char_count = 0usize;
-    for i in start..end {
-        char_count += all_lines[i].len() + 1; // +1 for \n
+    for line in &all_lines[start..end] {
+        char_count += line.len() + 1; // +1 for \n
     }
 
     // Shrink if over budget
@@ -646,8 +646,8 @@ fn read_file_section(
     *total_chars += chars_to_add;
 
     let mut lines_str = String::with_capacity(char_count);
-    for i in start..end {
-        lines_str.push_str(&format!("{}\t{}\n", i + 1, all_lines[i]));
+    for (i, line) in all_lines.iter().enumerate().take(end).skip(start) {
+        lines_str.push_str(&format!("{}\t{}\n", i + 1, line));
     }
 
     Some(SourceSection {

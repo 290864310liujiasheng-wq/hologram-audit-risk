@@ -256,6 +256,7 @@ fn py_collect_lhs(assign: &tree_sitter::Node, source: &str, out: &mut HashSet<St
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn py_walk_body(func: &tree_sitter::Node, source: &str, body_vars: &mut HashSet<String>,
     fn_id: &str, file: &str, ff: &str, graph: &mut Graph, added: &mut usize,
 ) {
@@ -276,7 +277,7 @@ fn py_walk_body(func: &tree_sitter::Node, source: &str, body_vars: &mut HashSet<
             "identifier" => {
                 if py_is_lhs(&node) { continue; }
                 if let Ok(name) = node.utf8_text(source.as_bytes()) {
-                    if name.chars().next().map_or(false, |c| c.is_lowercase()) && name != "self" {
+                    if name.chars().next().is_some_and(|c| c.is_lowercase()) && name != "self" {
                         let tgt = node_id_for(graph, name, file, node.start_position().row + 1);
                         let eid = format!("rd_{}_{}_{}", ff, fn_id, name);
                         if *added < 10000 {
@@ -297,7 +298,7 @@ fn py_is_lhs(node: &tree_sitter::Node) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
-            "assignment"|"augmented_assignment" => return p.child_by_field_name("left").map_or(false, |l| l.id()==node.id()),
+            "assignment"|"augmented_assignment" => return p.child_by_field_name("left").is_some_and(|l| l.id()==node.id()),
             "pattern_list"|"tuple" => return true,
             "function_definition"|"class_definition" => return false,
             _ => {}
@@ -480,6 +481,7 @@ fn js_collect_decls(node: &tree_sitter::Node, source: &str, out: &mut HashSet<St
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn js_walk_body(func: &tree_sitter::Node, source: &str, body_vars: &mut HashSet<String>,
     fn_id: &str, file: &str, ff: &str, graph: &mut Graph, added: &mut usize,
 ) {
@@ -490,7 +492,7 @@ fn js_walk_body(func: &tree_sitter::Node, source: &str, body_vars: &mut HashSet<
             "assignment_expression"|"augmented_assignment_expression" => {
                 if let Some(lhs) = node.child_by_field_name("left") {
                     if let Ok(name) = lhs.utf8_text(source.as_bytes()) {
-                        if name.chars().next().map_or(false, |c| c.is_alphabetic()) {
+                        if name.chars().next().is_some_and(|c| c.is_alphabetic()) {
                             let tgt = node_id_for(graph, name, file, node.start_position().row + 1);
                             let eid = format!("wrt_{}_{}_{}", ff, fn_id, name);
                             *added += insert_edge(graph, &eid, fn_id, &tgt, EdgeKind::Writes, 3, None);
@@ -516,7 +518,7 @@ fn js_walk_body(func: &tree_sitter::Node, source: &str, body_vars: &mut HashSet<
             "identifier" => {
                 if js_is_lhs(&node) { continue; }
                 if let Ok(name) = node.utf8_text(source.as_bytes()) {
-                    if name.chars().next().map_or(false, |c| c.is_lowercase())
+                    if name.chars().next().is_some_and(|c| c.is_lowercase())
                         && name != "this" && name != "super" && name != "undefined" && name != "null"
                         && name != "console" && name != "window" && name != "document"
                     {
@@ -538,8 +540,8 @@ fn js_is_lhs(node: &tree_sitter::Node) -> bool {
     let mut cur = node.parent();
     while let Some(p) = cur {
         match p.kind() {
-            "assignment_expression"|"augmented_assignment_expression" => return p.child_by_field_name("left").map_or(false, |l| l.id()==node.id()),
-            "variable_declarator" => return p.child_by_field_name("name").map_or(false, |n| n.id()==node.id()),
+            "assignment_expression"|"augmented_assignment_expression" => return p.child_by_field_name("left").is_some_and(|l| l.id()==node.id()),
+            "variable_declarator" => return p.child_by_field_name("name").is_some_and(|n| n.id()==node.id()),
             "function_declaration"|"class_declaration"|"method_definition"|"arrow_function" => return false,
             _ => {}
         }

@@ -10,6 +10,12 @@ pub struct PatternMatcher {
     rhythm_vars: Vec<Regex>,
 }
 
+impl Default for PatternMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PatternMatcher {
     pub fn new() -> Self {
         fn compile(ps: &[&str]) -> Vec<Regex> {

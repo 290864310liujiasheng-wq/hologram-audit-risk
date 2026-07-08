@@ -28,6 +28,12 @@ pub struct ParallelParser {
     registry: AdapterRegistry,
 }
 
+impl Default for ParallelParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParallelParser {
     pub fn new() -> Self {
         Self {
