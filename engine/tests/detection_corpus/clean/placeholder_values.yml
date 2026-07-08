@@ -1,0 +1,4 @@
+production:
+  api_key: "<YOUR_API_KEY_HERE>"
+  password: "changeme"
+  db_url: "postgres://user:PLACEHOLDER@host/db"

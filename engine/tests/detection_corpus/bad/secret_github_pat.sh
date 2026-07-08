@@ -1,0 +1,2 @@
+export GH_TOKEN=ghp_16C7e42F292c6912E7710c838347Ae178B4a
+git clone https://x:$GH_TOKEN@github.com/org/repo.git

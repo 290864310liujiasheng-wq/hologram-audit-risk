@@ -63,6 +63,7 @@ pub enum CliCommand {
     Check {
         workspace: String,
         pretty: bool,
+        verbose: bool,
         fail_on: FailGate,
     },
     Watch {
@@ -245,13 +246,15 @@ pub fn parse_cli_command(args: &[String]) -> Result<ParsedCliCommand, UsageError
         "check" => {
             let workspace = required_positional(subcommand, rest, 0, "<workspace>")?;
             let pretty = take_flag(rest, "--pretty");
+            let verbose = take_flag(rest, "--verbose");
             let fail_on = parse_optional_fail_on(rest)?;
             let output_mode = resolve_output_mode(rest, DefaultOutputMode::Human);
-            reject_unknown_flags(rest, &["--pretty", "--fail-on", "--json"])?;
+            reject_unknown_flags(rest, &["--pretty", "--verbose", "--fail-on", "--json"])?;
             Ok(ParsedCliCommand {
                 command: CliCommand::Check {
                     workspace,
                     pretty,
+                    verbose,
                     fail_on,
                 },
                 tier: CommandTier::Primary,
@@ -579,8 +582,9 @@ fn execute_command(parsed: ParsedCliCommand) -> Result<CommandOutcome, CliRuntim
         CliCommand::Check {
             workspace,
             pretty,
+            verbose,
             fail_on,
-        } => run_check_command(&workspace, pretty, fail_on, output_mode),
+        } => run_check_command(&workspace, pretty, verbose, fail_on, output_mode),
         CliCommand::Watch {
             workspace,
             verbose,
@@ -732,6 +736,7 @@ fn run_auth_command(action: AuthAction) -> Result<CommandOutcome, CliRuntimeErro
 fn run_check_command(
     workspace: &str,
     pretty: bool,
+    verbose: bool,
     fail_on: FailGate,
     output_mode: DefaultOutputMode,
 ) -> Result<CommandOutcome, CliRuntimeError> {
@@ -743,7 +748,7 @@ fn run_check_command(
         outcome.pretty_json = pretty;
         Ok(outcome)
     } else {
-        Ok(CommandOutcome::text(exit_code, render_check_screen(&payload)?))
+        Ok(CommandOutcome::text(exit_code, render_check_screen(&payload, verbose)?))
     }
 }
 
@@ -2664,7 +2669,38 @@ fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<
         ),
         (
             DEFAULT_CI_WORKFLOW_PATH.to_string(),
-            "name: audit-risk\n\non:\n  pull_request:\n  push:\n    branches: [main]\n\njobs:\n  audit-risk:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: TODO\n        run: echo \"Wire audit-risk binary packaging in a later task\"\n".to_string(),
+            // A real, runnable gate — installs the published binary and blocks
+            // the PR on block-level findings. Falls back to cargo install from
+            // source when no release asset is available yet.
+            "name: audit-risk\n\
+             \n\
+             on:\n\
+             \x20 pull_request:\n\
+             \x20 push:\n\
+             \x20   branches: [main]\n\
+             \n\
+             jobs:\n\
+             \x20 audit-risk:\n\
+             \x20   runs-on: ubuntu-latest\n\
+             \x20   steps:\n\
+             \x20     - uses: actions/checkout@v4\n\
+             \x20       with:\n\
+             \x20         fetch-depth: 0\n\
+             \n\
+             \x20     - name: Install audit-risk\n\
+             \x20       run: |\n\
+             \x20         set -e\n\
+             \x20         if curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh -s -- --prefix \"$HOME/.local\"; then\n\
+             \x20           echo \"$HOME/.local/bin\" >> \"$GITHUB_PATH\"\n\
+             \x20         else\n\
+             \x20           echo \"预编译二进制不可用，回退到源码构建\"\n\
+             \x20           cargo install --git https://github.com/290864310liujiasheng-wq/hologram-audit-risk --bin audit-risk hologram-engine --root \"$HOME/.local\"\n\
+             \x20           echo \"$HOME/.local/bin\" >> \"$GITHUB_PATH\"\n\
+             \x20         fi\n\
+             \n\
+             \x20     - name: audit-risk check（block 级风险拦截合并）\n\
+             \x20       run: audit-risk check . --fail-on block\n"
+                .to_string(),
             false,
         ),
     ]
@@ -4034,7 +4070,7 @@ fn format_finding_line(entry: &Value) -> String {
     }
 }
 
-fn render_check_screen(payload: &Value) -> Result<String, CliRuntimeError> {
+fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRuntimeError> {
     let workspace = payload
         .get("workspace_root")
         .and_then(Value::as_str)
@@ -4051,19 +4087,46 @@ fn render_check_screen(payload: &Value) -> Result<String, CliRuntimeError> {
         .pointer("/review/findings")
         .and_then(Value::as_array)
         .ok_or_else(|| CliRuntimeError::internal("check payload is missing review.findings"))?;
-    let finding_preview = findings
+    // Noise control: by default only surface high-confidence findings
+    // (critical/high — secrets, injection, dangerous execution). Structural
+    // coupling signals (medium/low) collapse to a one-line count; --verbose
+    // or --json shows everything. False-alarm fatigue kills security tools.
+    let is_high_confidence = |entry: &&Value| {
+        matches!(
+            entry.get("severity").and_then(Value::as_str),
+            Some("critical") | Some("high")
+        )
+    };
+    let high_count = findings.iter().filter(is_high_confidence).count();
+    let low_count = findings.len() - high_count;
+    let (preview_pool, hidden_note): (Vec<&Value>, Option<String>) = if verbose {
+        (findings.iter().collect(), None)
+    } else {
+        let pool: Vec<&Value> = findings.iter().filter(is_high_confidence).collect();
+        let note = (low_count > 0).then(|| {
+            format!("另有 {low_count} 条结构耦合信号（中/低风险）已折叠，用 `--verbose` 查看。")
+        });
+        (pool, note)
+    };
+    let finding_preview = preview_pool
         .iter()
-        .take(3)
-        .map(format_finding_line)
+        .take(if verbose { 10 } else { 3 })
+        .map(|entry| format_finding_line(entry))
         .collect::<Vec<_>>();
+    let risk_count_line = if verbose || low_count == 0 {
+        format!("风险条数：{} 条", findings.len())
+    } else {
+        format!("风险条数：{high_count} 条高置信度（另有 {low_count} 条结构信号折叠）")
+    };
     Ok(render_product_shell(
         &[
             format!("当前视图：项目审查（{workspace}）"),
             format!("审查结论：{}", gate_decision_label(gate)),
-            format!("风险条数：{} 条", findings.len()),
+            risk_count_line,
         ],
         &std::iter::once(reason.to_string())
             .chain(finding_preview.clone())
+            .chain(hidden_note)
             .collect::<Vec<_>>(),
         &[match gate {
             "allow" => "当前没有触发需要拦截的风险，这次变更可以继续推进。".to_string(),
@@ -4073,11 +4136,12 @@ fn render_check_screen(payload: &Value) -> Result<String, CliRuntimeError> {
             _ => "当前结果不完整，需要重新审查确认。".to_string(),
         }],
         &[
-            "先看前三条风险，确认是不是业务必须。".to_string(),
+            "先处理高置信度风险（密钥/注入/危险执行），确认是不是业务必须。".to_string(),
             "如果只是测试或演练代码，明确隔离到非生产路径。".to_string(),
             "需要自动化消费时，改用 `audit-risk check <目录> --json`。".to_string(),
         ],
         &[
+            "`audit-risk check . --verbose`".to_string(),
             "`audit-risk watch .`".to_string(),
             "`audit-risk report .`".to_string(),
             "`audit-risk check . --json`".to_string(),
@@ -5530,7 +5594,7 @@ mod tests {
             }
         });
 
-        let rendered = super::render_check_screen(&payload).expect("check shell");
+        let rendered = super::render_check_screen(&payload, false).expect("check shell");
         assert!(rendered.contains("当前概览"));
         assert!(rendered.contains("问题说明"));
         assert!(rendered.contains("下一步"));
@@ -5569,7 +5633,7 @@ mod tests {
                 ]
             }
         });
-        let rendered = super::render_check_screen(&payload).expect("check shell");
+        let rendered = super::render_check_screen(&payload, false).expect("check shell");
         assert!(rendered.contains("\u{1b}[31m"), "embedded red must survive panel wrapping");
         assert!(rendered.contains("严重问题示例"));
     }
@@ -5598,7 +5662,7 @@ mod tests {
                     ]
                 }
             });
-            let rendered = super::render_check_screen(&payload).expect("check shell");
+            let rendered = super::render_check_screen(&payload, false).expect("check shell");
             assert!(rendered.contains(expected), "expected gate label {expected} for {decision}");
         }
     }

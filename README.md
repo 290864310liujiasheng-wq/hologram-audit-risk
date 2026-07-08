@@ -4,9 +4,9 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/actions"><img src="https://img.shields.io/badge/tests-361%20passed-brightgreen" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/releases"><img src="https://img.shields.io/github/v/release/834063245-creator/HoloGram?label=latest" /></a>
-  <a href="https://github.com/834063245-creator/HoloGram/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
+  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/actions"><img src="https://img.shields.io/badge/tests-404%20passed-brightgreen" /></a>
+  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/releases"><img src="https://img.shields.io/github/v/release/290864310liujiasheng-wq/hologram-audit-risk?label=latest" /></a>
+  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
 > **AI 编码风控平台**
@@ -17,25 +17,28 @@
 
 ## 安装
 
-**一行安装（macOS / Linux）：**
+**从源码构建（当前推荐）：**
 
 ```sh
-curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh
+git clone https://github.com/290864310liujiasheng-wq/hologram-audit-risk.git
+cd hologram-audit-risk/engine
+cargo build --release --bin audit-risk
+# 二进制在 target/release/audit-risk，将其加入 PATH
+```
+
+**一行安装（macOS / Linux，需要已发布的 Release）：**
+
+```sh
+curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh
 ```
 
 安装到自定义路径（不需要 sudo）：
 
 ```sh
-curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh -s -- --prefix ~/.local
+curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh -s -- --prefix ~/.local
 ```
 
-安装指定版本：
-
-```sh
-curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh -s -- --version v0.2.0
-```
-
-**手动下载：** 从 [Releases](https://github.com/834063245-creator/HoloGram/releases) 页面下载对应平台的预编译二进制：
+**手动下载：** 从 [Releases](https://github.com/290864310liujiasheng-wq/hologram-audit-risk/releases) 页面下载对应平台的预编译二进制：
 
 | 平台 | 文件名 |
 |---|---|
@@ -45,14 +48,6 @@ curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/inst
 | Linux ARM64 | `audit-risk-linux-arm64` |
 | Windows x64 | `audit-risk-windows-x64.exe` |
 
-**从源码构建：**
-
-```sh
-git clone https://github.com/834063245-creator/HoloGram.git
-cd HoloGram/engine
-cargo build --release --bin audit-risk
-# 二进制在 target/release/audit-risk
-```
 
 ---
 
@@ -83,6 +78,22 @@ cargo build --release --bin audit-risk
 - **机器可读集成**：输出结构化 JSON 和退出码，方便接入 Git Hook、CI/CD 和外部平台。
 - **本地审计证据**：所有关键决策、审批、修复和回滚都进入 append-only 审计链路。
 - **轻量观察模式**：`watch --observe` 会起本地只读观察页，并打印本地/LAN 地址与二维码图片路径，便于手机或旁路观察。
+
+## 检测能力与边界（诚实口径）
+
+我们用一个固定语料集（`engine/tests/detection_corpus/`）持续测量检测质量，数字而非感觉，随代码回归：
+
+| 指标 | 当前 | 说明 |
+|---|---|---|
+| **召回率** | **35/35 = 100%** | 必检出样本（各类硬编码密钥、SQL 注入、危险执行、IAM 通配符）全部命中 |
+| **误报率** | **0/12 = 0%** | 干净样本（env 读取、参数化查询、占位符、注释）零误报 |
+| **已知盲区** | 1/10 | 见下 |
+
+`cargo test --test detection_quality -- --nocapture` 可复现，CI 门禁锁定「召回 100% 且零误报」，退化即失败。
+
+**我们现在检测什么**：已知前缀密钥（OpenAI/AWS/Stripe/GitHub/Slack/Google/私钥等）、高熵字符串、敏感变量硬编码赋值、字符串拼接/插值式 SQL 注入、`eval`/`exec`/`os.system`/`shell=True`/`execSync` 等危险动态执行、IAM `*` 通配符。
+
+**我们暂时不检测（诚实标注的盲区）**：`%`/`.format()` 式 SQL 注入、命令注入的 `os.popen` 变体、路径穿越、弱哈希（MD5）、云服务连接串（GCP service account / Azure connection string）、SSRF、不安全反序列化等语义/数据流类风险。这些需要更深的分析，在路线图上，不在当前版本里假装能做。
 
 ## 当前产品形态
 

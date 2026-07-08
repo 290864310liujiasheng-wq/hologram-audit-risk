@@ -1,6 +1,6 @@
 # audit-risk for VS Code
 
-在 VS Code 里直接看到 [audit-risk](https://github.com/834063245-creator/HoloGram) CLI 的风险审查结果，不需要切到终端。
+在 VS Code 里直接看到 [audit-risk](https://github.com/290864310liujiasheng-wq/hologram-audit-risk) CLI 的风险审查结果，不需要切到终端。
 
 ## 当前能力
 
@@ -16,7 +16,7 @@
 需要先在本机安装 `audit-risk` CLI：
 
 ```sh
-curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh
+curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh
 ```
 
 如果 `audit-risk` 不在 PATH 里，或者你想指定某个特定版本的二进制，用下面的设置显式指定路径。

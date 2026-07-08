@@ -24,8 +24,10 @@
 
 ## 待修（C 级 — backlog，30 天不动）
 
-- [C] 折叠视图 — 星系叠加过曝
-- [C] 星图 — 跨星系连线/粒子看不见
+> ⏸ 已冻结（见 FROZEN.md，复审 2026-10-08）：星图/桌面端相关，解冻桌面端时一并处理。
+
+- [C] ⏸ 折叠视图 — 星系叠加过曝
+- [C] ⏸ 星图 — 跨星系连线/粒子看不见
 
 ## 待修（A 级 — 立刻修，别的全停）
 
@@ -34,6 +36,18 @@
 
 
 ## 已修（归档）
+
+### 2026-07-08 — 聚焦收敛（修断点 + 降噪 + 检测质量基线 + 冻结）
+
+按「一条主线」原则收敛（见 FROZEN.md）：
+
+- [x] [A] 对外链路断点：README/install.sh/CONTRIBUTING/SECURITY/vscode 全部从旧仓库 `834063245-creator/HoloGram` 改指向 `290864310liujiasheng-wq/hologram-audit-risk`；README 安装以源码构建为首选（Release 未发布）
+- [x] [A] 建检测质量基线：`engine/tests/detection_corpus/`（35 必检出 / 12 干净 / 10 已知盲区）+ `detection_quality` 回归测试；实测召回 94.3%→**100%**、误报 8.3%→**0%**
+- [x] [B] 检测漏报：bare `execSync(` 未识别 → 补规则；SQL 拼接字符串内含引号导致漏检 → 按引号类型拆分规则
+- [x] [B] 检测误报：占位符（`changeme`/`<YOUR_KEY_HERE>`）被当密钥 → 加占位符denylist
+- [x] [B] check 噪音：默认只显示高置信度（密钥/注入/危险执行），结构耦合信号折叠，`--verbose` 看全部
+- [x] [B] CI 空壳：`init` 生成的 workflow 从 `echo TODO` 改为可运行的 install + `check --fail-on block`
+- [x] 冻结桌面端/observe/notify/auth-payment/vscode 新功能（FROZEN.md，复审 2026-10-08）
 
 ### 2026-07-08 — 客户视角走查 P0-P2 全面收口（CLI 上手体验）
 

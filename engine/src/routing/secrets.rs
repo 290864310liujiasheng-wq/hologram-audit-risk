@@ -125,11 +125,15 @@ impl SecretScanner {
             // quoted/backtick span.
             Regex::new(&format!(r#"f["'][^"'\n]*{sql_keyword}[^"'\n]*\{{[^}}]+\}}[^"'\n]*["']"#)).unwrap(),
             Regex::new(&format!(r#"`[^`\n]*{sql_keyword}[^`\n]*\$\{{[^}}]+\}}[^`\n]*`"#)).unwrap(),
-            // String concatenation: a quoted string containing a SQL
-            // keyword, immediately followed by `+` and an identifier (or
-            // the reverse order).
-            Regex::new(&format!(r#"["'][^"'\n]*{sql_keyword}[^"'\n]*["']\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
-            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*["'][^"'\n]*{sql_keyword}[^"'\n]*["']"#)).unwrap(),
+            // String concatenation: a quoted string containing a SQL keyword,
+            // joined with `+` and an identifier (either order). Split by quote
+            // char so a SQL string that itself contains the *other* quote
+            // (e.g. "... WHERE name = '" + userName) still matches — a single
+            // `[^"'\n]` class would stop at the inner quote and miss it.
+            Regex::new(&format!(r#""[^"\n]*{sql_keyword}[^"\n]*"\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
+            Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
+            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*"[^"\n]*{sql_keyword}[^"\n]*""#)).unwrap(),
+            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*'[^'\n]*{sql_keyword}[^'\n]*'"#)).unwrap(),
         ];
 
         let dangerous_execution_patterns = vec![
@@ -145,6 +149,10 @@ impl SecretScanner {
             // JS-style method call: `.exec(` or `.execSync(`, always preceded
             // by a dot — mutually exclusive with the bare exec() pattern above.
             ("child_process.exec()", Regex::new(r"\.exec(Sync)?\s*\(").unwrap()),
+            // Bare `execSync(` / `spawnSync(` from a destructured import
+            // (`import { execSync } from 'child_process'`) — no leading dot, so
+            // the dotted pattern above misses it.
+            ("execSync()", Regex::new(r"(^|[^.\w])(exec|spawn)Sync\s*\(").unwrap()),
             ("new Function() from string", Regex::new(r"\bnew\s+Function\s*\(").unwrap()),
             ("__import__()", Regex::new(r"__import__\s*\(").unwrap()),
         ];
@@ -236,7 +244,16 @@ impl SecretScanner {
             // Layer 3: hardcoded assignment patterns
             if self.assignment_pattern.is_match(line) {
                 let already_flagged = findings.iter().any(|f| f.line == line_number);
-                if !already_flagged {
+                // Skip obvious placeholders (`changeme`, `<YOUR_KEY_HERE>`, …).
+                // Flagging these is the classic false alarm that trains users
+                // to ignore the tool — the exact failure this scanner exists to
+                // avoid. Real secrets with a known shape are still caught by
+                // Layer 1/2, which run before this and don't consult the denylist.
+                let value_is_placeholder = extract_string_literals(line)
+                    .iter()
+                    .filter(|v| v.len() >= 8)
+                    .any(|v| looks_like_placeholder(v));
+                if !already_flagged && !value_is_placeholder {
                     let var_match = self
                         .sensitive_var_names
                         .find(line)
@@ -375,6 +392,33 @@ pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Ve
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// True for values that are obviously placeholders, not real secrets:
+/// `changeme`, `<YOUR_API_KEY_HERE>`, `xxxxxxxx`, `example`, etc. Used to
+/// suppress Layer-3 assignment false positives. Real secrets with a known
+/// shape are still caught by Layer 1/2, which run first and ignore this list.
+fn looks_like_placeholder(value: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    if v.contains('<') || v.contains('>') {
+        return true;
+    }
+    const MARKERS: &[&str] = &[
+        "placeholder", "changeme", "change_me", "change-me", "changeit", "your_", "your-",
+        "yourkey", "example", "dummy", "redacted", "todo", "fixme", "sample", "insert_",
+        "replace_", "n/a", "xxxx", "...", "foobar", "mysecret", "mypassword",
+    ];
+    if MARKERS.iter().any(|m| v.contains(m)) {
+        return true;
+    }
+    // A run of one repeated char, e.g. "********" / "xxxxxxxx".
+    let mut chars = v.chars();
+    if let Some(first) = chars.next() {
+        if v.chars().count() >= 4 && chars.all(|c| c == first) {
+            return true;
+        }
+    }
+    false
+}
 
 /// Truncate a matched secret to at most 12 bytes for display (never log full keys).
 /// Truncates at a char boundary — matched text can contain multi-byte UTF-8

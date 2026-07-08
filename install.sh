@@ -1,11 +1,11 @@
 #!/bin/sh
 # audit-risk installer
-# Usage: curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh
-# Or:    curl -sSf https://raw.githubusercontent.com/834063245-creator/HoloGram/main/install.sh | sh -s -- --prefix ~/.local
+# Usage: curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh
+# Or:    curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh -s -- --prefix ~/.local
 
 set -eu
 
-REPO="834063245-creator/HoloGram"
+REPO="290864310liujiasheng-wq/hologram-audit-risk"
 BINARY="audit-risk"
 DEFAULT_PREFIX="/usr/local"
 

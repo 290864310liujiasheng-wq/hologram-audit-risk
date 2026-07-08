@@ -14,7 +14,7 @@ HoloGram 是一个 **Rust 分析引擎 + Tauri 2 桌面壳 + TypeScript/Three.js
 
 ### 报告 Bug
 
-1. 在 [Issues](https://github.com/834063245-creator/HoloGram/issues) 搜索是否已有相同报告
+1. 在 [Issues](https://github.com/290864310liujiasheng-wq/hologram-audit-risk/issues) 搜索是否已有相同报告
 2. 使用 Bug Report 模板
 3. 提供：
    - 操作系统和版本
@@ -91,7 +91,7 @@ src-tauri/      Rust / Tauri 2 桌面壳
 ### 需要帮助？
 
 - 阅读 [README](README.md)
-- 查看 [GitHub Discussions](https://github.com/834063245-creator/HoloGram/discussions)
+- 查看 [GitHub Discussions](https://github.com/290864310liujiasheng-wq/hologram-audit-risk/discussions)
 - [PROJECT.md](PROJECT.md) 是项目全景真相源
 
 ---

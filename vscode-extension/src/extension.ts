@@ -200,7 +200,7 @@ export function activate(context: vscode.ExtensionContext): AuditRiskExports {
       );
       if (selection === '打开安装说明') {
         vscode.env.openExternal(
-          vscode.Uri.parse('https://github.com/834063245-creator/HoloGram#安装')
+          vscode.Uri.parse('https://github.com/290864310liujiasheng-wq/hologram-audit-risk#安装')
         );
       } else if (selection === '设置可执行文件路径') {
         vscode.commands.executeCommand('workbench.action.openSettings', 'auditRisk.binaryPath');
