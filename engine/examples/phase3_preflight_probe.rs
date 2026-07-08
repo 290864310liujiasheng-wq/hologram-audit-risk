@@ -3,7 +3,7 @@ use hologram_engine::routing::preflight::run_full_check;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let scenario = args.get(0).map(String::as_str).unwrap_or("quiet");
+    let scenario = args.first().map(String::as_str).unwrap_or("quiet");
     let changed_files: Vec<String> = if args.len() > 1 {
         args[1..].to_vec()
     } else {

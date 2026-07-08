@@ -191,7 +191,7 @@ func main() {
     fmt.Println("hello")
 }
 "#;
-        let (nodes, edges, _) = a.analyze("main.go", src);
+        let (nodes, _edges, _) = a.analyze("main.go", src);
         // Should find at least the module node + main function
         assert!(nodes.len() >= 2, "expected module + at least one function");
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
@@ -210,7 +210,7 @@ pub fn add(a: i32, b: i32) -> i32 {
     a + b
 }
 "#;
-        let (nodes, edges, _) = a.analyze("main.rs", src);
+        let (nodes, _edges, _) = a.analyze("main.rs", src);
         let names: Vec<&str> = nodes.iter().map(|n| n.name.as_str()).collect();
         assert!(names.contains(&"hello"));
         assert!(names.contains(&"add"));
@@ -228,7 +228,7 @@ pub fn add(a: i32, b: i32) -> i32 {
         let a = TreeSitterAdapter;
         let (nodes, edges, _) = a.analyze("main.go", "");
         // Should have the module node at minimum
-        assert!(nodes.len() >= 1, "should have at least module node");
+        assert!(!nodes.is_empty(), "should have at least module node");
         assert!(edges.is_empty());
     }
 
@@ -270,7 +270,7 @@ pub fn add(a: i32, b: i32) -> i32 {
         let src = "{\"name\": \"test\", \"version\": \"1.0\"}";
         let (nodes, _, _) = a.analyze("config.json", src);
         // JSON doesn't have functions/classes, but should have module node
-        assert!(nodes.len() >= 1, "should have at least module node");
+        assert!(!nodes.is_empty(), "should have at least module node");
     }
 
     #[test]

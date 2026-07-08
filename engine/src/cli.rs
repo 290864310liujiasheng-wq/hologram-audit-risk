@@ -5131,7 +5131,7 @@ mod tests {
         assert_eq!(watch.default_output, DefaultOutputMode::Human);
         assert!(matches!(watch.command, CliCommand::Watch { .. }));
         if let CliCommand::Watch { observe, .. } = watch.command {
-            assert_eq!(observe, false);
+            assert!(!observe);
         }
 
         let diff = parse_cli_command(&args(&["diff", "/tmp/before.ts", "/tmp/after.ts"])).expect("diff should parse");
@@ -5333,9 +5333,7 @@ mod tests {
         // none of the box-drawing glyphs the Boxed renderer uses.
         let rendered = super::render_panel_plain(
             "问题说明",
-            &vec![
-                "严重 · migrations/0001_init.sql:0 · Migration file changed — may irreversibly alter data schema. Requires manual review, and this sentence is deliberately much longer than any fixed box width so it would have overflowed a narrow box.".to_string(),
-            ],
+            &["严重 · migrations/0001_init.sql:0 · Migration file changed — may irreversibly alter data schema. Requires manual review, and this sentence is deliberately much longer than any fixed box width so it would have overflowed a narrow box.".to_string()],
             "",
             "",
             "",
@@ -5355,7 +5353,7 @@ mod tests {
 
         let with_bullets = super::render_panel_plain(
             "下一步",
-            &vec!["- `audit-risk check .`".to_string()],
+            &["- `audit-risk check .`".to_string()],
             "",
             "",
             "",
@@ -5485,7 +5483,7 @@ mod tests {
 
         let observe = super::run_observe_command(Some(root_path.to_str().expect("utf8")));
         assert!(observe.is_err(), "observe should be gated for Core users");
-        let observe_error = observe.err().expect("observe error");
+        let observe_error = observe.expect_err("observe error");
         assert_eq!(observe_error.exit_code, 3);
         assert!(observe_error.message.contains("Pro 个人版"));
         assert!(observe_error.message.contains("audit-risk auth login"));
@@ -5498,7 +5496,7 @@ mod tests {
             DefaultOutputMode::Human,
         );
         assert!(notify.is_err(), "notify should be gated for Core users");
-        let notify_error = notify.err().expect("notify error");
+        let notify_error = notify.expect_err("notify error");
         assert_eq!(notify_error.exit_code, 3);
         assert!(notify_error.message.contains("Pro 个人版"));
         assert!(notify_error.message.contains("告警推送"));
@@ -5519,7 +5517,7 @@ mod tests {
             FailGate::Block,
         );
         assert!(watch.is_err(), "watch --observe should be gated for Core users");
-        let watch_error = watch.err().expect("watch observe error");
+        let watch_error = watch.expect_err("watch observe error");
         assert_eq!(watch_error.exit_code, 3);
         assert!(watch_error.message.contains("Pro 个人版"));
         assert!(watch_error.message.contains("手机观察"));
@@ -6290,8 +6288,8 @@ mod tests {
         let mut previous = std::collections::BTreeMap::new();
         previous.insert("src/a.ts::check.l3".to_string(), 1_000);
 
-        assert_eq!(super::should_emit_watch_finding(&finding, 1_000 + 60_000, &previous, 600_000), false);
-        assert_eq!(super::should_emit_watch_finding(&finding, 1_000 + 601_000, &previous, 600_000), true);
+        assert!(!super::should_emit_watch_finding(&finding, 1_000 + 60_000, &previous, 600_000));
+        assert!(super::should_emit_watch_finding(&finding, 1_000 + 601_000, &previous, 600_000));
     }
 
     #[test]

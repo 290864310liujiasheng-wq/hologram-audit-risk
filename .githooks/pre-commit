@@ -1,6 +1,26 @@
 #!/bin/sh
 set -eu
+#
+# 提交前门禁：engine Rust 代码有 clippy 警告就拦下提交。
+# 启用方式（每台机器执行一次）：
+#   git config core.hooksPath .githooks
+# 临时跳过（不推荐）：git commit --no-verify
+#
+# 注：完整的 phase5 风险交付报告（cargo run ... check 全量扫描）较重，
+#     单次可达数分钟，不适合每次提交都跑，已交由 CI 的 risk-delivery job 负责。
+#     需要本地手动跑：npm --prefix src-ui run phase5:report -- --workspace "$PWD" --fail-on block
 
-WORKSPACE_ROOT="${1:-$PWD}"
+WORKSPACE_ROOT="${1:-$(git rev-parse --show-toplevel)}"
 
-npm --prefix "$WORKSPACE_ROOT/src-ui" run phase5:report -- --workspace "$WORKSPACE_ROOT" --output "$WORKSPACE_ROOT/.hologram/latest-risk-report.json" --fail-on block
+# 仅当本次提交改动了 engine/*.rs 时才检查，避免拖慢无关提交
+if git diff --cached --name-only | grep -q '^engine/.*\.rs$'; then
+    echo "[pre-commit] 运行 cargo clippy ..."
+    if ! (cd "$WORKSPACE_ROOT/engine" && cargo clippy --all-targets -- -D warnings); then
+        echo ""
+        echo "[pre-commit] ✗ clippy 有警告，提交被拦下。"
+        echo "  先修掉上面的警告，或用 'cargo clippy --fix' 自动修，再重新提交。"
+        echo "  确需跳过：git commit --no-verify"
+        exit 1
+    fi
+    echo "[pre-commit] ✓ clippy 通过"
+fi

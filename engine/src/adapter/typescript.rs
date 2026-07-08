@@ -185,7 +185,7 @@ mod tests {
     fn test_js_function_and_class() {
         let adapter = TypeScriptAdapter::new();
         let src = "function hello() {}\nclass Foo {}\nclass Bar extends Foo {}";
-        let (nodes, edges, _) = adapter.analyze("test.js", src);
+        let (nodes, _edges, _) = adapter.analyze("test.js", src);
         assert!(nodes.iter().any(|n| n.name == "hello"));
         assert!(nodes.iter().any(|n| n.name == "Foo"));
         assert!(nodes.iter().any(|n| n.name == "Bar"));
