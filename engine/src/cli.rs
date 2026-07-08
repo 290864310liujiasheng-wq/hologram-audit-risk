@@ -5746,9 +5746,12 @@ mod tests {
         let active = super::render_auth_status(&super::load_entitlement_status_from_dir(&root_path));
         assert!(active.contains("已登录"));
 
+        // 过期 24 小时：稳定处于 72 小时宽限期内（相对当前时间，避免硬编码日期过期导致测试失效）
+        let grace_valid_until =
+            (chrono::Utc::now() - chrono::Duration::hours(24)).format("%Y-%m-%dT%H:%M:%SZ");
         let json = format!(
-            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2026-07-05T00:00:00Z","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
-            device_id
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"{}","device_id":"{}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#,
+            grace_valid_until, device_id
         );
         write_signed_entitlement(&root_path, &json);
         let grace = super::render_auth_status(&super::load_entitlement_status_from_dir(&root_path));
