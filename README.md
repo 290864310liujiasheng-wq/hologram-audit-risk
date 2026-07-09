@@ -51,6 +51,26 @@ curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-aud
 
 ---
 
+## 清理磁盘空间
+
+构建产物（`target/`）、依赖（`node_modules/`）和运行时缓存（`.hologram/`）会占用大量空间。仓库根目录提供 `clean.sh` 一键清理，删除的都是可自动重建的东西，不影响源码和项目运行：
+
+```sh
+./clean.sh --dry-run   # 预览：列出会删什么、能省多少（不实际删除）
+./clean.sh             # 实际清理
+```
+
+也可以从前端目录用 npm 脚本调用：
+
+```sh
+npm --prefix src-ui run clean            # 实际清理
+npm --prefix src-ui run clean:dry        # 预览
+```
+
+清理后按需重建：`cargo build`（引擎/桌面）、`npm ci`（前端依赖）、`npm run build`（前端产物），首次运行应用会自动重建 `.hologram` 索引。
+
+---
+
 ## 一句话
 
 `audit-risk` 是一个面向 Codex、Cursor、Copilot、CodeGeeX 等 AI 编码工具的通用本地风控层。它持续审查 AI 生成或修改的代码，给出白话解释、修复建议、审批信号和可追溯的审计记录，而不是再造一个新的 IDE。

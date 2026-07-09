@@ -16,7 +16,9 @@
     "phase5:doctor": "node --import tsx scripts/phase5-delivery.ts doctor",
     "phase5:verify": "node --import tsx scripts/phase5-delivery.ts verify",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "clean": "bash ../clean.sh",
+    "clean:dry": "bash ../clean.sh --dry-run"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
