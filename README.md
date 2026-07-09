@@ -105,15 +105,15 @@ npm --prefix src-ui run clean:dry        # 预览
 
 | 指标 | 当前 | 说明 |
 |---|---|---|
-| **召回率** | **35/35 = 100%** | 必检出样本（各类硬编码密钥、SQL 注入、危险执行、IAM 通配符）全部命中 |
+| **召回率** | **37/37 = 100%** | 必检出样本（各类硬编码密钥、SQL 注入、危险执行、IAM 通配符）全部命中 |
 | **误报率** | **0/12 = 0%** | 干净样本（env 读取、参数化查询、占位符、注释）零误报 |
-| **已知盲区** | 1/10 | 见下 |
+| **已知盲区** | 1/8 | 见下 |
 
 `cargo test --test detection_quality -- --nocapture` 可复现，CI 门禁锁定「召回 100% 且零误报」，退化即失败。
 
-**我们现在检测什么**：已知前缀密钥（OpenAI/AWS/Stripe/GitHub/Slack/Google/私钥等）、高熵字符串、敏感变量硬编码赋值、字符串拼接/插值式 SQL 注入、`eval`/`exec`/`os.system`/`shell=True`/`execSync` 等危险动态执行、IAM `*` 通配符。
+**我们现在检测什么**：已知前缀密钥（OpenAI/AWS/Stripe/GitHub/Slack/Google/私钥等）、高熵字符串、敏感变量硬编码赋值、字符串拼接/插值式 SQL 注入（含 f-string / 模板字面量、`+` 拼接、Python `%` 格式化、`str.format()`）、`eval`/`exec`/`os.system`/`shell=True`/`execSync` 等危险动态执行、IAM `*` 通配符。
 
-**我们暂时不检测（诚实标注的盲区）**：`%`/`.format()` 式 SQL 注入、命令注入的 `os.popen` 变体、路径穿越、弱哈希（MD5）、云服务连接串（GCP service account / Azure connection string）、SSRF、不安全反序列化等语义/数据流类风险。这些需要更深的分析，在路线图上，不在当前版本里假装能做。
+**我们暂时不检测（诚实标注的盲区）**：命令注入的 `os.popen` 变体、路径穿越、弱哈希（MD5）、云服务连接串（GCP service account / Azure connection string）、SSRF、不安全反序列化等语义/数据流类风险。这些需要更深的分析，在路线图上，不在当前版本里假装能做。
 
 ## 当前产品形态
 

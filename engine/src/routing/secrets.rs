@@ -14,9 +14,9 @@
 ///    Catches secrets that look "innocent" in isolation.
 ///
 /// 4. **SQL injection via string building** — a SQL keyword inside an
-///    f-string/template-literal interpolation, or string concatenation,
-///    instead of a parameterized query placeholder passed separately to
-///    the driver.
+///    f-string/template-literal interpolation, string concatenation, Python
+///    `%` formatting, or `str.format()`, instead of a parameterized query
+///    placeholder passed separately to the driver.
 ///
 /// 5. **Dangerous dynamic execution** — eval/exec/os.system/shell=True/
 ///    child_process.exec/new Function(...) — code that runs a string as
@@ -134,6 +134,17 @@ impl SecretScanner {
             Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
             Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*"[^"\n]*{sql_keyword}[^"\n]*""#)).unwrap(),
             Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*'[^'\n]*{sql_keyword}[^'\n]*'"#)).unwrap(),
+            // Python `%` string formatting: a quoted string containing a SQL
+            // keyword, then the `%` operator and a variable/tuple —
+            // `"... SELECT ..." % user`. The parameterized form
+            // `execute("... %s", (user,))` has a `,` (not `%`) after the closing
+            // quote, so it does NOT match — `%s` lives *inside* the string.
+            Regex::new(&format!(r#""[^"\n]*{sql_keyword}[^"\n]*"\s*%\s*[A-Za-z_(]"#)).unwrap(),
+            Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*%\s*[A-Za-z_(]"#)).unwrap(),
+            // str.format(): a quoted string containing a SQL keyword, then
+            // `.format(` — `"... SELECT ...".format(user)`.
+            Regex::new(&format!(r#""[^"\n]*{sql_keyword}[^"\n]*"\s*\.\s*format\s*\("#)).unwrap(),
+            Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*\.\s*format\s*\("#)).unwrap(),
         ];
 
         let dangerous_execution_patterns = vec![
