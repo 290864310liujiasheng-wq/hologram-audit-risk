@@ -60,6 +60,7 @@ pub enum CliCommand {
     Home,
     Help,
     Tour,
+    Version,
     Check {
         workspace: String,
         pretty: bool,
@@ -239,6 +240,14 @@ pub fn parse_cli_command(args: &[String]) -> Result<ParsedCliCommand, UsageError
             reject_unknown_flags(rest, &[])?;
             Ok(ParsedCliCommand {
                 command: CliCommand::Tour,
+                tier: CommandTier::Primary,
+                default_output: DefaultOutputMode::Human,
+            })
+        }
+        "version" | "--version" | "-V" => {
+            reject_unknown_flags(rest, &[])?;
+            Ok(ParsedCliCommand {
+                command: CliCommand::Version,
                 tier: CommandTier::Primary,
                 default_output: DefaultOutputMode::Human,
             })
@@ -579,6 +588,10 @@ fn execute_command(parsed: ParsedCliCommand) -> Result<CommandOutcome, CliRuntim
         CliCommand::Home => run_home_command(),
         CliCommand::Help => Ok(CommandOutcome::text(0, usage_text())),
         CliCommand::Tour => Ok(CommandOutcome::text(0, tour_text())),
+        CliCommand::Version => Ok(CommandOutcome::text(
+            0,
+            format!("audit-risk {}", env!("CARGO_PKG_VERSION")),
+        )),
         CliCommand::Check {
             workspace,
             pretty,
@@ -4002,6 +4015,7 @@ fn render_help_screen() -> String {
         &[
             "`audit-risk`".to_string(),
             "`audit-risk tour`".to_string(),
+            "`audit-risk --version`".to_string(),
             "`audit-risk init <目录>`".to_string(),
             "`audit-risk doctor [目录]`".to_string(),
             "`audit-risk watch <目录>`".to_string(),
@@ -5446,6 +5460,20 @@ mod tests {
         let tour = parse_cli_command(&args(&["tour"])).expect("tour should parse");
         assert_eq!(tour.default_output, DefaultOutputMode::Human);
         assert!(matches!(tour.command, CliCommand::Tour));
+
+        for form in ["version", "--version", "-V"] {
+            let v = parse_cli_command(&args(&[form])).expect("version should parse");
+            assert!(matches!(v.command, CliCommand::Version), "form {form} should parse to Version");
+        }
+        // --version prints "audit-risk <semver>" and exits 0.
+        let out = super::execute_command(parse_cli_command(&args(&["--version"])).unwrap())
+            .expect("version runs");
+        assert_eq!(out.exit_code, 0);
+        assert!(out
+            .stdout_text
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("audit-risk "));
     }
 
     #[test]
