@@ -1747,7 +1747,7 @@ fn call_model_for_repair(
     .ok_or_else(|| {
         CliRuntimeError::internal(format!(
             "模型响应中找不到文本内容。原始响应：{}",
-            &raw.chars().take(300).collect::<String>()
+            raw.chars().take(300).collect::<String>()
         ))
     })?;
 
