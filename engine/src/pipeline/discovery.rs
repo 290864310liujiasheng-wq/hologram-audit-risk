@@ -28,7 +28,11 @@ pub fn discover_files(root: &Path, extensions: &[&str]) -> Vec<PathBuf> {
 }
 
 /// Directories/file patterns to skip during discovery.
-fn is_excluded(entry: &walkdir::DirEntry) -> bool {
+///
+/// Shared by the supplementary analysis passes (dataflow / framework routes /
+/// dynamic dispatch) so they prune build & dependency dirs (`target`,
+/// `node_modules`, `.git`, …) instead of walking gigabytes of artifacts.
+pub fn is_excluded(entry: &walkdir::DirEntry) -> bool {
     let name = entry.file_name().to_str().unwrap_or("");
     // Common exclusions
     let excluded_dirs = [
