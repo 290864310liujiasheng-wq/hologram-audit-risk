@@ -639,56 +639,15 @@ fn execute_command(parsed: ParsedCliCommand) -> Result<CommandOutcome, CliRuntim
             output,
             fail_on,
             history_compare,
-        } => run_report_command(
-            SecondaryArgs {
-                workspace,
-                config,
-                output,
-                fail_on,
-                query: None,
-                limit: None,
-            },
-            output_mode,
-            history_compare,
-        ),
-        CliCommand::Rules { workspace, config } => run_phase5_secondary_command(
-            "rules",
-            SecondaryArgs {
-                workspace,
-                config,
-                output: None,
-                fail_on: None,
-                query: None,
-                limit: None,
-            },
-        ),
+        } => run_report_command_native(workspace, config, output, fail_on, history_compare, output_mode),
+        CliCommand::Rules { workspace, config } => run_rules_command(workspace, config),
         CliCommand::Audit {
             workspace,
             config,
             query,
             limit,
-        } => run_phase5_secondary_command(
-            "audit",
-            SecondaryArgs {
-                workspace,
-                config,
-                output: None,
-                fail_on: None,
-                query,
-                limit,
-            },
-        ),
-        CliCommand::Verify { workspace } => run_phase5_secondary_command(
-            "verify",
-            SecondaryArgs {
-                workspace,
-                config: None,
-                output: None,
-                fail_on: None,
-                query: None,
-                limit: None,
-            },
-        ),
+        } => run_audit_command(workspace, config, query, limit),
+        CliCommand::Verify { workspace: _ } => run_verify_command(),
         CliCommand::Notify {
             workspace,
             test,
@@ -944,8 +903,7 @@ fn run_init_command(
             workspace_path.display()
         )));
     }
-    let platform_root = resolve_platform_root()?;
-    let files = build_default_init_files(&workspace_path, &platform_root);
+    let files = build_default_init_files(&workspace_path);
     let mut created = Vec::new();
     for (relative_path, content, executable) in files {
         let absolute_path = workspace_path.join(relative_path);
@@ -1339,35 +1297,80 @@ fn run_notify_command(
     }
 }
 
-fn run_report_command(
-    mut args: SecondaryArgs,
-    output_mode: DefaultOutputMode,
+fn run_report_command_native(
+    workspace: Option<String>,
+    config_path: Option<String>,
+    output_path: Option<String>,
+    fail_on: Option<FailGate>,
     history_compare: bool,
+    output_mode: DefaultOutputMode,
 ) -> Result<CommandOutcome, CliRuntimeError> {
-    let cwd = std::env::current_dir()
-        .map_err(|error| CliRuntimeError::environment(format!("failed to determine current directory: {error}")))?;
-    if let Some(workspace) = args.workspace.as_ref() {
-        args.workspace = Some(
-            resolve_workspace_argument(&cwd, workspace)
-                .display()
-                .to_string(),
-        );
-    } else {
-        args.workspace = Some(default_workspace_root(&cwd).display().to_string());
-    }
+    let workspace = resolve_workspace_or_cwd(workspace.as_deref())?;
     if history_compare {
-        let workspace_path = PathBuf::from(
-            args.workspace
-                .as_ref()
-                .expect("workspace was just set above"),
-        );
-        ensure_pro_feature("history_compare", &workspace_path)?;
+        ensure_pro_feature("history_compare", &workspace)?;
     }
-    let output = run_phase5_secondary_command("report", args)?;
-    let exit_code = output.exit_code;
-    let report = output
-        .stdout_json
-        .ok_or_else(|| CliRuntimeError::internal("report output is missing JSON payload"))?;
+    let config = effective_delivery_config(&workspace, config_path.as_deref())?;
+    let review_policy = resolve_rule_policy(&workspace, Some(&config), "review")?;
+    let repair_policy = resolve_rule_policy(&workspace, Some(&config), "repair")?;
+    let mut check = build_workspace_check_payload(&workspace)?;
+    apply_report_review_policy(&mut check, &review_policy);
+    let audit_path = delivery_path(&workspace, config.pointer("/audit/jsonl_path").and_then(Value::as_str), DEFAULT_AUDIT_JSONL_PATH);
+    let recent_limit = config.pointer("/audit/recent_limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+    let audit_entries = read_recent_audit_jsonl(&audit_path, recent_limit);
+    let policies = json!({"review": review_policy, "repair": repair_policy});
+    let threshold = fail_on.unwrap_or_else(|| {
+        config
+            .pointer("/automation/fail_on_decision")
+            .and_then(Value::as_str)
+            .and_then(|value| parse_fail_gate(value).ok())
+            .unwrap_or(FailGate::Block)
+    });
+    let report_output_path = config
+        .pointer("/audit/report_output_path")
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_REPORT_OUTPUT_PATH);
+    let target_path = output_path
+        .as_deref()
+        .map(PathBuf::from)
+        .map(|path| if path.is_absolute() { path } else { workspace.join(path) })
+        .unwrap_or_else(|| delivery_path(&workspace, Some(report_output_path), DEFAULT_REPORT_OUTPUT_PATH));
+    let mut automation = config.get("automation").cloned().unwrap_or_else(|| json!({}));
+    automation["fail_on_decision"] = json!(fail_gate_to_str(threshold));
+    automation["should_fail"] = json!(gate_exit_code(
+        check.pointer("/review/gate_decision/decision").and_then(Value::as_str),
+        threshold,
+    ) == 2);
+    let report_without_signature = json!({
+        "generated_at": now_iso(),
+        "workspace": {
+            "root": normalize_path(workspace.display().to_string()),
+            "changed_files_source": config.pointer("/workspace/changed_files_source").and_then(Value::as_str).unwrap_or("git_status"),
+            "audit_jsonl_path": config.pointer("/audit/jsonl_path").and_then(Value::as_str).unwrap_or(DEFAULT_AUDIT_JSONL_PATH),
+            "report_output_path": report_output_path,
+        },
+        "provider": build_delivery_provider_status(&config),
+        "policies": policies,
+        "current_review": build_current_review_report(&check, &audit_entries),
+        "audit": build_delivery_audit_report(audit_entries),
+        "automation": automation,
+    });
+    let mut report = report_without_signature;
+    report["report_signature"] = json!({
+        "algorithm": "sha256",
+        "digest": sha256_hex(&serde_json::to_vec(&report).expect("report must serialize")),
+    });
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CliRuntimeError::environment(format!("无法创建报告目录 {}：{error}", parent.display()))
+        })?;
+    }
+    fs::write(&target_path, serde_json::to_vec_pretty(&report).expect("report must serialize")).map_err(|error| {
+        CliRuntimeError::environment(format!("无法写入报告文件 {}：{error}", target_path.display()))
+    })?;
+    let exit_code = gate_exit_code(
+        check.pointer("/review/gate_decision/decision").and_then(Value::as_str),
+        threshold,
+    );
     if output_mode == DefaultOutputMode::Json {
         Ok(CommandOutcome::json(exit_code, report))
     } else {
@@ -1378,6 +1381,626 @@ fn run_report_command(
         };
         Ok(CommandOutcome::text(exit_code, rendered))
     }
+}
+
+fn default_delivery_config(workspace: &Path) -> Value {
+    json!({
+        "version": "phase5.v1",
+        "workspace": { "root": normalize_path(workspace.display().to_string()), "changed_files_source": "git_status" },
+        "provider": {
+            "name": "deepseek",
+            "model": "deepseek-v4-pro",
+            "base_url": "https://api.deepseek.com",
+            "key_source": "env",
+            "env_var": "DEEPSEEK_API_KEY",
+        },
+        "rule_packages": {
+            "review_paths": [], "repair_paths": [],
+            "disabled_review_rule_ids": [], "disabled_repair_rule_ids": [],
+        },
+        "audit": {
+            "jsonl_path": DEFAULT_AUDIT_JSONL_PATH,
+            "report_output_path": DEFAULT_REPORT_OUTPUT_PATH,
+            "recent_limit": 20,
+        },
+        "auth": { "base_url": "" },
+        "automation": {
+            "verify_commands": ["audit-risk check . --fail-on block", "audit-risk doctor ."],
+            "pre_commit_hook": DEFAULT_PRE_COMMIT_PATH,
+            "ci_workflow": DEFAULT_CI_WORKFLOW_PATH,
+            "fail_on_decision": "block",
+        },
+    })
+}
+
+fn delivery_path(workspace: &Path, configured_path: Option<&str>, default_path: &str) -> PathBuf {
+    let path = PathBuf::from(configured_path.unwrap_or(default_path));
+    if path.is_absolute() { path } else { workspace.join(path) }
+}
+
+fn read_recent_audit_jsonl(path: &Path, limit: usize) -> Vec<Value> {
+    let mut entries = read_audit_jsonl(path);
+    let start = entries.len().saturating_sub(limit);
+    entries.drain(..start);
+    entries
+}
+
+fn build_delivery_provider_status(config: &Value) -> Value {
+    let provider = config.get("provider").cloned().unwrap_or_else(|| json!({}));
+    let key_source = provider.get("key_source").and_then(Value::as_str).unwrap_or("env");
+    let env_var = provider.get("env_var").and_then(Value::as_str).unwrap_or("DEEPSEEK_API_KEY");
+    let ready = key_source != "env" || std::env::var(env_var).map(|value| !value.trim().is_empty()).unwrap_or(false);
+    json!({
+        "name": provider.get("name").and_then(Value::as_str).unwrap_or("deepseek"),
+        "model": provider.get("model").and_then(Value::as_str).unwrap_or("deepseek-v4-pro"),
+        "base_url": provider.get("base_url").and_then(Value::as_str).unwrap_or("https://api.deepseek.com"),
+        "key_source": key_source,
+        "ready": ready,
+        "reason": if ready { "Provider configuration is ready.".to_string() } else { format!("Provider key is missing from {env_var}.") },
+        "env_var": if key_source == "env" { Value::String(env_var.to_string()) } else { Value::Null },
+    })
+}
+
+fn build_current_review_report(check: &Value, audit_entries: &[Value]) -> Value {
+    let review = check.get("review").cloned().unwrap_or_else(|| json!({}));
+    let findings = review.get("findings").and_then(Value::as_array).cloned().unwrap_or_default();
+    let gate = review.get("gate_decision").cloned().unwrap_or_else(|| json!({}));
+    let repair_history = normalize_delivery_audit_records(audit_entries)
+        .into_iter()
+        .filter(|record| record.get("plane").and_then(Value::as_str) == Some("repair"))
+        .take(5)
+        .map(|record| json!({
+            "timestamp": record.get("timestamp").cloned().unwrap_or(Value::Null),
+            "stage": record.get("stage").cloned().unwrap_or(Value::Null),
+            "status": record.get("status").cloned().unwrap_or(Value::Null),
+            "subject": record.get("subject").cloned().unwrap_or(Value::Null),
+            "reason": record.get("reason").cloned().unwrap_or(Value::Null),
+            "state_change": record.get("state_change").cloned().unwrap_or(Value::Null),
+            "error": record.get("error").cloned().unwrap_or(Value::Null),
+        }))
+        .collect::<Vec<_>>();
+    json!({
+        "status": "ok",
+        "review": review,
+        "gate_decision": gate,
+        "workbench_queue": [
+            {"step_id": "review", "state": if findings.is_empty() { "clean" } else { "needs_attention" }, "summary": format!("{} 条风险待处理", findings.len())},
+            {"step_id": "gate", "state": gate.get("decision").cloned().unwrap_or_else(|| json!("allow")), "summary": gate.get("reason").cloned().unwrap_or(Value::Null)},
+        ],
+        "repair_history": repair_history,
+        "repair_workbench": {"status_state": if findings.is_empty() { "not_required" } else { "waiting_approval" }, "test_count": 0},
+    })
+}
+
+fn apply_report_review_policy(check: &mut Value, policy: &Value) {
+    let reason = check
+        .get("one_line")
+        .and_then(Value::as_str)
+        .unwrap_or("No enabled rule requires intervention.")
+        .to_string();
+    let Some(review) = check.get_mut("review").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let findings = review.get("findings").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut effects = BTreeMap::new();
+    for rule in policy.get("rules").and_then(Value::as_array).into_iter().flatten() {
+        if let (Some(rule_id), Some(effect)) = (
+            rule.get("rule_id").and_then(Value::as_str),
+            rule.get("gate_effect").and_then(Value::as_str),
+        ) {
+            effects.insert(rule_id, effect);
+        }
+    }
+    let decision = findings
+        .iter()
+        .filter_map(|finding| finding.get("rule_id").and_then(Value::as_str))
+        .filter_map(|rule_id| effects.get(rule_id).copied())
+        .max_by_key(|effect| match *effect {
+            "block" => 3,
+            "require_approval" => 2,
+            "warn" => 1,
+            _ => 0,
+        })
+        .unwrap_or("allow");
+    let finding_ids = findings
+        .iter()
+        .filter_map(|finding| finding.get("finding_id").cloned())
+        .collect::<Vec<_>>();
+    review.insert(
+        "gate_decision".to_string(),
+        json!({
+            "decision": decision,
+            "reason": reason,
+            "finding_count": finding_ids.len(),
+            "finding_ids": finding_ids,
+            "subject_ref": "workspace",
+            "policy_snapshot_id": policy.get("policy_snapshot_id").cloned().unwrap_or(Value::Null),
+        }),
+    );
+}
+
+fn build_delivery_audit_report(entries: Vec<Value>) -> Value {
+    let records = normalize_delivery_audit_records(&entries);
+    let integrity = build_delivery_audit_integrity(&entries);
+    json!({
+        "entries": entries,
+        "records": records,
+        "integrity": integrity,
+    })
+}
+
+fn run_verify_command() -> Result<CommandOutcome, CliRuntimeError> {
+    Ok(CommandOutcome::text(
+        1,
+        "`audit-risk verify` 是开发环境 CI 工具，不作为独立发行命令。\n若要检查代码风险，请使用：audit-risk check <workspace>",
+    ))
+}
+
+fn run_audit_command(
+    workspace: Option<String>,
+    config_path: Option<String>,
+    query: Option<String>,
+    limit: Option<usize>,
+) -> Result<CommandOutcome, CliRuntimeError> {
+    let workspace_path = resolve_workspace_or_cwd(workspace.as_deref())?;
+    let config = if config_path.is_some() {
+        Some(effective_delivery_config(&workspace_path, config_path.as_deref())?)
+    } else {
+        load_delivery_config(&workspace_path, None)?
+    };
+    let query = query.unwrap_or_default();
+    let normalized_query = query.trim().to_lowercase();
+    let audit_path = delivery_path(
+        &workspace_path,
+        config
+            .as_ref()
+            .and_then(|value| value.pointer("/audit/jsonl_path"))
+            .and_then(Value::as_str),
+        DEFAULT_AUDIT_JSONL_PATH,
+    );
+    let configured_limit = config
+        .as_ref()
+        .and_then(|value| value.pointer("/audit/recent_limit"))
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(20);
+    let mut records = normalize_delivery_audit_records(&read_audit_jsonl(&audit_path));
+    if records.iter().all(|record| record.get("timestamp").and_then(Value::as_str).unwrap_or_default().is_empty()) {
+        records.reverse();
+    }
+    let matches_query = |record: &&Value| {
+        normalized_query.is_empty() || audit_record_haystack(record).contains(&normalized_query)
+    };
+    let total_matches = records.iter().filter(matches_query).count();
+    let records = records
+        .iter()
+        .filter(matches_query)
+        .take(limit.unwrap_or(configured_limit))
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(CommandOutcome::json(0, json!({
+        "query": query,
+        "total_matches": total_matches,
+        "records": records,
+    })))
+}
+
+fn resolve_workspace_or_cwd(workspace: Option<&str>) -> Result<PathBuf, CliRuntimeError> {
+    match workspace {
+        Some(path) => resolve_existing_workspace_path(path),
+        None => {
+            let cwd = std::env::current_dir()
+                .map_err(|error| CliRuntimeError::environment(format!("failed to determine current directory: {error}")))?;
+            let workspace = default_workspace_root(&cwd);
+            if workspace.exists() {
+                Ok(workspace)
+            } else {
+                Err(CliRuntimeError::environment(format!("workspace does not exist: {}", workspace.display())))
+            }
+        }
+    }
+}
+
+fn read_audit_jsonl(path: &Path) -> Vec<Value> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let raw_line = line.trim();
+            let mut entry = serde_json::from_str::<Value>(raw_line).ok()?;
+            if let Some(object) = entry.as_object_mut() {
+                object.entry("raw_line".to_string()).or_insert_with(|| json!(raw_line));
+            }
+            Some(entry)
+        })
+        .collect()
+}
+
+fn audit_record_haystack(record: &Value) -> String {
+    [
+        record.get("plane").and_then(Value::as_str).unwrap_or_default(),
+        record.get("stage").and_then(Value::as_str).unwrap_or_default(),
+        record.get("status").and_then(Value::as_str).unwrap_or_default(),
+        record.get("subject").and_then(Value::as_str).unwrap_or_default(),
+        record.get("reason").and_then(Value::as_str).unwrap_or_default(),
+        record.pointer("/error/code").and_then(Value::as_str).unwrap_or_default(),
+    ]
+    .join(" ")
+    .to_lowercase()
+}
+
+fn normalize_delivery_audit_records(entries: &[Value]) -> Vec<Value> {
+    let mut records = entries
+        .iter()
+        .filter_map(normalize_delivery_audit_record)
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        right
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(left.get("timestamp").and_then(Value::as_str).unwrap_or_default())
+    });
+    records
+}
+
+fn normalize_delivery_audit_record(entry: &Value) -> Option<Value> {
+    if entry.get("plane").is_some() && entry.get("tool").is_none() && entry.get("event_type").is_none() {
+        return Some(entry.clone());
+    }
+    let tool = entry
+        .get("tool")
+        .or_else(|| entry.get("event_type"))
+        .and_then(Value::as_str)?;
+    if tool != "review_check" && !tool.starts_with("approval.") && !tool.starts_with("repair_") {
+        return None;
+    }
+    let timestamp = entry
+        .get("ts")
+        .or_else(|| entry.get("timestamp"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let details = entry.get("details").and_then(Value::as_object);
+    let gate_decision = details.and_then(|details| details.get("gate_decision"));
+    let plane = if tool == "review_check" {
+        "review"
+    } else if tool.starts_with("approval.") {
+        "approval"
+    } else {
+        "repair"
+    };
+    let stage = if tool == "review_check" {
+        "review"
+    } else if tool.starts_with("approval.") || tool == "repair_approval" || tool == "repair_approved" {
+        "approval"
+    } else if tool == "repair_rollback" || tool == "repair_rolled_back" {
+        "rollback"
+    } else if tool == "repair_plan" || tool == "repair_planned" {
+        "proposal_generation"
+    } else {
+        "apply"
+    };
+    let action = entry.get("action").and_then(Value::as_str).unwrap_or("allowed");
+    let status = if let Some(error) = details.and_then(|details| details.get("error_code")).and_then(Value::as_str) {
+        if details.and_then(|details| details.get("error_retryable")).and_then(Value::as_bool) == Some(true) {
+            "degraded".to_string()
+        } else {
+            let _ = error;
+            "failed".to_string()
+        }
+    } else if tool == "review_check" {
+        gate_decision
+            .and_then(|gate| gate.get("decision"))
+            .and_then(Value::as_str)
+            .unwrap_or(if action == "allowed" { "allow" } else { "block" })
+            .to_string()
+    } else if tool.starts_with("approval.") || tool == "repair_approved" {
+        if action == "allowed" { "approved" } else { "rejected" }.to_string()
+    } else if tool == "repair_applied" {
+        "applied".to_string()
+    } else if tool == "repair_rolled_back" {
+        "rolled_back".to_string()
+    } else {
+        if action == "allowed" { "allow" } else { "block" }.to_string()
+    };
+    let subject = details
+        .and_then(|details| details.get("subject"))
+        .or_else(|| details.and_then(|details| details.get("patch_proposal_id")))
+        .or_else(|| entry.get("path"))
+        .or_else(|| entry.get("subject_ref"))
+        .and_then(Value::as_str)
+        .unwrap_or("workspace");
+    let finding_ids = details
+        .and_then(|details| details.get("finding_ids"))
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_else(|| entry.get("finding_id").and_then(Value::as_str).map(|value| vec![value]).unwrap_or_default());
+    let evidence_ids = details
+        .and_then(|details| details.get("evidence_ids"))
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let error = details.and_then(|details| details.get("error_code")).and_then(Value::as_str).map(|code| {
+        json!({
+            "code": code,
+            "stage": details.and_then(|details| details.get("error_stage")).cloned().unwrap_or(Value::Null),
+            "retryable": details.and_then(|details| details.get("error_retryable")).cloned().unwrap_or(Value::Null),
+        })
+    });
+    Some(json!({
+        "event_id": format!("{tool}:{timestamp}:{subject}"),
+        "timestamp": timestamp,
+        "plane": plane,
+        "stage": stage,
+        "status": status,
+        "subject": subject,
+        "reason": entry.get("reason").and_then(Value::as_str).unwrap_or_default(),
+        "finding_ids": finding_ids,
+        "evidence_ids": evidence_ids,
+        "policy_snapshot_id": details.and_then(|details| details.get("policy_snapshot_id")).cloned().unwrap_or(Value::Null),
+        "state_change": details.and_then(|details| details.get("state_change")).cloned().unwrap_or(Value::Null),
+        "error": error.unwrap_or(Value::Null),
+        "raw": entry,
+    }))
+}
+
+fn build_delivery_audit_integrity(entries: &[Value]) -> Value {
+    if entries.is_empty() {
+        return json!({"status": "empty", "verified": true, "entry_count": 0, "chained_entry_count": 0, "legacy_entry_count": 0, "issues": []});
+    }
+    let mut issues = Vec::new();
+    let mut chained_entry_count = 0usize;
+    let mut legacy_entry_count = 0usize;
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(actual_hash) = entry.get("integrity_hash").and_then(Value::as_str) else {
+            legacy_entry_count += 1;
+            continue;
+        };
+        chained_entry_count += 1;
+        let tool = entry.get("tool").and_then(Value::as_str).unwrap_or("unknown");
+        let timestamp = entry.get("ts").and_then(Value::as_str).unwrap_or_default();
+        let Some(payload) = canonical_audit_integrity_payload(entry) else {
+            issues.push(format!("{tool}@{timestamp} cannot reconstruct integrity payload."));
+            continue;
+        };
+        if actual_hash != sha256_hex(payload.as_bytes()) {
+            issues.push(format!("{tool}@{timestamp} has mismatched integrity_hash."));
+        }
+        let expected_prev_hash = if index == 0 {
+            None
+        } else {
+            entries[index - 1]
+                .get("integrity_hash")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| entries[index - 1].get("raw_line").and_then(Value::as_str).map(|line| sha256_hex(line.as_bytes())))
+        };
+        if entry.get("prev_hash").and_then(Value::as_str) != expected_prev_hash.as_deref() {
+            issues.push(format!("{tool}@{timestamp} has mismatched prev_hash."));
+        }
+    }
+    let last_hash = entries.iter().rev().find_map(|entry| entry.get("integrity_hash")).cloned().unwrap_or(Value::Null);
+    let verified = issues.is_empty();
+    json!({
+        "status": if !verified { "failed" } else if legacy_entry_count > 0 { "legacy_anchor" } else { "verified" },
+        "verified": verified,
+        "entry_count": entries.len(),
+        "chained_entry_count": chained_entry_count,
+        "legacy_entry_count": legacy_entry_count,
+        "last_hash": last_hash,
+        "issues": issues,
+    })
+}
+
+fn canonical_audit_integrity_payload(entry: &Value) -> Option<String> {
+    let string = |key: &str| serde_json::to_string(entry.get(key)?.as_str()?).ok();
+    let ts = string("ts")?;
+    let tool = string("tool")?;
+    let path = string("path")?;
+    let action = string("action")?;
+    let reason = string("reason")?;
+    let details = entry.get("details").map(serde_json::to_string).transpose().ok().flatten();
+    let prev_hash = entry.get("prev_hash").cloned().unwrap_or(Value::Null);
+    let mut payload = format!("{{\"ts\":{ts},\"tool\":{tool},\"path\":{path},\"action\":{action},\"reason\":{reason}");
+    if let Some(details) = details {
+        payload.push_str(&format!(",\"details\":{details}"));
+    }
+    payload.push_str(&format!(",\"prev_hash\":{prev_hash}}}"));
+    Some(payload)
+}
+
+fn run_rules_command(workspace: Option<String>, config: Option<String>) -> Result<CommandOutcome, CliRuntimeError> {
+    let workspace_path = resolve_workspace_or_cwd(workspace.as_deref())?;
+    let config = if config.is_some() {
+        Some(effective_delivery_config(&workspace_path, config.as_deref())?)
+    } else {
+        load_delivery_config(&workspace_path, None)?
+    };
+    let summaries = ["review", "repair"]
+        .into_iter()
+        .map(|plane| summarize_rule_policy(&workspace_path, config.as_ref(), plane))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CommandOutcome::json(0, Value::Array(summaries)))
+}
+
+fn load_delivery_config(workspace: &Path, config_path: Option<&str>) -> Result<Option<Value>, CliRuntimeError> {
+    let path = match config_path {
+        Some(path) => {
+            let candidate = PathBuf::from(path);
+            if candidate.is_absolute() { candidate } else { workspace.join(candidate) }
+        }
+        None => workspace.join(".hologram/delivery.json"),
+    };
+    match fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map(Some)
+            .map_err(|error| CliRuntimeError::environment(format!("delivery config is not valid JSON {}: {error}", path.display()))),
+        Err(error) if config_path.is_none() && error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(CliRuntimeError::environment(format!("cannot read delivery config {}: {error}", path.display()))),
+    }
+}
+
+fn effective_delivery_config(workspace: &Path, config_path: Option<&str>) -> Result<Value, CliRuntimeError> {
+    let mut defaults = default_delivery_config(workspace);
+    if let Some(config) = load_delivery_config(workspace, config_path)? {
+        merge_json_objects(&mut defaults, config);
+    }
+    if config_path.is_some() {
+        validate_delivery_config(&defaults)?;
+    }
+    Ok(defaults)
+}
+
+fn validate_delivery_config(config: &Value) -> Result<(), CliRuntimeError> {
+    let require_text = |pointer: &str, name: &str| {
+        config.pointer(pointer).and_then(Value::as_str).filter(|value| !value.trim().is_empty()).ok_or_else(|| {
+            CliRuntimeError::environment(format!("delivery config requires {name}."))
+        })
+    };
+    if config.pointer("/version").and_then(Value::as_str) != Some("phase5.v1") {
+        return Err(CliRuntimeError::environment("unsupported delivery config version."));
+    }
+    require_text("/workspace/root", "a workspace root")?;
+    require_text("/provider/name", "provider name")?;
+    require_text("/provider/model", "provider model")?;
+    require_text("/provider/base_url", "provider base URL")?;
+    if config.pointer("/provider/key_source").and_then(Value::as_str) == Some("env") {
+        require_text("/provider/env_var", "provider.env_var when key_source is env")?;
+    }
+    require_text("/audit/jsonl_path", "audit jsonl path")?;
+    require_text("/audit/report_output_path", "audit report output path")?;
+    if config.pointer("/audit/recent_limit").and_then(Value::as_u64).unwrap_or_default() == 0 {
+        return Err(CliRuntimeError::environment("delivery config requires audit.recent_limit > 0."));
+    }
+    if config.pointer("/auth/base_url").and_then(Value::as_str).is_none() {
+        return Err(CliRuntimeError::environment("delivery config requires auth.base_url."));
+    }
+    if config.pointer("/automation/verify_commands").and_then(Value::as_array).is_none_or(Vec::is_empty) {
+        return Err(CliRuntimeError::environment("delivery config requires at least one verification command."));
+    }
+    config.pointer("/automation/fail_on_decision")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliRuntimeError::environment("delivery config requires automation.fail_on_decision."))
+        .and_then(|value| parse_fail_gate(value).map_err(|_| CliRuntimeError::environment("delivery config has an invalid automation.fail_on_decision.")))?;
+    Ok(())
+}
+
+fn merge_json_objects(target: &mut Value, source: Value) {
+    match (target, source) {
+        (Value::Object(target), Value::Object(source)) => {
+            for (key, value) in source {
+                match target.get_mut(&key) {
+                    Some(existing) => merge_json_objects(existing, value),
+                    None => { target.insert(key, value); }
+                }
+            }
+        }
+        (target, source) => *target = source,
+    }
+}
+
+fn summarize_rule_policy(workspace: &Path, config: Option<&Value>, plane: &str) -> Result<Value, CliRuntimeError> {
+    let policy = resolve_rule_policy(workspace, config, plane)?;
+    let rules = policy.get("rules").and_then(Value::as_array).cloned().unwrap_or_default();
+    Ok(json!({
+        "plane": plane,
+        "policy_snapshot_id": policy.get("policy_snapshot_id").cloned().unwrap_or(Value::Null),
+        "package_ids": policy.get("packages").and_then(Value::as_array)
+            .map(|packages| packages.iter().filter_map(|package| package.get("package_id").cloned()).collect::<Vec<_>>())
+            .unwrap_or_default(),
+        "rule_count": rules.len(),
+        "top_rule_ids": rules.iter().take(5).filter_map(|rule| rule.get("rule_id").cloned()).collect::<Vec<_>>(),
+    }))
+}
+
+fn resolve_rule_policy(workspace: &Path, config: Option<&Value>, plane: &str) -> Result<Value, CliRuntimeError> {
+    let mut packages = vec![default_rule_package(plane)];
+    let paths_key = if plane == "review" { "review_paths" } else { "repair_paths" };
+    let disabled_key = if plane == "review" { "disabled_review_rule_ids" } else { "disabled_repair_rule_ids" };
+    let disabled = config
+        .and_then(|value| value.pointer(&format!("/rule_packages/{disabled_key}")))
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    if let Some(paths) = config
+        .and_then(|value| value.pointer(&format!("/rule_packages/{paths_key}")))
+        .and_then(Value::as_array)
+    {
+        for path in paths.iter().filter_map(Value::as_str) {
+            let path = PathBuf::from(path);
+            let path = if path.is_absolute() { path } else { workspace.join(path) };
+            let raw = fs::read_to_string(&path).map_err(|error| {
+                CliRuntimeError::environment(format!("无法读取 {plane} 规则包 {}：{error}", path.display()))
+            })?;
+            let package: Value = serde_json::from_str(&raw).map_err(|error| {
+                CliRuntimeError::environment(format!("{plane} 规则包不是有效 JSON {}：{error}", path.display()))
+            })?;
+            let package_entries = package.as_array().cloned().unwrap_or_else(|| vec![package]);
+            for package in package_entries {
+                if package.get("enabled").and_then(Value::as_bool).unwrap_or(false)
+                    && package.get("plane").and_then(Value::as_str) == Some(plane)
+                {
+                    packages.push(package);
+                }
+            }
+        }
+    }
+    let mut rules = BTreeMap::new();
+    for package in &packages {
+        if let Some(entries) = package.get("rules").and_then(Value::as_array) {
+            for rule in entries {
+                let rule_id = rule.get("rule_id").and_then(Value::as_str).unwrap_or_default();
+                if !rule_id.is_empty()
+                    && rule.get("enabled").and_then(Value::as_bool).unwrap_or(true)
+                    && !disabled.contains(rule_id)
+                {
+                    rules.insert(rule_id.to_string(), rule.clone());
+                }
+            }
+        }
+    }
+    let mut rules = rules.into_values().collect::<Vec<_>>();
+    rules.sort_by(|left, right| {
+        right.get("priority").and_then(Value::as_i64).unwrap_or_default()
+            .cmp(&left.get("priority").and_then(Value::as_i64).unwrap_or_default())
+            .then_with(|| left.get("rule_id").and_then(Value::as_str).cmp(&right.get("rule_id").and_then(Value::as_str)))
+    });
+    let snapshot = format!(
+        "policy:{plane}:{}",
+        packages.iter().map(|package| format!("{}@{}", package.get("package_id").and_then(Value::as_str).unwrap_or("unknown"), package.get("version").and_then(Value::as_str).unwrap_or("unknown"))).collect::<Vec<_>>().join("+")
+    );
+    Ok(json!({
+        "plane": plane,
+        "packages": packages,
+        "rules": rules,
+        "policy_snapshot_id": snapshot,
+    }))
+}
+
+fn default_rule_package(plane: &str) -> Value {
+    let rules = match plane {
+        "review" => vec![
+            ("check.l5", 100, "block"),
+            ("check.l4", 80, "require_approval"),
+            ("check.l3", 60, "warn"),
+            ("check.l2", 40, "warn"),
+        ],
+        _ => vec![
+            ("repair.test.required_command_failed", 110, "block"),
+            ("repair.scope.out_of_scope_write", 100, "block"),
+            ("repair.scope.absolute_path_write", 95, "block"),
+            ("repair.scope.sensitive_path_write", 90, "block"),
+            ("repair.scope.duplicate_file_write", 50, "warn"),
+            ("repair.scope.large_patch_blast_radius", 45, "warn"),
+        ],
+    };
+    json!({
+        "package_id": format!("{plane}.default"),
+        "version": "v1",
+        "plane": plane,
+        "enabled": true,
+        "rules": rules.into_iter().map(|(rule_id, priority, gate_effect)| json!({"rule_id": rule_id, "priority": priority, "gate_effect": gate_effect, "enabled": true})).collect::<Vec<_>>(),
+    })
 }
 
 fn run_repair_plan_command(workspace: &str, finding_id: &str) -> Result<CommandOutcome, CliRuntimeError> {
@@ -2111,101 +2734,6 @@ fn command_exists(command: &str) -> &'static str {
     if passed { "ok" } else { "needs_attention" }
 }
 
-#[derive(Debug, Clone)]
-struct SecondaryArgs {
-    workspace: Option<String>,
-    config: Option<String>,
-    output: Option<String>,
-    fail_on: Option<FailGate>,
-    query: Option<String>,
-    limit: Option<usize>,
-}
-
-fn run_phase5_secondary_command(command: &str, args: SecondaryArgs) -> Result<CommandOutcome, CliRuntimeError> {
-    let script_path = resolve_phase5_script_path()?;
-    let script_cwd = script_path
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .ok_or_else(|| CliRuntimeError::internal(format!("failed to derive script cwd for {}", script_path.display())))?;
-    let cwd = std::env::current_dir()
-        .map_err(|error| CliRuntimeError::environment(format!("failed to determine current directory: {error}")))?;
-    let mut command_args = vec![
-        "--import".to_string(),
-        "tsx".to_string(),
-        script_path.display().to_string(),
-        command.to_string(),
-    ];
-
-    if let Some(workspace) = args.workspace.as_ref() {
-        command_args.push("--workspace".to_string());
-        command_args.push(absolutize_path(&cwd, workspace).display().to_string());
-    }
-    if let Some(config) = args.config.as_ref() {
-        command_args.push("--config".to_string());
-        command_args.push(absolutize_path(&cwd, config).display().to_string());
-    }
-    if let Some(output) = args.output.as_ref() {
-        command_args.push("--output".to_string());
-        command_args.push(absolutize_path(&cwd, output).display().to_string());
-    }
-    if let Some(fail_on) = args.fail_on {
-        command_args.push("--fail-on".to_string());
-        command_args.push(fail_gate_to_str(fail_on).to_string());
-    }
-    if let Some(query) = args.query.as_ref() {
-        command_args.push("--query".to_string());
-        command_args.push(query.clone());
-    }
-    if let Some(limit) = args.limit {
-        command_args.push("--limit".to_string());
-        command_args.push(limit.to_string());
-    }
-
-    if command == "report" {
-        let workspace = args
-            .workspace
-            .clone()
-            .unwrap_or_else(|| ".".to_string());
-        let workspace_path = absolutize_path(&cwd, &workspace);
-        let output_path = args
-            .output
-            .clone()
-            .map(|path| absolutize_path(&cwd, &path))
-            .unwrap_or_else(|| workspace_path.join(DEFAULT_REPORT_OUTPUT_PATH));
-        let report_result = run_process("node", &command_args, Some(&script_cwd))?;
-        if !report_result.status.success() && report_result.status.code() != Some(2) {
-            return Err(CliRuntimeError::internal(trimmed_stderr(&report_result)));
-        }
-        let report_json = fs::read_to_string(&output_path).map_err(|error| {
-            CliRuntimeError::internal(format!("failed to read generated report {}: {error}", output_path.display()))
-        })?;
-        let value = serde_json::from_str::<Value>(&report_json)
-            .map_err(|error| CliRuntimeError::internal(format!("report output is not valid JSON: {error}")))?;
-        return Ok(CommandOutcome::json(report_result.status.code().unwrap_or(1), value));
-    }
-
-    if command == "verify" {
-        let result = run_process("node", &command_args, Some(&script_cwd))?;
-        let status = if result.status.success() { "ok" } else { "error" };
-        let mut output = build_structured_output_envelope("verify", status, args.workspace.as_deref());
-        if let Some(object) = output.as_object_mut() {
-            object.insert("stdout".into(), json!(String::from_utf8_lossy(&result.stdout).trim()));
-            object.insert("stderr".into(), json!(String::from_utf8_lossy(&result.stderr).trim()));
-        }
-        return Ok(CommandOutcome::json(result.status.code().unwrap_or(1), output));
-    }
-
-    let result = run_process("node", &command_args, Some(&script_cwd))?;
-    if !result.status.success() {
-        return Err(CliRuntimeError::internal(trimmed_stderr(&result)));
-    }
-    let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
-    let value = serde_json::from_str::<Value>(&stdout)
-        .map_err(|error| CliRuntimeError::internal(format!("{command} output is not valid JSON: {error}")))?;
-    Ok(CommandOutcome::json(0, value))
-}
-
 fn build_workspace_check_payload(workspace: &Path) -> Result<Value, CliRuntimeError> {
     let before = load_baseline(workspace);
     engine_init(workspace)
@@ -2837,7 +3365,7 @@ fn diff_changed_files(before: &Path, after: &Path) -> Result<Vec<String>, CliRun
     Ok(changed)
 }
 
-fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<(String, String, bool)> {
+fn build_default_init_files(workspace_root: &Path) -> Vec<(String, String, bool)> {
     let config = json!({
         "version": "phase5.v1",
         "workspace": {
@@ -2884,7 +3412,6 @@ fn build_default_init_files(workspace_root: &Path, platform_root: &Path) -> Vec<
     // explicit AUDIT_RISK_BIN). It deliberately does NOT bake in this build
     // machine's path or `cargo run` — a customer installs a binary and has
     // neither the repo nor a Rust toolchain.
-    let _ = platform_root;
     vec![
         (
             ".hologram/delivery.json".to_string(),
@@ -3063,19 +3590,6 @@ fn parse_git_status_changed_files(raw: &str) -> Vec<String> {
         }
     }
     files
-}
-
-fn resolve_phase5_script_path() -> Result<PathBuf, CliRuntimeError> {
-    let repo_root = resolve_platform_root()?;
-    let script = repo_root.join("src-ui/scripts/phase5-delivery.ts");
-    if script.exists() {
-        Ok(script)
-    } else {
-        Err(CliRuntimeError::environment(format!(
-            "phase5 compatibility script not found: {}",
-            script.display()
-        )))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -3358,45 +3872,6 @@ fn send_webhook_test(url: &str, payload: &Value) -> Result<WebhookTestResult, Cl
         ok: output.status.success() && http_status.starts_with('2'),
         http_status,
     })
-}
-
-fn resolve_platform_root() -> Result<PathBuf, CliRuntimeError> {
-    if let Some(path) = std::env::var_os("AUDIT_RISK_PLATFORM_ROOT").or_else(|| std::env::var_os("HOLOGRAM_PLATFORM_ROOT")) {
-        let candidate = PathBuf::from(path);
-        if candidate.join("src-ui/scripts/phase5-delivery.ts").exists() {
-            return Ok(candidate);
-        }
-    }
-
-    let mut candidates = Vec::new();
-    if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir);
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidates.push(parent.to_path_buf());
-        }
-    }
-
-    for candidate in candidates {
-        for ancestor in candidate.ancestors() {
-            let script = ancestor.join("src-ui/scripts/phase5-delivery.ts");
-            if script.exists() {
-                return Ok(ancestor.to_path_buf());
-            }
-            let nested_repo = ancestor.join("repo");
-            if nested_repo
-                .join("src-ui/scripts/phase5-delivery.ts")
-                .exists()
-            {
-                return Ok(nested_repo);
-            }
-        }
-    }
-
-    Err(CliRuntimeError::environment(
-        "failed to locate platform root; set AUDIT_RISK_PLATFORM_ROOT to the repository root.",
-    ))
 }
 
 fn run_process(program: &str, args: &[String], cwd: Option<&Path>) -> Result<std::process::Output, CliRuntimeError> {
@@ -6534,10 +7009,7 @@ mod tests {
 
     #[test]
     fn init_files_render_portable_pre_commit_hook() {
-        let files = build_default_init_files(
-            std::path::Path::new("/tmp/customer-repo"),
-            std::path::Path::new("/opt/audit-risk-platform"),
-        );
+        let files = build_default_init_files(std::path::Path::new("/tmp/customer-repo"));
         let hook = files
             .iter()
             .find(|(path, _, _)| path == ".githooks/pre-commit")
@@ -6555,10 +7027,7 @@ mod tests {
 
     #[test]
     fn init_files_include_gitignore_for_volatile_state() {
-        let files = build_default_init_files(
-            std::path::Path::new("/tmp/customer-repo"),
-            std::path::Path::new("/opt/audit-risk-platform"),
-        );
+        let files = build_default_init_files(std::path::Path::new("/tmp/customer-repo"));
         let gitignore = files
             .iter()
             .find(|(path, _, _)| path == ".hologram/.gitignore")
@@ -6571,10 +7040,7 @@ mod tests {
 
     #[test]
     fn init_files_include_observe_defaults_in_delivery_config() {
-        let files = build_default_init_files(
-            std::path::Path::new("/tmp/customer-repo"),
-            std::path::Path::new("/opt/audit-risk-platform"),
-        );
+        let files = build_default_init_files(std::path::Path::new("/tmp/customer-repo"));
         let config = files
             .iter()
             .find(|(path, _, _)| path == ".hologram/delivery.json")
@@ -6679,44 +7145,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_platform_root_supports_parent_directory_with_repo_child() {
-        let outer_root = std::env::temp_dir().join(format!("audit-risk-platform-root-{}", uuid::Uuid::new_v4()));
-        let repo_root = outer_root.join("repo");
-        std::fs::create_dir_all(repo_root.join("src-ui/scripts")).expect("script dir");
-        std::fs::write(
-            repo_root.join("src-ui/scripts/phase5-delivery.ts"),
-            "console.log('ok');\n",
-        )
-        .expect("marker script");
-
-        let original_cwd = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(&outer_root).expect("set cwd");
-        let resolved = super::resolve_platform_root().expect("platform root");
-        std::env::set_current_dir(&original_cwd).expect("restore cwd");
-
-        let resolved = std::fs::canonicalize(resolved).expect("canonical resolved");
-        let expected = std::fs::canonicalize(repo_root).expect("canonical expected");
-        assert_eq!(resolved, expected);
-
-        let _ = std::fs::remove_dir_all(&outer_root);
-    }
-
-    #[test]
     fn default_workspace_root_resolves_dot_to_current_base_without_redirect() {
         let outer_root = std::env::temp_dir().join(format!("audit-risk-workspace-root-{}", uuid::Uuid::new_v4()));
         let repo_root = outer_root.join("repo");
         std::fs::create_dir_all(repo_root.join("engine")).expect("engine dir");
-        std::fs::create_dir_all(repo_root.join("src-ui/scripts")).expect("script dir");
         std::fs::write(
             repo_root.join("engine/Cargo.toml"),
             "[package]\nname = \"placeholder\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
         )
         .expect("cargo manifest");
-        std::fs::write(
-            repo_root.join("src-ui/scripts/phase5-delivery.ts"),
-            "console.log('ok');\n",
-        )
-        .expect("marker script");
 
         // `.` must resolve to the given base, not auto-redirect into a `repo/` child.
         let resolved = super::resolve_workspace_argument(&outer_root, ".");
