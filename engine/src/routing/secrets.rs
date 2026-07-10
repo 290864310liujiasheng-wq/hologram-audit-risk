@@ -436,6 +436,24 @@ pub fn scan_workspace(project_root: &str) -> Vec<Value> {
         {
             continue;
         }
+        // Skip dependency lockfiles — machine-generated hash blobs whose
+        // high-entropy integrity hashes are pure noise, never real user secrets.
+        let file_name = display.rsplit('/').next().unwrap_or("");
+        if matches!(
+            file_name,
+            "package-lock.json"
+                | "npm-shrinkwrap.json"
+                | "yarn.lock"
+                | "pnpm-lock.yaml"
+                | "Cargo.lock"
+                | "poetry.lock"
+                | "Pipfile.lock"
+                | "composer.lock"
+                | "Gemfile.lock"
+                | "go.sum"
+        ) {
+            continue;
+        }
         // Skip very large files (generated/minified) — real secret/injection
         // sites live in human-sized source; a multi-MB regex scan is waste.
         if entry.metadata().map(|m| m.len() > 1_048_576).unwrap_or(false) {
@@ -535,7 +553,10 @@ fn extract_string_literals(line: &str) -> Vec<String> {
                 j += 1;
             }
             if j > start {
-                results.push(chars[start..j].iter().collect());
+                // `j` can overshoot len when a trailing `\` triggers `j += 2`;
+                // clamp so slicing a Vec<char> never panics out of range.
+                let end = j.min(chars.len());
+                results.push(chars[start..end].iter().collect());
             }
             i = j + 1;
         } else {
@@ -1065,6 +1086,17 @@ mod tests {
         let literals = extract_string_literals(line);
         assert!(literals.iter().any(|l| l.contains("hello")));
         assert!(literals.iter().any(|l| l == "test"));
+    }
+
+    #[test]
+    fn extract_string_literals_trailing_backslash_no_panic() {
+        // A trailing `\` used to push the char index past the end → slice panic.
+        // Multibyte (Chinese) content made it worse. These must not panic.
+        let _ = extract_string_literals("x = \"abc\\");
+        let _ = extract_string_literals("q = '值值值\\");
+        let scanner = SecretScanner::new();
+        let _ = scanner.scan_content("f.py", "密码 = \"值值值\\");
+        let _ = scanner.scan_content("q.py", "sql = \"SELECT * FROM 用户表\\");
     }
 
     #[test]
