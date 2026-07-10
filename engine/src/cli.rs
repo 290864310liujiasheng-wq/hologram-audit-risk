@@ -16,6 +16,7 @@ use walkdir::WalkDir;
 
 use crate::engine::{engine_analyze, engine_init};
 use crate::routing::preflight::{load_baseline, run_full_check, save_baseline};
+use crate::routing::secrets::SecretScanner;
 
 pub const CLI_SCHEMA_VERSION: &str = "audit-risk.cli.v1";
 
@@ -123,6 +124,11 @@ pub enum CliCommand {
         finding_id: String,
     },
     RepairApply {
+        workspace: String,
+        plan_id: String,
+        approve: bool,
+    },
+    RepairApprove {
         workspace: String,
         plan_id: String,
     },
@@ -479,19 +485,33 @@ pub fn parse_cli_command(args: &[String]) -> Result<ParsedCliCommand, UsageError
                     let workspace = required_positional("repair apply", rest2, 0, "<workspace>")?;
                     let plan_id = take_option(rest2, "--plan")?
                         .ok_or_else(|| UsageError::new("`repair apply` 需要 `--plan <plan_id>`。"))?;
+                    let approve = rest2.iter().any(|argument| argument == "--approve");
+                    let output_mode = resolve_output_mode(rest2, DefaultOutputMode::Json);
+                    reject_unknown_flags(rest2, &["--plan", "--approve", "--json"])?;
+                    Ok(ParsedCliCommand {
+                        command: CliCommand::RepairApply { workspace, plan_id, approve },
+                        tier: CommandTier::Secondary,
+                        default_output: output_mode,
+                    })
+                }
+                Some("approve") => {
+                    let rest2 = &rest[1..];
+                    let workspace = required_positional("repair approve", rest2, 0, "<workspace>")?;
+                    let plan_id = take_option(rest2, "--plan")?
+                        .ok_or_else(|| UsageError::new("`repair approve` 需要 `--plan <plan_id>`。"))?;
                     let output_mode = resolve_output_mode(rest2, DefaultOutputMode::Json);
                     reject_unknown_flags(rest2, &["--plan", "--json"])?;
                     Ok(ParsedCliCommand {
-                        command: CliCommand::RepairApply { workspace, plan_id },
+                        command: CliCommand::RepairApprove { workspace, plan_id },
                         tier: CommandTier::Secondary,
                         default_output: output_mode,
                     })
                 }
                 Some(other) => Err(UsageError::new(format!(
-                    "`repair` 不认识 `{other}`。可用命令：audit-risk repair plan <workspace> --finding <id> / repair apply <workspace> --plan <id>"
+                    "`repair` 不认识 `{other}`。可用命令：audit-risk repair plan <workspace> --finding <id> / repair approve <workspace> --plan <id> / repair apply <workspace> --plan <id> [--approve]"
                 ))),
                 None => Err(UsageError::new(
-                    "`repair` 需要一个动作：audit-risk repair plan / repair apply",
+                    "`repair` 需要一个动作：audit-risk repair plan / repair approve / repair apply",
                 )),
             }
         }
@@ -679,8 +699,11 @@ fn execute_command(parsed: ParsedCliCommand) -> Result<CommandOutcome, CliRuntim
         CliCommand::RepairPlan { workspace, finding_id } => {
             run_repair_plan_command(&workspace, &finding_id)
         }
-        CliCommand::RepairApply { workspace, plan_id } => {
-            run_repair_apply_command(&workspace, &plan_id)
+        CliCommand::RepairApply { workspace, plan_id, approve } => {
+            run_repair_apply_command(&workspace, &plan_id, approve)
+        }
+        CliCommand::RepairApprove { workspace, plan_id } => {
+            run_repair_approve_command(&workspace, &plan_id)
         }
     }
 }
@@ -1535,146 +1558,355 @@ fn run_repair_plan_command(workspace: &str, finding_id: &str) -> Result<CommandO
     Ok(CommandOutcome::json(0, output))
 }
 
-fn run_repair_apply_command(workspace: &str, plan_id: &str) -> Result<CommandOutcome, CliRuntimeError> {
+const REPAIR_PREFLIGHT_COMMAND: &str = "git diff --check";
+
+#[derive(Debug, Deserialize)]
+struct RepairPlanDocument {
+    plan_id: String,
+    finding_id: String,
+    expires_at: String,
+    approval_state: String,
+    #[serde(default)]
+    required_tests: Vec<String>,
+    operations: Vec<RepairOperation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepairOperation {
+    file_path: String,
+    start_line: usize,
+    end_line: usize,
+    new_content: String,
+}
+
+struct RepairCandidate {
+    relative_path: String,
+    absolute_path: PathBuf,
+    snapshot: RepairSnapshot,
+    patch_content: String,
+    replacement: String,
+}
+
+struct RepairSnapshot {
+    path: PathBuf,
+    existed: bool,
+    bytes: Vec<u8>,
+}
+
+fn run_repair_approve_command(workspace: &str, plan_id: &str) -> Result<CommandOutcome, CliRuntimeError> {
     let workspace_path = resolve_existing_workspace_path(workspace)?;
-
-    // Load the saved plan.
-    let plan_path = workspace_path.join(format!(".hologram/repair-plans/{plan_id}.json"));
-    let plan: serde_json::Value = fs::read_to_string(&plan_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .ok_or_else(|| {
-            CliRuntimeError::environment(format!(
-                "找不到修复方案 {plan_id}。方案可能已过期（10 分钟有效）或 plan_id 有误。"
-            ))
-        })?;
-
-    // Check expiry.
-    if let Some(expires_at) = plan.get("expires_at").and_then(|v| v.as_str()) {
-        if is_repair_plan_expired(expires_at) {
-            return Err(CliRuntimeError::environment(format!(
-                "修复方案 {plan_id} 已过期。请重新运行 `audit-risk repair plan` 生成新方案。"
-            )));
-        }
+    let workspace_canonical = workspace_path.canonicalize().map_err(|error| {
+        CliRuntimeError::environment(format!("无法解析工作区路径 {}：{error}", workspace_path.display()))
+    })?;
+    let (_, plan, actor) = approve_repair_plan(&workspace_canonical, plan_id)?;
+    let mut output = build_structured_output_envelope("repair", "ok", Some(&workspace_canonical.display().to_string()));
+    if let Some(object) = output.as_object_mut() {
+        object.insert("approval".into(), json!({
+            "plan_id": plan.plan_id,
+            "approved_by": actor,
+            "approved_at": now_iso(),
+            "state": "approved",
+        }));
     }
+    Ok(CommandOutcome::json(0, output))
+}
 
-    let finding_id = plan.get("finding_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-    let operations = plan.get("operations").and_then(|v| v.as_array()).ok_or_else(|| {
-        CliRuntimeError::internal("修复方案 operations 字段缺失或格式有误。".to_string())
+fn run_repair_apply_command(workspace: &str, plan_id: &str, approve: bool) -> Result<CommandOutcome, CliRuntimeError> {
+    let workspace_path = resolve_existing_workspace_path(workspace)?;
+    let workspace_canonical = workspace_path.canonicalize().map_err(|error| {
+        CliRuntimeError::environment(format!("无法解析工作区路径 {}：{error}", workspace_path.display()))
     })?;
 
-    // Preflight: run required_tests before touching any file.
-    let required_tests: Vec<&str> = plan
-        .get("required_tests")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_else(|| vec!["git diff --check"]);
-
-    let mut preflight_results = Vec::new();
-    for cmd in &required_tests {
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let (prog, args) = parts.split_first().unwrap_or((&"true", &[]));
-        let result = Command::new(prog)
-            .args(args)
-            .current_dir(&workspace_path)
-            .output();
-        let passed = result.as_ref().map(|out| out.status.success()).unwrap_or(false);
-        let stdout = result.as_ref().map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string()).unwrap_or_default();
-        let stderr = result.as_ref().map(|out| String::from_utf8_lossy(&out.stderr).trim().to_string()).unwrap_or_default();
-        preflight_results.push(json!({
-            "command": cmd,
-            "passed": passed,
-            "stdout": stdout,
-            "stderr": stderr,
-        }));
-        if !passed {
-            append_repair_audit_event(&workspace_path, "repair_preflight_failed", plan_id, finding_id,
-                &format!("预检命令失败：{cmd}。修复已阻断。"));
-            let mut output = build_structured_output_envelope("repair", "error", Some(&workspace_path.display().to_string()));
-            if let Some(obj) = output.as_object_mut() {
-                obj.insert("apply".into(), json!({
-                    "plan_id": plan_id,
-                    "preflight": {
-                        "passed": false,
-                        "failed_command": cmd,
-                        "results": preflight_results,
-                    },
-                    "error": format!("预检命令 `{cmd}` 失败，修复已阻断。请先解决上述问题再重试。"),
-                }));
-            }
-            return Ok(CommandOutcome::json(3, output));
-        }
+    if approve {
+        approve_repair_plan(&workspace_canonical, plan_id)?;
     }
 
-    // Apply: write each operation's new_content to the target file.
-    let mut applied_files: Vec<String> = Vec::new();
-    let mut rollback_snapshots: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let (plan_path, plan) = load_repair_plan(&workspace_canonical, plan_id)?;
+    if plan.approval_state != "approved" {
+        return Err(CliRuntimeError::environment(format!(
+            "修复方案 {plan_id} 尚未审批。请先运行 `audit-risk repair approve <workspace> --plan {plan_id}`，或在本次 apply 中显式传入 `--approve`。"
+        )));
+    }
+    if is_repair_plan_expired(&plan.expires_at) {
+        return Err(CliRuntimeError::environment(format!(
+            "修复方案 {plan_id} 已过期。请重新运行 `audit-risk repair plan` 生成新方案。"
+        )));
+    }
+    if plan.operations.is_empty() {
+        return Err(CliRuntimeError::environment("修复方案不包含任何操作，已拒绝执行。".to_string()));
+    }
+    if plan.required_tests != [REPAIR_PREFLIGHT_COMMAND] {
+        append_repair_audit_event(&workspace_canonical, "repair_preflight_rejected", plan_id, &plan.finding_id,
+            "修复方案包含未受信任的预检命令，已拒绝执行。");
+        return Err(CliRuntimeError::environment(
+            "修复方案包含未受信任的 required_tests；CLI 只允许内置 `git diff --check`。".to_string(),
+        ));
+    }
 
-    for op in operations {
-        let rel_path = op.get("file_path").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let abs_path = if std::path::Path::new(rel_path).is_absolute() {
-            std::path::PathBuf::from(rel_path)
-        } else {
-            workspace_path.join(rel_path)
-        };
+    let candidates = build_repair_candidates(&workspace_canonical, &plan.operations)?;
+    secondary_audit_repair_candidates(&candidates)?;
+    let preflight_results = run_repair_preflight(&workspace_canonical, plan_id, &plan.finding_id)?;
 
-        // Snapshot original for rollback.
-        let original_content = fs::read_to_string(&abs_path).unwrap_or_default();
-        rollback_snapshots.push((abs_path.clone(), original_content.clone()));
-
-        let start_line = op.get("start_line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-        let end_line = op.get("end_line").and_then(|v| v.as_u64()).unwrap_or(start_line as u64) as usize;
-        let new_content = op.get("new_content").and_then(|v| v.as_str()).unwrap_or("");
-
-        let mut lines: Vec<String> = original_content.lines().map(str::to_string).collect();
-        let replace_start = start_line.saturating_sub(1);
-        let replace_end = end_line.min(lines.len());
-
-        if replace_start >= lines.len() {
-            // Append if target is past end of file.
-            lines.push(new_content.to_string());
-        } else {
-            lines.splice(replace_start..replace_end, std::iter::once(new_content.to_string()));
-        }
-
-        let new_file_content = lines.join("\n") + if original_content.ends_with('\n') { "\n" } else { "" };
-
-        if let Err(write_err) = fs::write(&abs_path, &new_file_content) {
-            // Write failed — roll back everything written so far.
-            for (rollback_path, rollback_content) in &rollback_snapshots {
-                let _ = fs::write(rollback_path, rollback_content);
+    let mut applied_files = Vec::new();
+    for candidate in &candidates {
+        if let Err(write_error) = fs::write(&candidate.absolute_path, &candidate.replacement) {
+            let rollback_failures = rollback_repair_snapshots(&candidates);
+            if rollback_failures.is_empty() {
+                append_repair_audit_event(&workspace_canonical, "repair_rolled_back", plan_id, &plan.finding_id,
+                    &format!("写入失败，已完成字节级回滚：{write_error}"));
+            } else {
+                append_repair_audit_event(&workspace_canonical, "repair_rollback_failed", plan_id, &plan.finding_id,
+                    &format!("写入失败，回滚不完整：{}", rollback_failures.join("；")));
             }
-            append_repair_audit_event(&workspace_path, "repair_rolled_back", plan_id, finding_id,
-                &format!("写入失败，已回滚：{write_err}"));
             return Err(CliRuntimeError::internal(format!(
-                "写入 {} 失败，所有已修改文件已回滚：{write_err}",
-                abs_path.display()
+                "写入 {} 失败：{write_error}。{}",
+                candidate.absolute_path.display(),
+                if rollback_failures.is_empty() { "已完成回滚".to_string() } else { format!("回滚失败：{}", rollback_failures.join("；")) },
             )));
         }
-
-        applied_files.push(normalize_path(rel_path));
+        applied_files.push(candidate.relative_path.clone());
     }
 
-    // Clean up plan file (it's been applied).
-    let _ = fs::remove_file(&plan_path);
-
-    append_repair_audit_event(&workspace_path, "repair_applied", plan_id, finding_id,
+    fs::remove_file(&plan_path).map_err(|error| {
+        CliRuntimeError::internal(format!("修复已写入但无法移除已应用方案：{error}"))
+    })?;
+    append_repair_audit_event(&workspace_canonical, "repair_applied", plan_id, &plan.finding_id,
         &format!("修复已成功应用，涉及文件：{}", applied_files.join(", ")));
 
-    let mut output = build_structured_output_envelope("repair", "ok", Some(&workspace_path.display().to_string()));
-    if let Some(obj) = output.as_object_mut() {
-        obj.insert("apply".into(), json!({
+    let mut output = build_structured_output_envelope("repair", "ok", Some(&workspace_canonical.display().to_string()));
+    if let Some(object) = output.as_object_mut() {
+        object.insert("apply".into(), json!({
             "plan_id": plan_id,
             "applied_files": applied_files,
-            "preflight": {
-                "passed": true,
-                "commands_run": required_tests,
-                "results": preflight_results,
-            },
+            "preflight": { "passed": true, "commands_run": [REPAIR_PREFLIGHT_COMMAND], "results": preflight_results },
             "audit_ref": DEFAULT_AUDIT_JSONL_PATH,
         }));
     }
     Ok(CommandOutcome::json(0, output))
+}
+
+fn approve_repair_plan(workspace: &Path, plan_id: &str) -> Result<(PathBuf, RepairPlanDocument, String), CliRuntimeError> {
+    let plan_path = repair_plan_path(workspace, plan_id)?;
+    let raw = fs::read_to_string(&plan_path)
+        .map_err(|error| CliRuntimeError::environment(format!("无法读取修复方案 {plan_id}：{error}")))?;
+    let mut value: Value = serde_json::from_str(&raw)
+        .map_err(|error| CliRuntimeError::environment(format!("修复方案 {plan_id} 不是有效 JSON：{error}")))?;
+    let plan: RepairPlanDocument = serde_json::from_value(value.clone())
+        .map_err(|error| CliRuntimeError::environment(format!("修复方案 {plan_id} 字段不完整：{error}")))?;
+    validate_repair_plan(&plan, plan_id)?;
+    if plan.approval_state != "waiting_approval" {
+        return Err(CliRuntimeError::environment(format!("修复方案 {plan_id} 当前状态为 `{}`，不能再次审批。", plan.approval_state)));
+    }
+    let actor = local_repair_approver();
+    let approved_at = now_iso();
+    let object = value.as_object_mut().ok_or_else(|| CliRuntimeError::environment("修复方案必须是 JSON 对象。".to_string()))?;
+    object.insert("approval_state".to_string(), Value::String("approved".to_string()));
+    object.insert("approved_at".to_string(), Value::String(approved_at.clone()));
+    object.insert("approved_by".to_string(), Value::String(actor.clone()));
+    fs::write(&plan_path, serde_json::to_vec_pretty(&value).expect("serialize approved repair plan"))
+        .map_err(|error| CliRuntimeError::environment(format!("无法写入审批后的修复方案：{error}")))?;
+    append_repair_approval_event(workspace, plan_id, &plan.finding_id, &actor, &approved_at);
+    let approved_plan: RepairPlanDocument = serde_json::from_value(value)
+        .map_err(|error| CliRuntimeError::internal(format!("审批后的修复方案无效：{error}")))?;
+    Ok((plan_path, approved_plan, actor))
+}
+
+fn load_repair_plan(workspace: &Path, plan_id: &str) -> Result<(PathBuf, RepairPlanDocument), CliRuntimeError> {
+    let plan_path = repair_plan_path(workspace, plan_id)?;
+    let raw = fs::read_to_string(&plan_path)
+        .map_err(|error| CliRuntimeError::environment(format!("无法读取修复方案 {plan_id}：{error}")))?;
+    let plan: RepairPlanDocument = serde_json::from_str(&raw)
+        .map_err(|error| CliRuntimeError::environment(format!("修复方案 {plan_id} 不是有效 JSON：{error}")))?;
+    validate_repair_plan(&plan, plan_id)?;
+    Ok((plan_path, plan))
+}
+
+fn validate_repair_plan(plan: &RepairPlanDocument, requested_plan_id: &str) -> Result<(), CliRuntimeError> {
+    validate_repair_plan_id(requested_plan_id)?;
+    if plan.plan_id != requested_plan_id {
+        return Err(CliRuntimeError::environment("修复方案文件的 plan_id 与请求不一致，已拒绝执行。".to_string()));
+    }
+    if plan.expires_at.trim().is_empty() || is_repair_plan_expired(&plan.expires_at) {
+        return Err(CliRuntimeError::environment("修复方案已过期或 expires_at 无效，已拒绝执行。".to_string()));
+    }
+    Ok(())
+}
+
+fn repair_plan_path(workspace: &Path, plan_id: &str) -> Result<PathBuf, CliRuntimeError> {
+    validate_repair_plan_id(plan_id)?;
+    let path = workspace.join(".hologram/repair-plans").join(format!("{plan_id}.json"));
+    let canonical = path.canonicalize()
+        .map_err(|_| CliRuntimeError::environment(format!("找不到修复方案 {plan_id}。")))?;
+    if !canonical.starts_with(workspace) {
+        return Err(CliRuntimeError::environment("修复方案路径越出工作区，已拒绝执行。".to_string()));
+    }
+    Ok(canonical)
+}
+
+fn validate_repair_plan_id(plan_id: &str) -> Result<(), CliRuntimeError> {
+    let valid = !plan_id.is_empty()
+        && !plan_id.contains("..")
+        && plan_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(CliRuntimeError::environment("plan_id 只允许字母、数字、`_`、`-`、`.`，且不能包含 `..` 或路径分隔符。".to_string()))
+    }
+}
+
+fn build_repair_candidates(workspace: &Path, operations: &[RepairOperation]) -> Result<Vec<RepairCandidate>, CliRuntimeError> {
+    let mut candidates = Vec::with_capacity(operations.len());
+    let mut seen_paths = BTreeSet::new();
+    for operation in operations {
+        if operation.start_line == 0 || operation.end_line < operation.start_line {
+            return Err(CliRuntimeError::environment("修复方案包含无效的行范围，已拒绝执行。".to_string()));
+        }
+        let (relative_path, absolute_path) = resolve_repair_target_path(workspace, &operation.file_path)?;
+        if !seen_paths.insert(relative_path.clone()) {
+            return Err(CliRuntimeError::environment(format!("修复方案重复修改 `{relative_path}`，已拒绝执行。")));
+        }
+        let existed = absolute_path.exists();
+        let bytes = if existed {
+            fs::read(&absolute_path).map_err(|error| {
+                CliRuntimeError::environment(format!("无法读取修复目标 {relative_path}：{error}"))
+            })?
+        } else {
+            Vec::new()
+        };
+        let original_content = String::from_utf8(bytes.clone()).map_err(|_| {
+            CliRuntimeError::environment(format!("修复目标 {relative_path} 不是 UTF-8 文本，已拒绝修改以保护二进制内容。"))
+        })?;
+        let replacement = replace_repair_lines(&original_content, operation);
+        candidates.push(RepairCandidate {
+            relative_path,
+            absolute_path: absolute_path.clone(),
+            snapshot: RepairSnapshot { path: absolute_path, existed, bytes },
+            patch_content: operation.new_content.clone(),
+            replacement,
+        });
+    }
+    Ok(candidates)
+}
+
+fn resolve_repair_target_path(workspace: &Path, file_path: &str) -> Result<(String, PathBuf), CliRuntimeError> {
+    let relative = Path::new(file_path);
+    if relative.as_os_str().is_empty() || relative.is_absolute() || is_sensitive_repair_path(relative) {
+        return Err(CliRuntimeError::environment(format!("修复目标 `{file_path}` 不允许写入，已拒绝执行。")));
+    }
+    let mut raw_path = workspace.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                raw_path.push(part);
+                if fs::symlink_metadata(&raw_path).map(|meta| meta.file_type().is_symlink()).unwrap_or(false) {
+                    return Err(CliRuntimeError::environment(format!("修复目标 `{file_path}` 包含符号链接，已拒绝执行。")));
+                }
+            }
+            _ => return Err(CliRuntimeError::environment(format!("修复目标 `{file_path}` 只能是工作区内的普通相对路径。"))),
+        }
+    }
+    if raw_path.is_dir() {
+        return Err(CliRuntimeError::environment(format!("修复目标 `{file_path}` 是目录，已拒绝执行。")));
+    }
+    let resolved = if raw_path.exists() {
+        raw_path.canonicalize()
+    } else {
+        let parent = raw_path.parent().ok_or_else(|| CliRuntimeError::environment("修复目标缺少父目录。".to_string()))?;
+        parent.canonicalize().map(|canonical_parent| {
+            canonical_parent.join(raw_path.file_name().expect("repair target has file name"))
+        })
+    }
+    .map_err(|error| CliRuntimeError::environment(format!("无法规范化修复目标 `{file_path}`：{error}")))?;
+    if !resolved.starts_with(workspace) {
+        return Err(CliRuntimeError::environment(format!("修复目标 `{file_path}` 越出工作区，已拒绝执行。")));
+    }
+    Ok((normalize_path(file_path), resolved))
+}
+
+fn is_sensitive_repair_path(path: &Path) -> bool {
+    let components: Vec<String> = path.components().filter_map(|component| match component {
+        std::path::Component::Normal(value) => value.to_str().map(str::to_string),
+        _ => None,
+    }).collect();
+    let file_name = components.last().map(String::as_str).unwrap_or_default();
+    components.iter().any(|component| component == ".git")
+        || file_name.starts_with(".env")
+        || matches!(file_name, "Cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock")
+        || matches!(Path::new(file_name).extension().and_then(|value| value.to_str()), Some("key" | "pem" | "p12" | "pfx"))
+}
+
+fn replace_repair_lines(original: &str, operation: &RepairOperation) -> String {
+    let mut lines: Vec<String> = original.lines().map(str::to_string).collect();
+    let replace_start = operation.start_line - 1;
+    let replace_end = operation.end_line.min(lines.len());
+    if replace_start >= lines.len() {
+        lines.push(operation.new_content.clone());
+    } else {
+        lines.splice(replace_start..replace_end, std::iter::once(operation.new_content.clone()));
+    }
+    lines.join("\n") + if original.ends_with('\n') { "\n" } else { "" }
+}
+
+fn secondary_audit_repair_candidates(candidates: &[RepairCandidate]) -> Result<(), CliRuntimeError> {
+    let scanner = SecretScanner::new();
+    let mut findings = Vec::new();
+    for candidate in candidates {
+        for finding in scanner.scan_content(&candidate.relative_path, &candidate.patch_content) {
+            findings.push(format!("{}:{}", finding.file_path, finding.line));
+        }
+    }
+    if findings.is_empty() {
+        Ok(())
+    } else {
+        Err(CliRuntimeError::environment(format!(
+            "二次审计发现补丁引入风险（{}），已阻断 apply。",
+            findings.join(", ")
+        )))
+    }
+}
+
+fn run_repair_preflight(workspace: &Path, plan_id: &str, finding_id: &str) -> Result<Vec<Value>, CliRuntimeError> {
+    let output = Command::new("git")
+        .args(["diff", "--check"])
+        .current_dir(workspace)
+        .output()
+        .map_err(|error| CliRuntimeError::environment(format!("无法运行内置预检：{error}")))?;
+    let result = json!({
+        "command": REPAIR_PREFLIGHT_COMMAND,
+        "passed": output.status.success(),
+        "stdout": String::from_utf8_lossy(&output.stdout).trim(),
+        "stderr": String::from_utf8_lossy(&output.stderr).trim(),
+    });
+    if output.status.success() {
+        Ok(vec![result])
+    } else {
+        append_repair_audit_event(workspace, "repair_preflight_failed", plan_id, finding_id, "内置预检 git diff --check 失败，修复已阻断。");
+        Err(CliRuntimeError::environment("内置预检 `git diff --check` 失败，修复已阻断。".to_string()))
+    }
+}
+
+fn rollback_repair_snapshots(candidates: &[RepairCandidate]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for candidate in candidates.iter().rev() {
+        let result = if candidate.snapshot.existed {
+            fs::write(&candidate.snapshot.path, &candidate.snapshot.bytes)
+        } else if candidate.snapshot.path.exists() {
+            fs::remove_file(&candidate.snapshot.path)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = result {
+            failures.push(format!("{}: {error}", candidate.relative_path));
+        }
+    }
+    failures
+}
+
+fn local_repair_approver() -> String {
+    match std::env::var("USER").or_else(|_| std::env::var("USERNAME")) {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => "unknown-local-user".to_string(),
+    }
 }
 
 /// Call the provider model with a plain HTTP POST and return the parsed proposal JSON.
@@ -1788,6 +2020,31 @@ fn append_repair_audit_event(workspace: &Path, event_type: &str, plan_id: &str, 
     }
 }
 
+fn append_repair_approval_event(
+    workspace: &Path,
+    plan_id: &str,
+    finding_id: &str,
+    approved_by: &str,
+    approved_at: &str,
+) {
+    let audit_path = workspace.join(DEFAULT_AUDIT_JSONL_PATH);
+    if let Some(parent) = audit_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let event = json!({
+        "event_type": "repair_approved",
+        "plane": "repair",
+        "subject_ref": plan_id,
+        "finding_id": finding_id,
+        "approved_by": approved_by,
+        "approved_at": approved_at,
+        "timestamp": now_iso(),
+    });
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&audit_path) {
+        let _ = writeln!(file, "{}", serde_json::to_string(&event).unwrap_or_default());
+    }
+}
+
 /// Generate a short deterministic-ish id from a seed string (no randomness needed for plan IDs).
 fn pseudo_id(seed: &str) -> String {
     // Use a simple djb2-style hash to produce a short hex string.
@@ -1808,8 +2065,8 @@ fn repair_plan_expiry_iso() -> String {
 /// Return true if the plan's expires_at timestamp is in the past.
 fn is_repair_plan_expired(expires_at: &str) -> bool {
     chrono::DateTime::parse_from_rfc3339(expires_at)
-        .map(|exp| exp < chrono::Utc::now())
-        .unwrap_or(false)
+        .map(|exp| exp <= chrono::Utc::now())
+        .unwrap_or(true)
 }
 
 fn run_observe_command(workspace: Option<&str>) -> Result<CommandOutcome, CliRuntimeError> {
@@ -6627,12 +6884,70 @@ mod tests {
         assert!(
             matches!(
                 &parsed.command,
-                CliCommand::RepairApply { workspace, plan_id }
-                    if workspace == "/tmp/repo" && plan_id == "rp_abc123def456"
+                CliCommand::RepairApply { workspace, plan_id, approve }
+                    if workspace == "/tmp/repo" && plan_id == "rp_abc123def456" && !approve
             ),
             "unexpected command: {:?}",
             parsed.command
         );
+
+        let approved = parse_cli_command(&args(&[
+            "repair", "apply", "/tmp/repo", "--plan", "rp_abc123def456", "--approve",
+        ]))
+        .expect("repair apply --approve should parse");
+        assert!(matches!(approved.command, CliCommand::RepairApply { approve: true, .. }));
+
+        let approve = parse_cli_command(&args(&[
+            "repair", "approve", "/tmp/repo", "--plan", "rp_abc123def456",
+        ]))
+        .expect("repair approve should parse");
+        assert!(matches!(approve.command, CliCommand::RepairApprove { .. }));
+    }
+
+    #[test]
+    fn rollback_repair_snapshots_restores_binary_bytes_and_removes_created_file() {
+        let root = std::env::temp_dir().join(format!("audit-risk-repair-rollback-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("rollback root");
+        let binary_path = root.join("bytes.bin");
+        let created_path = root.join("created.rs");
+        let original_bytes = vec![0_u8, 255, 10, 128, 65];
+        std::fs::write(&binary_path, &original_bytes).expect("binary fixture");
+        std::fs::write(&binary_path, b"changed bytes").expect("mutate binary");
+        std::fs::write(&created_path, b"created").expect("created fixture");
+
+        let candidates = vec![
+            super::RepairCandidate {
+                relative_path: "bytes.bin".to_string(),
+                absolute_path: binary_path.clone(),
+                snapshot: super::RepairSnapshot {
+                    path: binary_path.clone(),
+                    existed: true,
+                    bytes: original_bytes.clone(),
+                },
+                patch_content: "changed bytes".to_string(),
+                replacement: "changed bytes".to_string(),
+            },
+            super::RepairCandidate {
+                relative_path: "created.rs".to_string(),
+                absolute_path: created_path.clone(),
+                snapshot: super::RepairSnapshot {
+                    path: created_path.clone(),
+                    existed: false,
+                    bytes: Vec::new(),
+                },
+                patch_content: "created".to_string(),
+                replacement: "created".to_string(),
+            },
+        ];
+
+        let failures = super::rollback_repair_snapshots(&candidates);
+        let binary_after = std::fs::read(&binary_path).expect("binary after rollback");
+        let created_exists = created_path.exists();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(failures.is_empty(), "rollback failures: {failures:?}");
+        assert_eq!(binary_after, original_bytes);
+        assert!(!created_exists, "rollback must delete files that did not exist before apply");
     }
 
     #[test]

@@ -607,6 +607,10 @@ interface RepairPlan {
 要求：
 
 - 没有 `approved` 不得 apply。
+- CLI 审批必须显式执行 `audit-risk repair approve <workspace> --plan <id>`；它将 `waiting_approval` 转为 `approved`，并在 apply 前写入独立 `repair_approved` 审计记录，至少包含 plan、审批时间和本地 CLI 操作者声明。`repair apply --approve` 是自动化单步入口，但必须先写同一审批审计记录再 apply。
+- CLI apply 必须清洗 `plan_id`（仅 `[A-Za-z0-9_.-]`，且拒绝 `..` 与路径分隔符），拒绝绝对路径、父目录穿越、符号链接、`.git/`、`.env*`、锁文件和密钥容器路径；规范化后的写入目标必须仍在工作区内。
+- apply 在任何写入前必须对每个 `new_content` 执行二次风险扫描；命中新风险时不得写入任何文件。
+- 回滚快照必须记录目标是否原本存在和原始字节；失败时删除本次新建文件、按字节恢复原文件，并且只有全部恢复成功才能记录 `repair_rolled_back`，否则必须记录回滚失败。
 - apply 前必须重跑相关规则和测试。
 - apply 后必须写审计事件；失败时必须保留失败原因和回滚建议。
 - 若当前 findings 只落在 config / migration / serialization 等非代码高风险文件上，repair plan 仍必须派生至少一条最小验证命令；当前默认使用 `git diff --check` 作为 apply 前基础 gate，而语义风险是否真正消除仍由 rule re-check 证明。
@@ -633,7 +637,7 @@ interface RepairPreflightReport {
 
 - apply-time preflight 是 owner 层语义，不能散落在 UI 按钮文案或 provider prompt 中。
 - patch proposal 至少要经过 repair rule package 的静态 scope 校验：命中文件范围、绝对路径、敏感路径、重复写、波及面。
-- `required_tests` 必须逐条执行并记录结果；任一失败都必须转成结构化 finding 并阻断 apply。
+- CLI 不得执行 repair plan 提供的任意 `required_tests` 命令。当前 CLI 仅允许内置的固定 argv 预检 `git diff --check` 并记录结果；其他计划内命令必须拒绝，不能降级为 shell 或 `Command::new` 调用。
 - 当 repair plan 覆盖的是 config / migration / serialization 等非代码高风险文件时，preflight 仍必须具备最小测试 gate；当前默认命令为 `git diff --check`。
 - 预检报告必须可写入 audit，供后续追溯 apply 当时的 gate 决策与验证输出。
 - preflight 失败必须保留原 proposal 上下文，并把 `gate_reason`、`blocking_rule_ids`、`failed_commands` 暴露给当前 review 读模型。
