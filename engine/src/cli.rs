@@ -4878,7 +4878,7 @@ fn maybe_resolve_payment_pending(
     }
 
     let base_url = base_url.trim_end_matches('/');
-    let max_attempts = if base_url.starts_with("mock://payment-timeout") { 1 } else { 6 };
+    let max_attempts = payment_query_attempts(base_url);
     for _attempt in 0..max_attempts {
         let query_result: AuthEntitlementEnvelope = auth_http_json_typed(
             "GET",
@@ -4896,7 +4896,18 @@ fn maybe_resolve_payment_pending(
     ))
 }
 
+fn payment_query_attempts(_base_url: &str) -> usize {
+    #[cfg(test)]
+    if _base_url.starts_with("mock://payment-timeout") {
+        return 1;
+    }
+
+    6
+}
+
 fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value, CliRuntimeError> {
+    #[cfg(test)]
+    {
     if url.starts_with("mock://network-unreachable/") {
         return Err(CliRuntimeError::environment(
             AuthServiceDiagnostic {
@@ -5033,6 +5044,7 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
             },
             "signature": "VjxBSBheTBNcn1KZgll4HmsYyxDfyt+tmzLPwKptBI7bPear/mE5/o2yAf+d2TCANe3HUPHvxtLoOR7cZCgzDw=="
         }));
+    }
     }
 
     let mut args = vec![
