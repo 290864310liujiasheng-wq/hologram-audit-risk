@@ -59,14 +59,17 @@ pub struct SecretScanner {
     known_prefixes: Vec<(&'static str, Regex)>,
     /// Matches: variable_name = "some_value" or variable_name: "some_value"
     assignment_pattern: Regex,
-    /// Sensitive variable name keywords
-    sensitive_var_names: Regex,
     /// SQL keyword + string-building patterns (f-string/template literal
     /// interpolation, or `+` concatenation) instead of a parameterized
     /// placeholder passed separately to the DB driver.
     sql_injection_patterns: Vec<Regex>,
     /// Dangerous dynamic execution: (display label, regex)
     dangerous_execution_patterns: Vec<(&'static str, Regex)>,
+    /// Namespace aliases bound to Node's `child_process` module.
+    child_process_alias_patterns: Vec<Regex>,
+    /// Receiver and direct-require forms of child-process exec calls.
+    child_process_method_pattern: Regex,
+    child_process_require_exec_pattern: Regex,
     /// Overly permissive IAM/policy statement patterns: (display label, regex)
     permissive_iam_patterns: Vec<(&'static str, Regex)>,
 }
@@ -111,44 +114,52 @@ impl SecretScanner {
         ];
 
         let assignment_pattern = Regex::new(
-            r#"(?i)(api_?key|api_?secret|app_?secret|auth_?token|access_?token|secret_?key|private_?key|client_?secret|db_?pass(word)?|database_?pass(word)?|password|passwd|credentials?|auth_?key)\s*[=:]\s*["'][^"']{8,}["']"#,
-        ).unwrap();
+            r#"(?i)(?P<name>api_?key|api_?secret|app_?secret|auth_?token|access_?token|secret_?key|private_?key|client_?secret|db_?pass(?:word)?|database_?pass(?:word)?|password|passwd|credentials?|auth_?key)\s*[=:]\s*(?:"(?P<double>[^"\r\n]{8,})"|'(?P<single>[^'\r\n]{8,})')"#,
+        )
+        .unwrap();
 
-        let sensitive_var_names = Regex::new(
-            r#"(?i)(api_?key|api_?secret|app_?secret|auth_?token|access_?token|secret_?key|private_?key|client_?secret|db_?pass|database_?pass|password|passwd|credentials?)"#,
-        ).unwrap();
-
-        let sql_keyword = r"(?i)\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b";
+        let sql_statement_for = |span: &str| {
+            format!(
+                r"(?i)\b(?:SELECT\b{span}{{0,200}}\bFROM\b|INSERT\b{span}{{0,100}}\bINTO\b|UPDATE\b{span}{{0,100}}\bSET\b|DELETE\b{span}{{0,100}}\bFROM\b|DROP\b{span}{{0,50}}\b(?:TABLE|DATABASE|INDEX)\b|ALTER\b{span}{{0,50}}\b(?:TABLE|DATABASE|INDEX)\b)"
+            )
+        };
+        let sql_double_statement = sql_statement_for(r#"[^"\n]"#);
+        let sql_single_statement = sql_statement_for(r"[^'\n]");
+        let sql_backtick_statement = sql_statement_for(r"[^`\n]");
         let sql_injection_patterns = vec![
             // Python f-string / JS template literal: SQL keyword appears
             // before a `{...}`/`${...}` interpolation, inside the same
             // quoted/backtick span.
-            Regex::new(&format!(r#"f["'][^"'\n]*{sql_keyword}[^"'\n]*\{{[^}}]+\}}[^"'\n]*["']"#)).unwrap(),
-            Regex::new(&format!(r#"`[^`\n]*{sql_keyword}[^`\n]*\$\{{[^}}]+\}}[^`\n]*`"#)).unwrap(),
+            Regex::new(&format!(r#"f"[^"\n]*{sql_double_statement}[^"\n]*\{{[^}}]+\}}[^"\n]*""#)).unwrap(),
+            Regex::new(&format!(r"f'[^'\n]*{sql_single_statement}[^'\n]*\{{[^}}]+\}}[^'\n]*'")).unwrap(),
+            Regex::new(&format!(r#"`[^`\n]*{sql_backtick_statement}[^`\n]*\$\{{[^}}]+\}}[^`\n]*`"#)).unwrap(),
             // String concatenation: a quoted string containing a SQL keyword,
             // joined with `+` and an identifier (either order). Split by quote
             // char so a SQL string that itself contains the *other* quote
             // (e.g. "... WHERE name = '" + userName) still matches — a single
             // `[^"'\n]` class would stop at the inner quote and miss it.
-            Regex::new(&format!(r#""[^"\n]*{sql_keyword}[^"\n]*"\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
-            Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
-            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*"[^"\n]*{sql_keyword}[^"\n]*""#)).unwrap(),
-            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*'[^'\n]*{sql_keyword}[^'\n]*'"#)).unwrap(),
+            Regex::new(&format!(r#""[^"\n]*{sql_double_statement}[^"\n]*"\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
+            Regex::new(&format!(r#"'[^'\n]*{sql_single_statement}[^'\n]*'\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
+            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*"[^"\n]*{sql_double_statement}[^"\n]*""#)).unwrap(),
+            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*'[^'\n]*{sql_single_statement}[^'\n]*'"#)).unwrap(),
             // Python `%` string formatting: a quoted string containing a SQL
             // keyword, then the `%` operator and a variable/tuple —
             // `"... SELECT ..." % user`. The parameterized form
             // `execute("... %s", (user,))` has a `,` (not `%`) after the closing
             // quote, so it does NOT match — `%s` lives *inside* the string.
-            Regex::new(&format!(r#""[^"\n]*{sql_keyword}[^"\n]*"\s*%\s*[A-Za-z_(]"#)).unwrap(),
-            Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*%\s*[A-Za-z_(]"#)).unwrap(),
+            Regex::new(&format!(r#""[^"\n]*{sql_double_statement}[^"\n]*"\s*%\s*[A-Za-z_(]"#)).unwrap(),
+            Regex::new(&format!(r#"'[^'\n]*{sql_single_statement}[^'\n]*'\s*%\s*[A-Za-z_(]"#)).unwrap(),
             // str.format(): a quoted string containing a SQL keyword, then
             // `.format(` — `"... SELECT ...".format(user)`.
-            Regex::new(&format!(r#""[^"\n]*{sql_keyword}[^"\n]*"\s*\.\s*format\s*\("#)).unwrap(),
-            Regex::new(&format!(r#"'[^'\n]*{sql_keyword}[^'\n]*'\s*\.\s*format\s*\("#)).unwrap(),
+            Regex::new(&format!(r#""[^"\n]*{sql_double_statement}[^"\n]*"\s*\.\s*format\s*\("#)).unwrap(),
+            Regex::new(&format!(r#"'[^'\n]*{sql_single_statement}[^'\n]*'\s*\.\s*format\s*\("#)).unwrap(),
         ];
 
         let dangerous_execution_patterns = vec![
-            ("eval()", Regex::new(r"\beval\s*\(").unwrap()),
+            // Bare eval(...) only. Method calls such as model.eval() are
+            // ordinary API calls, not dynamic code evaluation. Rust's regex
+            // engine has no lookbehind, so require a non-dot/non-word prefix.
+            ("eval()", Regex::new(r"(^|[^.\w])eval\s*\(").unwrap()),
             // Bare Python-style exec(...) — NOT preceded by a `.`, so this
             // does not double-match a method call like `child_process.exec(`.
             // The regex crate has no lookbehind, so instead of "not preceded
@@ -157,9 +168,6 @@ impl SecretScanner {
             ("exec()", Regex::new(r"(^|[^.\w])exec\s*\(").unwrap()),
             ("os.system()", Regex::new(r"\bos\.system\s*\(").unwrap()),
             ("shell=True", Regex::new(r"\bshell\s*=\s*True\b").unwrap()),
-            // JS-style method call: `.exec(` or `.execSync(`, always preceded
-            // by a dot — mutually exclusive with the bare exec() pattern above.
-            ("child_process.exec()", Regex::new(r"\.exec(Sync)?\s*\(").unwrap()),
             // Bare `execSync(` / `spawnSync(` from a destructured import
             // (`import { execSync } from 'child_process'`) — no leading dot, so
             // the dotted pattern above misses it.
@@ -167,6 +175,25 @@ impl SecretScanner {
             ("new Function() from string", Regex::new(r"\bnew\s+Function\s*\(").unwrap()),
             ("__import__()", Regex::new(r"__import__\s*\(").unwrap()),
         ];
+
+        let child_process_alias_patterns = vec![
+            Regex::new(
+                r#"\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"]child_process['"]\s*\)"#,
+            )
+            .unwrap(),
+            Regex::new(
+                r#"\bimport\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"]child_process['"]"#,
+            )
+            .unwrap(),
+        ];
+        let child_process_method_pattern = Regex::new(
+            r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*exec(?:Sync)?\s*\(",
+        )
+        .unwrap();
+        let child_process_require_exec_pattern = Regex::new(
+            r#"\brequire\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*exec(?:Sync)?\s*\("#,
+        )
+        .unwrap();
 
         let permissive_iam_patterns = vec![
             (
@@ -182,9 +209,11 @@ impl SecretScanner {
         Self {
             known_prefixes,
             assignment_pattern,
-            sensitive_var_names,
             sql_injection_patterns,
             dangerous_execution_patterns,
+            child_process_alias_patterns,
+            child_process_method_pattern,
+            child_process_require_exec_pattern,
             permissive_iam_patterns,
         }
     }
@@ -193,18 +222,23 @@ impl SecretScanner {
     /// Returns all findings in line order.
     pub fn scan_content(&self, file_path: &str, content: &str) -> Vec<SecretFinding> {
         let mut findings = Vec::new();
+        let mut child_process_aliases = vec!["child_process".to_string()];
+        for source_line in content.lines().filter(|line| !is_comment_only(line)) {
+            for pattern in &self.child_process_alias_patterns {
+                if let Some(alias) = pattern
+                    .captures(source_line)
+                    .and_then(|captures| captures.get(1))
+                {
+                    child_process_aliases.push(alias.as_str().to_string());
+                }
+            }
+        }
 
         for (line_number, line) in content.lines().enumerate() {
             let line_number = line_number + 1; // 1-based
 
             // Skip comment-only lines (best effort — handles // # and SQL --)
-            let trimmed = line.trim();
-            if trimmed.starts_with("//")
-                || trimmed.starts_with('#')
-                || trimmed.starts_with("-- ")  // SQL comment: must have space after --
-                || trimmed == "--"              // bare SQL comment
-                || trimmed.starts_with('*')
-            {
+            if is_comment_only(line) {
                 continue;
             }
 
@@ -232,6 +266,9 @@ impl SecretScanner {
 
             // Layer 2: high-entropy strings
             for candidate in extract_string_literals(line) {
+                if is_known_public_hash_context(line, &candidate) {
+                    continue;
+                }
                 if candidate.len() >= 20
                     && looks_like_key_charset(&candidate)
                     && shannon_entropy(&candidate) > 4.5
@@ -253,31 +290,31 @@ impl SecretScanner {
             }
 
             // Layer 3: hardcoded assignment patterns
-            if self.assignment_pattern.is_match(line) {
-                let already_flagged = findings.iter().any(|f| f.line == line_number);
-                // Skip obvious placeholders (`changeme`, `<YOUR_KEY_HERE>`, …).
-                // Flagging these is the classic false alarm that trains users
-                // to ignore the tool — the exact failure this scanner exists to
-                // avoid. Real secrets with a known shape are still caught by
-                // Layer 1/2, which run before this and don't consult the denylist.
-                let value_is_placeholder = extract_string_literals(line)
-                    .iter()
-                    .filter(|v| v.len() >= 8)
-                    .any(|v| looks_like_placeholder(v));
-                if !already_flagged && !value_is_placeholder {
-                    let var_match = self
-                        .sensitive_var_names
-                        .find(line)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| "secret variable".to_string());
-                    findings.push(SecretFinding {
-                        file_path: file_path.to_string(),
-                        line: line_number,
-                        kind: SecretKind::HardcodedAssignment,
-                        matched_text: var_match,
-                        level: 4,
-                    });
+            for captures in self.assignment_pattern.captures_iter(line) {
+                let Some(name) = captures.name("name").map(|m| m.as_str()) else {
+                    continue;
+                };
+                let Some(value) = captures
+                    .name("double")
+                    .or_else(|| captures.name("single"))
+                    .map(|m| m.as_str())
+                else {
+                    continue;
+                };
+                if is_safe_fetch_credentials(name, value) || looks_like_placeholder(value) {
+                    continue;
                 }
+                if findings.iter().any(|f| f.line == line_number) {
+                    break;
+                }
+                findings.push(SecretFinding {
+                    file_path: file_path.to_string(),
+                    line: line_number,
+                    kind: SecretKind::HardcodedAssignment,
+                    matched_text: name.to_string(),
+                    level: 4,
+                });
+                break;
             }
 
             // Layer 4: SQL injection via string building. Independent of
@@ -298,11 +335,26 @@ impl SecretScanner {
             // finding per line even if multiple patterns match (e.g. a line
             // combining `eval(` and `shell=True` is unusual but would
             // otherwise double-report the same line).
-            if let Some((label, _)) = self
+            let dangerous_label = self
                 .dangerous_execution_patterns
                 .iter()
                 .find(|(_, pattern)| pattern.is_match(line))
-            {
+                .map(|(label, _)| *label)
+                .or_else(|| {
+                    let imported_method_call = self
+                        .child_process_method_pattern
+                        .captures(line)
+                        .and_then(|captures| captures.get(1))
+                        .is_some_and(|receiver| {
+                            child_process_aliases
+                                .iter()
+                                .any(|alias| alias == receiver.as_str())
+                        });
+                    (imported_method_call
+                        || self.child_process_require_exec_pattern.is_match(line))
+                    .then_some("child_process.exec()")
+                });
+            if let Some(label) = dangerous_label {
                 findings.push(SecretFinding {
                     file_path: file_path.to_string(),
                     line: line_number,
@@ -471,6 +523,53 @@ pub fn scan_workspace(project_root: &str) -> Vec<Value> {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn is_comment_only(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("//")
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("-- ")
+        || trimmed == "--"
+        || trimmed.starts_with('*')
+}
+
+fn is_safe_fetch_credentials(name: &str, value: &str) -> bool {
+    name.eq_ignore_ascii_case("credentials")
+        && matches!(
+            value.to_ascii_lowercase().as_str(),
+            "omit" | "same-origin" | "same-site" | "include"
+        )
+}
+
+fn is_known_public_hash_context(line: &str, candidate: &str) -> bool {
+    let normalized = candidate.to_ascii_lowercase();
+    if !["sha256-", "sha384-", "sha512-"]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+    {
+        return false;
+    }
+
+    let lower_line = line.to_ascii_lowercase();
+    let Some(attribute_start) = lower_line.find("integrity") else {
+        return false;
+    };
+    let after_name = line[attribute_start + "integrity".len()..].trim_start();
+    let Some(after_equals) = after_name.strip_prefix('=') else {
+        return false;
+    };
+    let attribute_value = after_equals.trim_start();
+    let Some(quote) = attribute_value.chars().next() else {
+        return false;
+    };
+    if quote != '\'' && quote != '"' {
+        return false;
+    }
+    attribute_value[quote.len_utf8()..]
+        .split(quote)
+        .next()
+        .is_some_and(|value| value == candidate)
+}
 
 /// True for values that are obviously placeholders, not real secrets:
 /// `changeme`, `<YOUR_API_KEY_HERE>`, `xxxxxxxx`, `example`, etc. Used to
@@ -897,8 +996,8 @@ mod tests {
         assert!(bare.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
         assert!(!bare.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))));
 
-        // JS method call — leading dot.
-        let method = scanner.scan_content("a.js", "proc.exec(cmd)");
+        // Known child_process namespace method call — leading dot.
+        let method = scanner.scan_content("a.js", "child_process.exec(cmd)");
         assert!(method.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))));
         assert!(!method.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
     }
@@ -914,6 +1013,130 @@ mod tests {
             findings.is_empty(),
             "ordinary function calls that merely contain 'exec' as a substring of a longer identifier must not be flagged: {:?}",
             findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn p1_6_method_eval_is_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "pytorch_eval.py",
+            "import torch\nmodel = torch.nn.Linear(10, 1)\nmodel.eval()\nloss_val = criterion.eval()",
+        );
+        assert!(
+            findings.is_empty(),
+            "object eval methods are not dynamic code evaluation: {:?}",
+            findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn p1_6_regex_exec_is_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "regex_exec.js",
+            r#"const pattern = /hello/g;
+const match = pattern.exec(inputString);
+const re = new RegExp('\\d+');
+re.exec(text);"#,
+        );
+        assert!(
+            findings.is_empty(),
+            "RegExp.exec calls are not child-process execution: {:?}",
+            findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn p1_6_commented_child_process_alias_does_not_change_exec_semantics() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "regex_exec.js",
+            "// const pattern = require('child_process');\npattern.exec(inputString);",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn p1_6_ui_sql_words_are_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "ui_text.ts",
+            r#"const label = "Select an option";
+const btn = "Update profile";
+const msg = "Delete this item?";
+const help = "Insert your name here";
+const dynamicLabel = "Select " + option;
+const splitUiCopy = "Select " + option + " from " + source;"#,
+        );
+        assert!(
+            findings.is_empty(),
+            "UI copy containing isolated SQL verbs must not be treated as SQL injection: {:?}",
+            findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn p1_6_fetch_credentials_enums_are_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "fetch_api.ts",
+            r#"fetch('/api/data', { credentials: 'same-origin' });
+fetch('/api/auth', { credentials: 'include' });
+fetch('/api/public', { credentials: 'omit' });"#,
+        );
+        assert!(
+            findings.is_empty(),
+            "Fetch credentials enums are transport policy, not secrets: {:?}",
+            findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn p1_6_fetch_credentials_enum_does_not_hide_another_secret() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "fetch_api.ts",
+            r#"const options = { credentials: 'include', password: 'ActualSecret123' };"#,
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == SecretKind::HardcodedAssignment),
+            "a safe Fetch enum must not suppress a separate hardcoded secret on the same line"
+        );
+    }
+
+    #[test]
+    fn p1_6_sri_hash_is_not_flagged() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "sri_hash.html",
+            r#"<script src="jquery.js"
+  integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxFMUFe7bPWwGa5R2UgfyAkOmDr6Gq"
+  crossorigin="anonymous"></script>"#,
+        );
+        assert!(
+            findings.is_empty(),
+            "public SRI hashes must not be treated as secrets: {:?}",
+            findings.iter().map(|f| &f.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn p1_6_sri_hash_does_not_hide_another_high_entropy_value() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "sri_hash.html",
+            r#"<script integrity="sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxFMUFe7bPWwGa5R2UgfyAkOmDr6Gq" data-secret="xK9mP2qR7vL4nJ8wZ1yA6bC3dE5fG0h"></script>"#,
+        );
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.kind == SecretKind::HighEntropy)
+                .count(),
+            1,
+            "only the public integrity hash may be suppressed"
         );
     }
 
