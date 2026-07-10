@@ -166,7 +166,14 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
     let cycles = detect_cycles(after);
     let cycle_count = cycles.len();
     let cycles_before = detect_cycles(before).len();
-    let mut signals = SignalGenerator::new().generate(before, after, changed_files, l4_count, cycle_count);
+    let mut signals = SignalGenerator::new().generate(
+        before,
+        after,
+        changed_files,
+        project_root,
+        l4_count,
+        cycle_count,
+    );
 
     // Secret scanning: scan the content of every changed file.
     // `changed_files` are relative to `project_root` (from `git status --short`

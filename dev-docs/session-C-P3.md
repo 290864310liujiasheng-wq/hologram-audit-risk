@@ -95,3 +95,12 @@ cargo +1.97.0 clippy --all-targets -- -D warnings
 ```
 fix(cli): fix empty file_path in l3 findings, reject unknown positional args, clarify corrupt plan error
 ```
+
+---
+
+## 执行结果（2026-07-10）
+
+- P3-14：已由 `run_full_check` 向 L3 signal owner 传入 workspace root；owner 会去掉 `Node.location` 的数值行号、转换为工作区相对路径并与 changed file 精确匹配，再写入 finding。`cli.rs::derive_findings` 保持薄映射，不增加空路径 fallback；测试覆盖最终 finding、`file:line` 和同名路径碰撞。
+- P3-15：已在 `check` 命令解析边界拒绝第 2 个位置参数，并通过真实 `audit-risk` 二进制测试校验非零退出码、未知参数和用法提示。
+- P3-16：已在 `load_repair_plan` 区分 JSON 语法损坏与合法 JSON 的结构不合法错误，均提示重新生成方案；集成测试校验错误不再落到过期或 plan id 误导口径。
+- 验证：`cargo test` 全绿；`cargo +1.97.0 clippy --all-targets -- -D warnings` 通过。

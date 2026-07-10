@@ -11,6 +11,24 @@ fn workspace() -> PathBuf {
 }
 
 #[test]
+fn check_rejects_extra_positional_argument() {
+    let root = workspace();
+    let output = Command::new(env!("CARGO_BIN_EXE_audit-risk"))
+        .args(["check", root.to_str().expect("utf8 workspace"), "extra_arg"])
+        .output()
+        .expect("run audit-risk check");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(!output.status.success(), "extra positional argument must fail");
+    assert!(stderr.contains("未知参数 `extra_arg`"), "error must name the extra argument: {stderr}");
+    assert!(
+        stderr.contains("用法：audit-risk check <workspace> [--json] [--fail-on <level>]"),
+        "error must show check usage: {stderr}"
+    );
+}
+
+#[test]
 fn audit_command_returns_filtered_jsonl_records_without_node() {
     let root = workspace();
     let entries = [

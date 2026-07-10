@@ -2,6 +2,7 @@ use crate::analysis::detect_cycles;
 use crate::graph::Graph;
 use crate::routing::patterns::PatternMatcher;
 use serde_json::{json, Value};
+use std::path::Path;
 
 fn count_l4_edges(graph: &Graph) -> usize {
     graph.edges.values().filter(|e| e.coupling_depth >= 4).count()
@@ -13,6 +14,34 @@ fn count_l4_edges(graph: &Graph) -> usize {
 /// symbol (`load_config`), not the leaked absolute path.
 fn short_symbol(node_id: &str) -> &str {
     node_id.rsplit(['.', '/']).next().unwrap_or(node_id)
+}
+
+fn location_file_path(location: &str) -> &Path {
+    let path = location
+        .rsplit_once(':')
+        .filter(|(_, line)| {
+            !line.is_empty() && line.chars().all(|character| character.is_ascii_digit())
+        })
+        .map(|(path, _)| path)
+        .unwrap_or(location);
+    Path::new(path)
+}
+
+fn changed_file_for_location<'a>(
+    location: &str,
+    project_root: &Path,
+    changed_files: &'a [String],
+) -> Option<&'a str> {
+    let location_path = location_file_path(location);
+    let relative_path = if location_path.is_absolute() {
+        location_path.strip_prefix(project_root).ok()?
+    } else {
+        location_path
+    };
+    changed_files
+        .iter()
+        .find(|file| relative_path == Path::new(file.as_str()))
+        .map(String::as_str)
 }
 
 pub struct SignalGenerator {
@@ -31,7 +60,7 @@ impl SignalGenerator {
     /// Generate change signals by diffing `before` → `after`.
     /// L4/L2 only fire when coupling/cycles **increase** — not for static project state.
     pub fn generate(&self, before: &Graph, after: &Graph, changed_files: &[String],
-        _coupling_l4_after: usize, cycle_count_after: usize) -> Vec<Value> {
+        project_root: &str, _coupling_l4_after: usize, cycle_count_after: usize) -> Vec<Value> {
         let mut signals = Vec::new();
         let l4_before = count_l4_edges(before);
         let l4_after = count_l4_edges(after);
@@ -58,10 +87,18 @@ impl SignalGenerator {
 
         // L3 — shared data
         for edge in after.edges.values() {
-            if edge.coupling_depth >= 3 && changed_files.iter().any(|f|
-                after.nodes.get(&edge.source).and_then(|n| n.location.as_deref()).unwrap_or("").contains(f)) {
-                signals.push(json!({"signal":{"description":format!("{} 与 {} 之间存在共享数据写入耦合，改动其一可能影响另一处。", short_symbol(&edge.source), short_symbol(&edge.target)),"file_path":"","line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
+            if edge.coupling_depth < 3 {
+                continue;
             }
+            let Some(file_path) = after
+                .nodes
+                .get(&edge.source)
+                .and_then(|node| node.location.as_deref())
+                .and_then(|location| changed_file_for_location(location, Path::new(project_root), changed_files))
+            else {
+                continue;
+            };
+            signals.push(json!({"signal":{"description":format!("{} 与 {} 之间存在共享数据写入耦合，改动其一可能影响另一处。", short_symbol(&edge.source), short_symbol(&edge.target)),"file_path":file_path,"line":0,"level":3,"affected_nodes":[edge.source.clone(), edge.target.clone()]},"level":3}));
         }
 
         // L2 — new cycles since last baseline
@@ -84,7 +121,7 @@ mod tests {
     fn test_signals_empty() {
         let gen = SignalGenerator::new();
         let g = Graph::new();
-        let signals = gen.generate(&g, &g, &[], 0, 0);
+        let signals = gen.generate(&g, &g, &[], "", 0, 0);
         assert!(signals.is_empty());
     }
 
@@ -92,7 +129,7 @@ mod tests {
     fn test_signals_l5_migration() {
         let gen = SignalGenerator::new();
         let g = Graph::new();
-        let signals = gen.generate(&g, &g, &["migrations/0001_init.py".into()], 0, 0);
+        let signals = gen.generate(&g, &g, &["migrations/0001_init.py".into()], "", 0, 0);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 5);
     }
@@ -101,7 +138,7 @@ mod tests {
     fn test_signals_l5_config() {
         let gen = SignalGenerator::new();
         let g = Graph::new();
-        let signals = gen.generate(&g, &g, &["config.yaml".into()], 0, 0);
+        let signals = gen.generate(&g, &g, &["config.yaml".into()], "", 0, 0);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 5);
     }
@@ -116,7 +153,7 @@ mod tests {
         let mut e = Edge::new("e1", "a", "b", EdgeKind::Calls);
         e.coupling_depth = 4;
         after.add_edge(e);
-        let signals = gen.generate(&before, &after, &["src/a.rs".into()], 1, 0);
+        let signals = gen.generate(&before, &after, &["src/a.rs".into()], "", 1, 0);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 4);
     }
@@ -132,7 +169,7 @@ mod tests {
         after.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
         after.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
         after.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
-        let signals = gen.generate(&before, &after, &[], 0, 1);
+        let signals = gen.generate(&before, &after, &[], "", 0, 1);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 2);
     }
@@ -147,7 +184,7 @@ mod tests {
         g.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
         g.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
         g.add_edge(Edge::new("e3", "c", "a", EdgeKind::Calls));
-        let signals = gen.generate(&g, &g, &[], 0, 1);
+        let signals = gen.generate(&g, &g, &[], "", 0, 1);
         assert!(signals.is_empty(), "same graph should not re-alert on existing cycles");
     }
 
@@ -156,16 +193,49 @@ mod tests {
         let gen = SignalGenerator::new();
         let mut g = Graph::new();
         let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
-        a.location = Some("src/handler.rs".into());
+        a.location = Some("/workspace/src/handler.rs:42".into());
         g.add_node(a);
         g.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
         let mut e = Edge::new("e1", "a", "b", EdgeKind::Writes);
         e.coupling_depth = 3;
         g.add_edge(e);
 
-        let signals = gen.generate(&g, &g, &["src/handler.rs".into()], 0, 0);
+        let signals = gen.generate(&g, &g, &["src/handler.rs".into()], "/workspace", 0, 0);
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0]["level"], 3);
+        assert_eq!(signals[0]["signal"]["file_path"], "src/handler.rs");
+    }
+
+    #[test]
+    fn test_signals_l3_ignores_same_basename_outside_changed_path() {
+        let gen = SignalGenerator::new();
+        let mut g = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("/workspace/src/handler.rs".into());
+        g.add_node(a);
+        g.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
+        let mut e = Edge::new("e1", "a", "b", EdgeKind::Writes);
+        e.coupling_depth = 3;
+        g.add_edge(e);
+
+        let signals = gen.generate(&g, &g, &["handler.rs".into()], "/workspace", 0, 0);
+        assert!(signals.is_empty(), "a changed root file must not match a nested source file");
+    }
+
+    #[test]
+    fn test_signals_l3_rejects_empty_line_suffix() {
+        let gen = SignalGenerator::new();
+        let mut g = Graph::new();
+        let mut a = Node::new("a", "mod_a", NodeKind::Symbol);
+        a.location = Some("/workspace/src/handler.rs:".into());
+        g.add_node(a);
+        g.add_node(Node::new("b", "mod_b", NodeKind::Symbol));
+        let mut e = Edge::new("e1", "a", "b", EdgeKind::Writes);
+        e.coupling_depth = 3;
+        g.add_edge(e);
+
+        let signals = gen.generate(&g, &g, &["src/handler.rs".into()], "/workspace", 0, 0);
+        assert!(signals.is_empty(), "an empty line suffix is not a valid source location");
     }
 
     #[test]
@@ -184,7 +254,7 @@ mod tests {
         after.add_edge(l4);
         let signals = gen.generate(&before, &after,
             &["migrations/init.py".into(), "config.toml".into()],
-            1, 1);
+            "", 1, 1);
         // L5: migration + config + serialization? config only = 1 config + 1 migration = 2, L4 delta 1, L2 delta 1
         assert!(signals.len() >= 3);
     }

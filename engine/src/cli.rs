@@ -265,6 +265,11 @@ pub fn parse_cli_command(args: &[String]) -> Result<ParsedCliCommand, UsageError
             let fail_on = parse_optional_fail_on(rest)?;
             let output_mode = resolve_output_mode(rest, DefaultOutputMode::Human);
             reject_unknown_flags(rest, &["--pretty", "--verbose", "--fail-on", "--json"])?;
+            if let Some(unknown) = positional_arguments(rest).get(1) {
+                return Err(UsageError::new(format!(
+                    "未知参数 `{unknown}`。用法：audit-risk check <workspace> [--json] [--fail-on <level>]"
+                )));
+            }
             Ok(ParsedCliCommand {
                 command: CliCommand::Check {
                     workspace,
@@ -2338,8 +2343,14 @@ fn load_repair_plan(workspace: &Path, plan_id: &str) -> Result<(PathBuf, RepairP
     let plan_path = repair_plan_path(workspace, plan_id)?;
     let raw = fs::read_to_string(&plan_path)
         .map_err(|error| CliRuntimeError::environment(format!("无法读取修复方案 {plan_id}：{error}")))?;
-    let plan: RepairPlanDocument = serde_json::from_str(&raw)
-        .map_err(|error| CliRuntimeError::environment(format!("修复方案 {plan_id} 不是有效 JSON：{error}")))?;
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|error| CliRuntimeError::environment(format!(
+            "修复方案 {plan_id} 的文件内容损坏（无法解析 JSON）：{error}。请重新运行 `audit-risk repair plan` 生成新方案。"
+        )))?;
+    let plan: RepairPlanDocument = serde_json::from_value(value)
+        .map_err(|error| CliRuntimeError::environment(format!(
+            "修复方案 {plan_id} 的文件结构不合法：{error}。请重新运行 `audit-risk repair plan` 生成新方案。"
+        )))?;
     validate_repair_plan(&plan, plan_id)?;
     Ok((plan_path, plan))
 }
@@ -7249,6 +7260,25 @@ mod tests {
 
         assert!(!super::should_emit_watch_finding(&finding, 1_000 + 60_000, &previous, 600_000));
         assert!(super::should_emit_watch_finding(&finding, 1_000 + 601_000, &previous, 600_000));
+    }
+
+    #[test]
+    fn l3_signal_file_path_reaches_finding_location() {
+        let findings = super::derive_findings(&json!({
+            "l3_violations": [{
+                "signal": {
+                    "description": "shared data coupling",
+                    "file_path": "src/handler.rs",
+                    "line": 0,
+                    "level": 3,
+                    "affected_nodes": ["source", "target"]
+                },
+                "level": 3
+            }]
+        }));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["location"]["file_path"], "src/handler.rs");
     }
 
     #[test]

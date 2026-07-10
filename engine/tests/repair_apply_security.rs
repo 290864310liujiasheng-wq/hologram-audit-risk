@@ -58,6 +58,52 @@ fn apply_args(workspace: &Path, plan_id: &str) -> Vec<String> {
 }
 
 #[test]
+fn repair_apply_reports_corrupt_plan_json() {
+    let root = workspace();
+    fs::write(
+        root.join(".hologram/repair-plans/corrupt-plan.json"),
+        "{bad json",
+    )
+    .expect("corrupt repair plan");
+
+    let output = run_cli(&root, &apply_args(&root, "corrupt-plan"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(!output.status.success(), "corrupt repair plan must fail");
+    assert!(
+        stderr.contains("损坏") || stderr.contains("无法解析"),
+        "error must identify corrupt JSON, got: {stderr}"
+    );
+    assert!(!stderr.contains("已过期"), "corrupt JSON must not be reported as expired: {stderr}");
+    assert!(!stderr.contains("plan_id 有误"), "corrupt JSON must not be reported as a bad plan id: {stderr}");
+}
+
+#[test]
+fn repair_apply_reports_invalid_plan_structure_separately_from_corrupt_json() {
+    let root = workspace();
+    fs::write(
+        root.join(".hologram/repair-plans/invalid-structure.json"),
+        "{}",
+    )
+    .expect("invalid repair plan structure");
+
+    let output = run_cli(&root, &apply_args(&root, "invalid-structure"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(!output.status.success(), "invalid repair plan structure must fail");
+    assert!(
+        stderr.contains("结构不合法") || stderr.contains("字段"),
+        "error must identify an invalid plan structure, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("无法解析 JSON"),
+        "valid JSON must not be reported as a syntax error: {stderr}"
+    );
+}
+
+#[test]
 fn repair_apply_requires_recorded_approval_before_writing() {
     let root = workspace();
     fs::write(root.join("source.rs"), "let value = 1;\n").expect("source");
