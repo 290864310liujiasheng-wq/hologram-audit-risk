@@ -402,6 +402,56 @@ pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Ve
     signals
 }
 
+/// Full-tree scan: walk every file under `project_root` (skipping build/dependency
+/// dirs via `discovery::is_excluded`, plus audit-risk's own scaffolding) and run
+/// the per-file scanner over each.
+///
+/// Used by `check` when there is no diff to review — the first run on an existing
+/// codebase, a non-git directory, or a clean tree. Without this, `check` would
+/// report "0 findings" on a repo full of leaked keys just because nothing changed
+/// since the baseline — a dangerous false "all clear".
+pub fn scan_workspace(project_root: &str) -> Vec<Value> {
+    if project_root.is_empty() {
+        return Vec::new();
+    }
+    let root = std::path::Path::new(project_root);
+    let scanner = SecretScanner::new();
+    let mut signals = Vec::new();
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| !crate::pipeline::discovery::is_excluded(e))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let path = entry.path();
+        let display = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        // Skip audit-risk's own managed files so scaffolding never shows as risk.
+        if display.starts_with(".hologram/")
+            || display.starts_with(".githooks/")
+            || display == ".github/workflows/hologram-risk.yml"
+        {
+            continue;
+        }
+        // Skip very large files (generated/minified) — real secret/injection
+        // sites live in human-sized source; a multi-MB regex scan is waste.
+        if entry.metadata().map(|m| m.len() > 1_048_576).unwrap_or(false) {
+            continue;
+        }
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue, // binary / non-UTF8 → skip
+        };
+        for finding in scanner.scan_content(&display, &content) {
+            signals.push(finding_to_signal(&finding));
+        }
+    }
+    signals
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// True for values that are obviously placeholders, not real secrets:

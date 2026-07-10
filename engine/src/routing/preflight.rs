@@ -78,6 +78,44 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
     })
 }
 
+/// Build a check result from a full-workspace per-file scan (no diff context).
+/// Only per-file findings (leaked keys / injection / dangerous exec / IAM) are
+/// reported; architectural metrics are zeroed because there is no baseline to
+/// diff against. Used on the very first `check` so an existing codebase's risks
+/// are surfaced instead of a false "0 findings".
+fn full_scan_result(secret_signals: &[Value]) -> Value {
+    let config = ConstraintConfig::defaults();
+    let constraint_result = check_constraints(secret_signals, &config);
+    let violations: Vec<Value> = constraint_result["violations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let no_files: Vec<String> = Vec::new();
+    let summary = generate_summary(&no_files, &violations, 0, 0);
+    json!({
+        "passed": summary["passed"],
+        "one_line": summary["one_line"],
+        "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "changed_files": no_files,
+        "total_changed_files": 0,
+        "l5_violations": violations.iter().filter(|v| v["level"]==5).collect::<Vec<_>>(),
+        "l4_violations": violations.iter().filter(|v| v["level"]==4).collect::<Vec<_>>(),
+        "l3_violations": violations.iter().filter(|v| v["level"]==3).collect::<Vec<_>>(),
+        "l2_violations": violations.iter().filter(|v| v["level"]==2).collect::<Vec<_>>(),
+        "passed_checks": Vec::<String>::new(),
+        "blast_radius": 0u32,
+        "cross_community_edges": 0u32,
+        "new_cycles": 0u32,
+        "new_thread_conflicts": 0u32,
+        "api_signature_changes": 0u32,
+        "coupling_l4": 0u32,
+        "cycles_detected": 0u32,
+        "signals_count": secret_signals.len() as u32,
+        "violation_count": violations.len() as u32,
+        "full_scan": true,
+    })
+}
+
 /// True for files audit-risk manages itself (its own state dir and generated
 /// automation). Changes to these are the tool bookkeeping its own scaffolding,
 /// not user-facing risk — flagging `.hologram/delivery.json` or the generated
@@ -102,9 +140,17 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
         .collect();
     let changed_files: &[String] = &filtered_changed;
 
-    // First open: establish baseline quietly — don't audit the whole project.
-    if before.nodes.is_empty() && !after.nodes.is_empty() && changed_files.is_empty() {
-        return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+    // First open (no baseline yet) with nothing in the diff: run a FULL workspace
+    // scan for per-file risks (leaked keys, injection, dangerous exec, IAM) so an
+    // existing codebase's risks surface on the very first `check`, instead of a
+    // dangerous "0 findings" just because nothing changed since baseline. The
+    // architectural diff checks genuinely need a baseline, so they stay diff-based.
+    if before.nodes.is_empty() && changed_files.is_empty() {
+        let secret_signals = crate::routing::secrets::scan_workspace(project_root);
+        if secret_signals.is_empty() {
+            return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+        }
+        return full_scan_result(&secret_signals);
     }
 
     // No file changes and graph size unchanged → nothing to report.
@@ -252,8 +298,14 @@ mod tests {
 
     #[test]
     fn test_preflight_empty_graphs() {
+        // Empty workspace (no risks) → quiet pass. Use a fresh temp dir as the
+        // project root so the first-open full scan finds nothing (passing "."
+        // would scan the engine's own corpus of intentional secrets).
+        let dir = std::env::temp_dir().join("audit_preflight_empty");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         let g = Graph::new();
-        let r = run_full_check(&g, &g, &[], ".");
+        let r = run_full_check(&g, &g, &[], &dir.to_string_lossy());
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["blast_radius"], 0);
         assert_eq!(r["violation_count"], 0);
@@ -332,12 +384,39 @@ mod tests {
 
     #[test]
     fn test_preflight_baseline_seed() {
+        // First open on a clean workspace → seed baseline quietly. Fresh temp
+        // dir as project root so the full scan finds no risks.
+        let dir = std::env::temp_dir().join("audit_preflight_seed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
         let mut after = Graph::new();
         after.add_node(Node::new("a", "fn", NodeKind::Symbol));
         let before = Graph::new();
-        let r = run_full_check(&before, &after, &[], ".");
+        let r = run_full_check(&before, &after, &[], &dir.to_string_lossy());
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["baseline_seed"], true);
         assert_eq!(r["violation_count"], 0);
+    }
+
+    #[test]
+    fn test_preflight_first_open_scans_existing_risks() {
+        // Regression guard: the first `check` on an existing codebase that
+        // already contains a leaked key must NOT report a false "all clear" just
+        // because nothing changed since baseline — it must full-scan and flag it.
+        let dir = std::env::temp_dir().join("audit_preflight_fullscan");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("leak.py"),
+            "OPENAI_API_KEY = \"sk-proj-AbCdEf0123456789GhIjKlMnOpQrStUvWxYz012345\"\n",
+        )
+        .unwrap();
+        let before = Graph::new();
+        let mut after = Graph::new();
+        after.add_node(Node::new("a", "fn", NodeKind::Symbol));
+        let r = run_full_check(&before, &after, &[], &dir.to_string_lossy());
+        assert!(!r["passed"].as_bool().unwrap(), "leaked key must not pass");
+        assert!(r["violation_count"].as_u64().unwrap() >= 1);
+        assert_eq!(r["full_scan"], true);
     }
 }
