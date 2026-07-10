@@ -57,8 +57,11 @@ pub enum SecretKind {
 pub struct SecretScanner {
     /// Each tuple: (display label, regex matching the secret value)
     known_prefixes: Vec<(&'static str, Regex)>,
-    /// Matches: variable_name = "some_value" or variable_name: "some_value"
+    /// Matches quoted assignments and unquoted scalar assignments in env files.
     assignment_pattern: Regex,
+    /// Plaintext passwords embedded in database connection strings.
+    connection_password_pattern: Regex,
+    mongodb_connection_pattern: Regex,
     /// SQL keyword + string-building patterns (f-string/template literal
     /// interpolation, or `+` concatenation) instead of a parameterized
     /// placeholder passed separately to the DB driver.
@@ -70,6 +73,9 @@ pub struct SecretScanner {
     /// Receiver and direct-require forms of child-process exec calls.
     child_process_method_pattern: Regex,
     child_process_require_exec_pattern: Regex,
+    /// Language-scoped command execution APIs for PHP and C-family sources.
+    system_call_pattern: Regex,
+    shell_exec_pattern: Regex,
     /// Overly permissive IAM/policy statement patterns: (display label, regex)
     permissive_iam_patterns: Vec<(&'static str, Regex)>,
 }
@@ -114,7 +120,15 @@ impl SecretScanner {
         ];
 
         let assignment_pattern = Regex::new(
-            r#"(?i)(?P<name>api_?key|api_?secret|app_?secret|auth_?token|access_?token|secret_?key|private_?key|client_?secret|db_?pass(?:word)?|database_?pass(?:word)?|password|passwd|credentials?|auth_?key)\s*[=:]\s*(?:"(?P<double>[^"\r\n]{8,})"|'(?P<single>[^'\r\n]{8,})')"#,
+            r#"(?i)\b(?P<name>api_?key|api_?secret|app_?secret|auth_?token|access_?token|secret_?token|secret_?key|private_?key|client_?secret|db_?pass(?:word)?|database_?pass(?:word)?|password|passwd|credentials?|auth_?key|secret|token)\b\s*[=:]\s*(?:"(?P<double>[^"\r\n]{8,})"|'(?P<single>[^'\r\n]{8,})'|(?P<bare>[A-Za-z0-9_./@+!$%^&*-]{8,})(?:\s*(?:[,;}\]]|$)))"#,
+        )
+        .unwrap();
+        let connection_password_pattern = Regex::new(
+            r#"(?i)\b(?P<name>password|pwd)\s*=\s*(?P<value>[^;'"&\s]{6,})"#,
+        )
+        .unwrap();
+        let mongodb_connection_pattern = Regex::new(
+            r#"(?i)\bmongodb(?:\+srv)?://[^:\s/@]+:(?P<value>[^"'\s]{6,})@[A-Za-z0-9.-]+(?::\d+)?(?:/|["']|$)"#,
         )
         .unwrap();
 
@@ -167,6 +181,11 @@ impl SecretScanner {
             // anything OTHER than `.` (or be the start of the line).
             ("exec()", Regex::new(r"(^|[^.\w])exec\s*\(").unwrap()),
             ("os.system()", Regex::new(r"\bos\.system\s*\(").unwrap()),
+            ("os.popen()", Regex::new(r"\bos\.popen\s*\(").unwrap()),
+            (
+                "subprocess.getoutput()",
+                Regex::new(r"\bsubprocess\.getoutput\s*\(").unwrap(),
+            ),
             ("shell=True", Regex::new(r"\bshell\s*=\s*True\b").unwrap()),
             // Bare `execSync(` / `spawnSync(` from a destructured import
             // (`import { execSync } from 'child_process'`) — no leading dot, so
@@ -194,6 +213,8 @@ impl SecretScanner {
             r#"\brequire\s*\(\s*['"]child_process['"]\s*\)\s*\.\s*exec(?:Sync)?\s*\("#,
         )
         .unwrap();
+        let system_call_pattern = Regex::new(r"(^|[^.\w])system\s*\(").unwrap();
+        let shell_exec_pattern = Regex::new(r"(^|[^.\w])shell_exec\s*\(").unwrap();
 
         let permissive_iam_patterns = vec![
             (
@@ -209,11 +230,15 @@ impl SecretScanner {
         Self {
             known_prefixes,
             assignment_pattern,
+            connection_password_pattern,
+            mongodb_connection_pattern,
             sql_injection_patterns,
             dangerous_execution_patterns,
             child_process_alias_patterns,
             child_process_method_pattern,
             child_process_require_exec_pattern,
+            system_call_pattern,
+            shell_exec_pattern,
             permissive_iam_patterns,
         }
     }
@@ -297,10 +322,14 @@ impl SecretScanner {
                 let Some(value) = captures
                     .name("double")
                     .or_else(|| captures.name("single"))
+                    .or_else(|| captures.name("bare"))
                     .map(|m| m.as_str())
                 else {
                     continue;
                 };
+                if captures.name("bare").is_some() && !supports_unquoted_secrets(file_path) {
+                    continue;
+                }
                 if is_safe_fetch_credentials(name, value) || looks_like_placeholder(value) {
                     continue;
                 }
@@ -315,6 +344,40 @@ impl SecretScanner {
                     level: 4,
                 });
                 break;
+            }
+
+            if !findings.iter().any(|f| f.line == line_number) {
+                let connection_secret = self
+                    .connection_password_pattern
+                    .captures(line)
+                    .filter(|_| is_database_connection_context(line))
+                    .and_then(|captures| {
+                        Some((
+                            captures.name("name")?.as_str(),
+                            captures.name("value")?.as_str(),
+                        ))
+                    })
+                    .or_else(|| {
+                        self.mongodb_connection_pattern
+                            .captures(line)
+                            .and_then(|captures| {
+                                Some((
+                                    "mongodb password",
+                                    captures.name("value")?.as_str(),
+                                ))
+                            })
+                    });
+                if let Some((name, value)) = connection_secret {
+                    if !looks_like_placeholder(value) {
+                        findings.push(SecretFinding {
+                            file_path: file_path.to_string(),
+                            line: line_number,
+                            kind: SecretKind::HardcodedAssignment,
+                            matched_text: name.to_string(),
+                            level: 4,
+                        });
+                    }
+                }
             }
 
             // Layer 4: SQL injection via string building. Independent of
@@ -353,6 +416,17 @@ impl SecretScanner {
                     (imported_method_call
                         || self.child_process_require_exec_pattern.is_match(line))
                     .then_some("child_process.exec()")
+                })
+                .or_else(|| {
+                    if is_php_source(file_path) && self.shell_exec_pattern.is_match(line) {
+                        Some("shell_exec()")
+                    } else if is_system_call_source(file_path)
+                        && self.system_call_pattern.is_match(line)
+                    {
+                        Some("system()")
+                    } else {
+                        None
+                    }
                 });
             if let Some(label) = dangerous_label {
                 findings.push(SecretFinding {
@@ -539,6 +613,30 @@ fn is_safe_fetch_credentials(name: &str, value: &str) -> bool {
             value.to_ascii_lowercase().as_str(),
             "omit" | "same-origin" | "same-site" | "include"
         )
+}
+
+fn supports_unquoted_secrets(file_path: &str) -> bool {
+    let file_name = file_path.rsplit(['/', '\\']).next().unwrap_or(file_path);
+    file_name == ".env" || file_name.ends_with(".env") || file_name.starts_with(".env.")
+}
+
+fn is_database_connection_context(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    normalized.contains("jdbc:")
+        || ["server=", "data source=", "database="]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+}
+
+fn is_php_source(file_path: &str) -> bool {
+    file_path.to_ascii_lowercase().ends_with(".php")
+}
+
+fn is_system_call_source(file_path: &str) -> bool {
+    let normalized = file_path.to_ascii_lowercase();
+    [".php", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp"]
+        .iter()
+        .any(|extension| normalized.ends_with(extension))
 }
 
 fn is_known_public_hash_context(line: &str, candidate: &str) -> bool {
@@ -1138,6 +1236,97 @@ fetch('/api/public', { credentials: 'omit' });"#,
             1,
             "only the public integrity hash may be suppressed"
         );
+    }
+
+    #[test]
+    fn p1_5_detects_unquoted_env_secrets() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "env_no_quotes.env",
+            "DATABASE_PASSWORD=SuperSecret123\nAPI_KEY=abcdefghijklmnop\nSECRET=my_hard_coded_secret\nTOKEN=ghp_realtoken12345678",
+        );
+        let mut lines: Vec<_> = findings
+            .iter()
+            .filter(|f| f.kind == SecretKind::HardcodedAssignment)
+            .map(|f| f.line)
+            .collect();
+        lines.sort_unstable();
+        lines.dedup();
+        assert_eq!(lines, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn p1_5_detects_each_connection_string_password() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "connection_strings.cs",
+            r#"var conn = "Server=prod.db.com;Database=app;User Id=admin;Password=Pr0dP@ssw0rd!;";
+var jdbc = "jdbc:mysql://localhost:3306/mydb?user=root&password=rootpassword";
+var mongo = "mongodb://appuser:S3cr3tP@ss@cluster.example.com:27017/mydb";"#,
+        );
+        let mut lines: Vec<_> = findings
+            .iter()
+            .filter(|f| f.kind == SecretKind::HardcodedAssignment)
+            .map(|f| f.line)
+            .collect();
+        lines.sort_unstable();
+        lines.dedup();
+        assert_eq!(lines, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn p1_5_detects_each_python_command_execution_api() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "dangerous_exec_python.py",
+            "result = os.popen(user_input).read()\nout = subprocess.getoutput(f\"ls {user_dir}\")",
+        );
+        assert!(findings.iter().any(|f| {
+            matches!(f.kind, SecretKind::DangerousExecution("os.popen()")) && f.line == 1
+        }));
+        assert!(findings.iter().any(|f| {
+            matches!(
+                f.kind,
+                SecretKind::DangerousExecution("subprocess.getoutput()")
+            ) && f.line == 2
+        }));
+    }
+
+    #[test]
+    fn p1_5_detects_php_and_c_system_calls_with_language_context() {
+        let scanner = scanner();
+        let php = scanner.scan_content(
+            "dangerous_exec.php",
+            "<?php\n$result = system($_GET['cmd']);\n$out = shell_exec($userInput);",
+        );
+        assert!(php.iter().any(|f| {
+            matches!(f.kind, SecretKind::DangerousExecution("system()")) && f.line == 2
+        }));
+        assert!(php.iter().any(|f| {
+            matches!(f.kind, SecretKind::DangerousExecution("shell_exec()")) && f.line == 3
+        }));
+
+        let c = scanner.scan_content("dangerous_exec.c", "int rc = system(user_input);");
+        assert!(c
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("system()"))));
+
+        assert!(scanner
+            .scan_content("business.py", "result = system(user_input)")
+            .is_empty());
+    }
+
+    #[test]
+    fn p1_5_detects_each_hex_secret_assignment() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "hex_key.py",
+            "API_KEY = \"a3f2b1c4d5e6f7a8b9c0d1e2f3a4b5c6\"\nSECRET_TOKEN = \"deadbeefcafebabe1234567890abcdef\"",
+        );
+        let mut lines: Vec<_> = findings.iter().map(|f| f.line).collect();
+        lines.sort_unstable();
+        lines.dedup();
+        assert_eq!(lines, vec![1, 2]);
     }
 
     // ─── Layer 6: permissive IAM ───────────────────────────────────────────────
