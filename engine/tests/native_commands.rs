@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn workspace() -> PathBuf {
     let root = std::env::temp_dir().join(format!("audit-risk-native-commands-{}", uuid::Uuid::new_v4()));
@@ -99,6 +99,39 @@ fn check_keeps_hologram_artifacts_out_of_git_status_and_changed_files() {
         "check must not treat its own artifacts as user changes: {}",
         response["changed_files"]
     );
+}
+
+#[test]
+fn concurrent_checks_do_not_fail_on_sqlite_locks() {
+    let root = workspace();
+    let mut checks = Vec::new();
+    for _ in 0..3 {
+        let child = Command::new(env!("CARGO_BIN_EXE_audit-risk"))
+            .args(["check", root.to_str().expect("utf8 workspace"), "--json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start concurrent audit-risk check");
+        checks.push(child);
+    }
+
+    let outputs = checks
+        .into_iter()
+        .map(|child| child.wait_with_output().expect("wait for concurrent audit-risk check"))
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&root);
+
+    for output in outputs {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "concurrent check must not fail: {stderr}"
+        );
+        assert!(
+            !stderr.contains("database is locked"),
+            "concurrent check must not report a SQLite lock: {stderr}"
+        );
+    }
 }
 
 #[test]

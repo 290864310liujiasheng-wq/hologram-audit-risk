@@ -3,6 +3,7 @@
 // timeline events, and startup migration.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rusqlite::{params, Connection};
 use tracing::info;
@@ -11,6 +12,25 @@ use crate::graph::{EdgeKind, Node, NodeKind};
 
 /// A full edge row: (source, target, kind, coupling_depth, temporal_delay_sec).
 type EdgeRow = (String, String, EdgeKind, u8, Option<f64>);
+
+const SQLITE_LOCK_RETRY_ATTEMPTS: usize = 3;
+const SQLITE_LOCK_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+fn retry_locked_database_open<T>(mut open: impl FnMut() -> Result<T, String>) -> Result<T, String> {
+    for attempt in 0..SQLITE_LOCK_RETRY_ATTEMPTS {
+        match open() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if error.contains("database is locked")
+                    && attempt + 1 < SQLITE_LOCK_RETRY_ATTEMPTS =>
+            {
+                std::thread::sleep(SQLITE_LOCK_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("database lock retry loop must return or fail")
+}
 
 /// Wrapper around the single hologram.db connection.
 pub struct SqliteDb {
@@ -27,19 +47,24 @@ impl SqliteDb {
             .map_err(|e| format!("mkdir .hologram: {}", e))?;
         let db_path = hologram_dir.join("hologram.db");
 
-        let conn = Connection::open(&db_path)
+        retry_locked_database_open(|| Self::open_at_path(&db_path))
+    }
+
+    fn open_at_path(db_path: &Path) -> Result<Self, String> {
+        let conn = Connection::open(db_path)
             .map_err(|e| format!("open hologram.db: {}", e))?;
+        conn.busy_timeout(Duration::from_secs(5))
+            .map_err(|e| format!("set busy timeout: {}", e))?;
 
         // Essential pragmas
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA auto_vacuum=INCREMENTAL;
-             PRAGMA busy_timeout=5000;",
+             PRAGMA auto_vacuum=INCREMENTAL;",
         )
         .map_err(|e| format!("pragma: {}", e))?;
 
-        let db = Self { conn, db_path };
+        let db = Self { conn, db_path: db_path.to_path_buf() };
         db.ensure_schema()?;
         db.migrate_fts5()?;
         Ok(db)
@@ -97,11 +122,16 @@ impl SqliteDb {
 
     /// Secondary connection for timeline I/O — avoids blocking on graph store mutex.
     pub fn open_aux_connection(db_path: &Path) -> Result<Connection, String> {
+        retry_locked_database_open(|| Self::open_aux_connection_at_path(db_path))
+    }
+
+    fn open_aux_connection_at_path(db_path: &Path) -> Result<Connection, String> {
         let conn = Connection::open(db_path)
             .map_err(|e| format!("open aux hologram.db: {}", e))?;
+        conn.busy_timeout(Duration::from_secs(5))
+            .map_err(|e| format!("set aux busy timeout: {}", e))?;
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA busy_timeout=5000;",
+            "PRAGMA journal_mode=WAL;",
         )
         .map_err(|e| format!("pragma aux: {}", e))?;
         Ok(conn)
