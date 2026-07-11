@@ -67,10 +67,11 @@ pub struct SecretScanner {
     connection_password_pattern: Regex,
     mongodb_connection_pattern: Regex,
     azure_account_key_pattern: Regex,
-    /// SQL keyword + string-building patterns (f-string/template literal
-    /// interpolation, or `+` concatenation) instead of a parameterized
-    /// placeholder passed separately to the DB driver.
-    sql_injection_patterns: Vec<Regex>,
+    /// SQL statement grammar and dynamic string-building forms. A finding
+    /// requires both to occur in the same string-building expression.
+    sql_statement_pattern: Regex,
+    sql_string_building_patterns: Vec<Regex>,
+    sql_concatenation_pattern: Regex,
     /// Dangerous dynamic execution: (display label, regex)
     dangerous_execution_patterns: Vec<(&'static str, Regex)>,
     /// Namespace bindings and rebinding for Node's `child_process` module.
@@ -152,37 +153,41 @@ impl SecretScanner {
         )
         .unwrap();
 
-        // Require statement grammar, not just English words that also happen
-        // to be SQL verbs (for example, "Select a plan from the catalog").
-        let sql_statement = r"(?i)\b(?:SELECT\s+(?:DISTINCT\s+)?(?:\*|[A-Za-z_][A-Za-z0-9_.]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_.]*)*)\s+FROM\s+[A-Za-z_][A-Za-z0-9_.]*|INSERT\s+INTO\s+[A-Za-z_][A-Za-z0-9_.]*|UPDATE\s+[A-Za-z_][A-Za-z0-9_.]*\s+SET\b|DELETE\s+FROM\s+[A-Za-z_][A-Za-z0-9_.]*|DROP\s+(?:TABLE|DATABASE|INDEX)\b|ALTER\s+(?:TABLE|DATABASE|INDEX)\s+[A-Za-z_][A-Za-z0-9_.]*)";
-        let sql_injection_patterns = vec![
-            // Python f-string / JS template literal: SQL keyword appears
-            // before a `{...}`/`${...}` interpolation, inside the same
-            // quoted/backtick span.
-            Regex::new(&format!(r#"f"[^"\n]*{sql_statement}[^"\n]*\{{[^}}]+\}}[^"\n]*""#)).unwrap(),
-            Regex::new(&format!(r"f'[^'\n]*{sql_statement}[^'\n]*\{{[^}}]+\}}[^'\n]*'")).unwrap(),
-            Regex::new(&format!(r#"`[^`\n]*{sql_statement}[^`\n]*\$\{{[^}}]+\}}[^`\n]*`"#)).unwrap(),
-            // String concatenation: a quoted string containing a SQL keyword,
-            // joined with `+` and an identifier (either order). Split by quote
-            // char so a SQL string that itself contains the *other* quote
-            // (e.g. "... WHERE name = '" + userName) still matches — a single
-            // `[^"'\n]` class would stop at the inner quote and miss it.
-            Regex::new(&format!(r#""[^"\n]*{sql_statement}[^"\n]*"\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
-            Regex::new(&format!(r#"'[^'\n]*{sql_statement}[^'\n]*'\s*\+\s*[A-Za-z_][A-Za-z0-9_.]*"#)).unwrap(),
-            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*"[^"\n]*{sql_statement}[^"\n]*""#)).unwrap(),
-            Regex::new(&format!(r#"[A-Za-z_][A-Za-z0-9_.]*\s*\+\s*'[^'\n]*{sql_statement}[^'\n]*'"#)).unwrap(),
-            // Python `%` string formatting: a quoted string containing a SQL
-            // keyword, then the `%` operator and a variable/tuple —
-            // `"... SELECT ..." % user`. The parameterized form
-            // `execute("... %s", (user,))` has a `,` (not `%`) after the closing
-            // quote, so it does NOT match — `%s` lives *inside* the string.
-            Regex::new(&format!(r#""[^"\n]*{sql_statement}[^"\n]*"\s*%\s*[A-Za-z_(]"#)).unwrap(),
-            Regex::new(&format!(r#"'[^'\n]*{sql_statement}[^'\n]*'\s*%\s*[A-Za-z_(]"#)).unwrap(),
-            // str.format(): a quoted string containing a SQL keyword, then
-            // `.format(` — `"... SELECT ...".format(user)`.
-            Regex::new(&format!(r#""[^"\n]*{sql_statement}[^"\n]*"\s*\.\s*format\s*\("#)).unwrap(),
-            Regex::new(&format!(r#"'[^'\n]*{sql_statement}[^'\n]*'\s*\.\s*format\s*\("#)).unwrap(),
+        // Require SQL grammar, not merely English words that overlap SQL
+        // verbs. Dynamic identifiers cover f-string and template placeholders.
+        let sql_name = r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*";
+        let sql_dynamic_name = r"(?:\{[^{}\r\n]+\}|\$\{[^{}\r\n]+\})";
+        let sql_identifier = format!(r"(?:{sql_name}|{sql_dynamic_name})");
+        let sql_strong_select = format!(
+            r"(?:\*|{sql_name}\s*\([^()\r\n]*\)(?:\s+AS\s+[A-Za-z_][A-Za-z0-9_]*)?|{sql_identifier}\s+AS\s+[A-Za-z_][A-Za-z0-9_]*|{sql_identifier}\s*,\s*{sql_identifier}(?:\s*,\s*{sql_identifier})*)"
+        );
+        let sql_statement_pattern = Regex::new(&format!(
+            r"(?x)\b(?:
+                (?i:SELECT)\s+(?i:DISTINCT\s+)?{sql_strong_select}\s+(?i:FROM)\s+{sql_identifier}(?:\s+(?i:AS)\s+[A-Za-z_][A-Za-z0-9_]*)?
+                |SELECT\s+(?:DISTINCT\s+)?{sql_identifier}\s+FROM\s+{sql_identifier}(?:\s+AS\s+[A-Za-z_][A-Za-z0-9_]*)?
+                |(?i:INSERT\s+INTO)\s+{sql_identifier}
+                |(?i:UPDATE)\s+{sql_identifier}(?:\s+(?i:AS)\s+[A-Za-z_][A-Za-z0-9_]*)?\s+(?i:SET)\s+{sql_identifier}\s*=
+                |(?i:DELETE\s+FROM)\s+{sql_identifier}
+                |(?i:DROP\s+(?:TABLE|DATABASE|INDEX))\s+{sql_identifier}
+                |(?i:ALTER\s+(?:TABLE|DATABASE|INDEX))\s+{sql_identifier}
+            )"
+        ))
+        .unwrap();
+        let sql_string_building_patterns = vec![
+            Regex::new(r#"(?i)f"[^"\n]*\{[^}\n]+\}[^"\n]*""#).unwrap(),
+            Regex::new(r"(?i)f'[^'\n]*\{[^}\n]+\}[^'\n]*'").unwrap(),
+            Regex::new(r#"`[^`\n]*\$\{[^}\n]+\}[^`\n]*`"#).unwrap(),
+            Regex::new(r#""[^"\n]*"\s*%\s*[A-Za-z_(]"#).unwrap(),
+            Regex::new(r#"'[^'\n]*'\s*%\s*[A-Za-z_(]"#).unwrap(),
+            Regex::new(r#""[^"\n]*"\s*\.\s*format\s*\("#).unwrap(),
+            Regex::new(r#"'[^'\n]*'\s*\.\s*format\s*\("#).unwrap(),
         ];
+        let sql_concatenation_operand =
+            r#"(?:"[^"\n]*"|'[^'\n]*'|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"#;
+        let sql_concatenation_pattern = Regex::new(&format!(
+            r"{sql_concatenation_operand}(?:\s*\+\s*{sql_concatenation_operand})+"
+        ))
+        .unwrap();
 
         let dangerous_execution_patterns = vec![
             // Bare eval(...) only. Method calls such as model.eval() are
@@ -228,9 +233,13 @@ impl SecretScanner {
             r#"\brequire\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*\.\s*exec(?:Sync)?\s*\("#,
         )
         .unwrap();
-        let system_call_pattern = Regex::new(r"(^|[^.\w])system\s*\(").unwrap();
+        let system_call_pattern =
+            Regex::new(r"(^|[^.\w])(?P<call>system)\s*\(").unwrap();
         let system_declaration_pattern = Regex::new(
-            r"^\s*(?:extern\s+)?(?:int|void|char|long|short|unsigned|signed|size_t)\s+\**\s*system\s*\([^;{}]*\)\s*;\s*$",
+            r"(?ix)^\s*(?:
+                (?:(?:extern|static|inline)\s+)*(?:(?:unsigned|signed)\s+)?(?:int|void|char|long|short|size_t)\s+\**\s*
+                |(?:(?:public|protected|private|static|final|abstract)\s+)*function\s+
+            )(?P<declaration>system)\s*\([^;{}]*\)\s*(?:;|\{)",
         )
         .unwrap();
         let shell_exec_pattern = Regex::new(r"(^|[^.\w])shell_exec\s*\(").unwrap();
@@ -254,7 +263,9 @@ impl SecretScanner {
             connection_password_pattern,
             mongodb_connection_pattern,
             azure_account_key_pattern,
-            sql_injection_patterns,
+            sql_statement_pattern,
+            sql_string_building_patterns,
+            sql_concatenation_pattern,
             dangerous_execution_patterns,
             child_process_alias_pattern,
             declaration_target_pattern,
@@ -281,6 +292,7 @@ impl SecretScanner {
             let line_number = line_number + 1; // 1-based
             let execution_line = strip_js_comments(line, &mut in_block_comment);
             let execution_code = mask_string_literals(&execution_line);
+            let executable_code = mask_literals_preserving_interpolations(&execution_line);
 
             if let Some(captures) = self.child_process_alias_pattern.captures(&execution_line) {
                 if let Some(alias) = captures.get(1).or_else(|| captures.get(2)) {
@@ -385,7 +397,13 @@ impl SecretScanner {
                 else {
                     continue;
                 };
-                if is_safe_fetch_credentials(name, value) || looks_like_placeholder(value) {
+                let is_expandable_env_reference = supports_unquoted_secrets(file_path)
+                    && captures.name("double").is_some()
+                    && is_environment_reference(value);
+                if is_safe_fetch_credentials(name, value)
+                    || is_expandable_env_reference
+                    || looks_like_placeholder(value)
+                {
                     continue;
                 }
                 if findings.iter().any(|f| f.line == line_number) {
@@ -408,7 +426,9 @@ impl SecretScanner {
                     if let (Some(name), Some(value)) =
                         (captures.name("name"), captures.name("value"))
                     {
-                        if !looks_like_placeholder(value.as_str()) {
+                        if !is_environment_reference(value.as_str())
+                            && !looks_like_placeholder(value.as_str())
+                        {
                             findings.push(SecretFinding {
                                 file_path: file_path.to_string(),
                                 line: line_number,
@@ -480,7 +500,15 @@ impl SecretScanner {
             // layers 1-3 — a line can leak a secret AND build a query
             // unsafely, these are different concerns and neither should
             // suppress the other.
-            if self.sql_injection_patterns.iter().any(|pattern| pattern.is_match(line)) {
+            let has_dynamic_sql = self.sql_string_building_patterns.iter().any(|pattern| {
+                pattern
+                    .find_iter(line)
+                    .any(|matched| self.sql_statement_pattern.is_match(matched.as_str()))
+            }) || self.sql_concatenation_pattern.find_iter(line).any(|matched| {
+                let normalized = normalize_string_concatenation(matched.as_str());
+                self.sql_statement_pattern.is_match(&normalized)
+            });
+            if has_dynamic_sql {
                 findings.push(SecretFinding {
                     file_path: file_path.to_string(),
                     line: line_number,
@@ -499,18 +527,18 @@ impl SecretScanner {
                 .iter()
                 .find(|(label, pattern)| {
                     if *label == "eval()" {
-                        has_bare_call(&execution_code, "eval")
+                        has_bare_call(&executable_code, "eval")
                     } else if *label == "exec()" {
-                        has_bare_call(&execution_code, "exec")
+                        has_bare_call(&executable_code, "exec")
                     } else {
-                        pattern.is_match(&execution_code)
+                        pattern.is_match(&executable_code)
                     }
                 })
                 .map(|(label, _)| *label)
                 .or_else(|| {
                     let imported_method_call = self
                         .child_process_method_pattern
-                        .captures(&execution_code)
+                        .captures(&executable_code)
                         .and_then(|captures| captures.get(1))
                         .is_some_and(|receiver| {
                             child_process_bindings
@@ -527,12 +555,15 @@ impl SecretScanner {
                     .then_some("child_process.exec()")
                 })
                 .or_else(|| {
-                    if is_php_source(file_path) && self.shell_exec_pattern.is_match(&execution_code)
+                    if is_php_source(file_path) && self.shell_exec_pattern.is_match(&executable_code)
                     {
                         Some("shell_exec()")
                     } else if is_system_call_source(file_path)
-                        && self.system_call_pattern.is_match(&execution_code)
-                        && !self.system_declaration_pattern.is_match(&execution_code)
+                        && has_system_call(
+                            &executable_code,
+                            &self.system_call_pattern,
+                            &self.system_declaration_pattern,
+                        )
                     {
                         Some("system()")
                     } else {
@@ -797,6 +828,192 @@ fn mask_string_literals(line: &str) -> String {
     out
 }
 
+fn normalize_string_concatenation(expression: &str) -> String {
+    let chars: Vec<char> = expression.chars().collect();
+    let mut normalized = String::with_capacity(expression.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index].is_whitespace() || chars[index] == '+' {
+            index += 1;
+            continue;
+        }
+        if matches!(chars[index], '\'' | '"') {
+            let quote = chars[index];
+            index += 1;
+            while index < chars.len() && chars[index] != quote {
+                if chars[index] == '\\' && index + 1 < chars.len() {
+                    normalized.push(chars[index]);
+                    index += 1;
+                }
+                normalized.push(chars[index]);
+                index += 1;
+            }
+            index += usize::from(index < chars.len());
+            continue;
+        }
+        if chars[index] == '_' || chars[index].is_ascii_alphabetic() {
+            while index < chars.len()
+                && (chars[index] == '_'
+                    || chars[index] == '.'
+                    || chars[index].is_ascii_alphanumeric())
+            {
+                index += 1;
+            }
+            normalized.push_str("{dynamic}");
+            continue;
+        }
+        index += 1;
+    }
+
+    normalized
+}
+
+fn mask_literals_preserving_interpolations(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = vec![' '; chars.len()];
+    let mut index = 0;
+
+    while index < chars.len() {
+        let quote = chars[index];
+        if !matches!(quote, '\'' | '"' | '`') {
+            out[index] = chars[index];
+            index += 1;
+            continue;
+        }
+
+        let python_fstring = quote != '`' && is_python_fstring_prefix(&chars, index);
+        let delimiter_width = if quote != '`'
+            && chars.get(index + 1) == Some(&quote)
+            && chars.get(index + 2) == Some(&quote)
+        {
+            3
+        } else {
+            1
+        };
+        index += delimiter_width;
+        while index < chars.len() {
+            if chars[index] == '\\' {
+                index = (index + 2).min(chars.len());
+                continue;
+            }
+            let closes_literal = chars[index] == quote
+                && (delimiter_width == 1
+                    || (chars.get(index + 1) == Some(&quote)
+                        && chars.get(index + 2) == Some(&quote)));
+            if closes_literal {
+                index += delimiter_width;
+                break;
+            }
+
+            let expression_start = if quote == '`'
+                && chars[index] == '$'
+                && chars.get(index + 1) == Some(&'{')
+            {
+                Some(index + 2)
+            } else if python_fstring
+                && chars[index] == '{'
+                && chars.get(index + 1) != Some(&'{')
+            {
+                Some(index + 1)
+            } else {
+                None
+            };
+
+            if let Some(start) = expression_start {
+                index = copy_interpolation_expression(&chars, &mut out, start);
+            } else if python_fstring
+                && matches!(chars[index], '{' | '}')
+                && chars.get(index + 1) == Some(&chars[index])
+            {
+                index += 2;
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    out.into_iter().collect()
+}
+
+fn is_python_fstring_prefix(chars: &[char], quote_index: usize) -> bool {
+    let mut prefix_start = quote_index;
+    while prefix_start > 0
+        && quote_index - prefix_start < 2
+        && chars[prefix_start - 1].is_ascii_alphabetic()
+    {
+        prefix_start -= 1;
+    }
+    let prefix: String = chars[prefix_start..quote_index]
+        .iter()
+        .collect::<String>()
+        .to_ascii_lowercase();
+    matches!(prefix.as_str(), "f" | "fr" | "rf")
+        && (prefix_start == 0
+            || !matches!(chars[prefix_start - 1], '_' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
+}
+
+fn copy_interpolation_expression(chars: &[char], out: &mut [char], start: usize) -> usize {
+    let mut index = start;
+    let mut depth = 1usize;
+
+    while index < chars.len() {
+        if chars[index] == '`' {
+            index = copy_template_literal(chars, out, index);
+            continue;
+        }
+        if matches!(chars[index], '\'' | '"') {
+            let quote = chars[index];
+            index += 1;
+            while index < chars.len() {
+                if chars[index] == '\\' {
+                    index = (index + 2).min(chars.len());
+                } else if chars[index] == quote {
+                    index += 1;
+                    break;
+                } else {
+                    index += 1;
+                }
+            }
+            continue;
+        }
+
+        match chars[index] {
+            '{' => {
+                depth += 1;
+                out[index] = chars[index];
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return index + 1;
+                }
+                out[index] = chars[index];
+            }
+            _ => out[index] = chars[index],
+        }
+        index += 1;
+    }
+
+    index
+}
+
+fn copy_template_literal(chars: &[char], out: &mut [char], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < chars.len() {
+        if chars[index] == '\\' {
+            index = (index + 2).min(chars.len());
+        } else if chars[index] == '`' {
+            return index + 1;
+        } else if chars[index] == '$' && chars.get(index + 1) == Some(&'{') {
+            index = copy_interpolation_expression(chars, out, index + 2);
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
 fn pattern_starts_in_code(line: &str, pattern: &Regex) -> bool {
     pattern
         .find_iter(line)
@@ -855,12 +1072,45 @@ fn has_bare_call(line: &str, name: &str) -> bool {
     })
 }
 
+fn has_system_call(line: &str, call_pattern: &Regex, declaration_pattern: &Regex) -> bool {
+    let declaration_start = declaration_pattern
+        .captures(line)
+        .and_then(|captures| captures.name("declaration"))
+        .map(|matched| matched.start());
+    call_pattern
+        .captures_iter(line)
+        .filter_map(|captures| captures.name("call"))
+        .any(|matched| Some(matched.start()) != declaration_start)
+}
+
 fn is_safe_fetch_credentials(name: &str, value: &str) -> bool {
     name.eq_ignore_ascii_case("credentials")
         && matches!(
             value.to_ascii_lowercase().as_str(),
             "omit" | "same-origin" | "same-site" | "include"
         )
+}
+
+fn is_environment_reference(value: &str) -> bool {
+    let trimmed = value.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+        .unwrap_or(trimmed);
+
+    let variable = unquoted
+        .strip_prefix("${")
+        .and_then(|inner| inner.strip_suffix('}'))
+        .or_else(|| unquoted.strip_prefix('$'));
+    variable.is_some_and(is_environment_variable_name)
+}
+
+fn is_environment_variable_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn supports_unquoted_secrets(file_path: &str) -> bool {
@@ -1739,6 +1989,169 @@ cp.exec(userInput);"#,
             "const token = \"identifier\";\nconst secret = \"treasure-map\";",
         );
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn review_detects_dynamic_sql_with_common_select_and_update_grammar() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "queries.py",
+            r#"query = f"SELECT count(*) FROM users WHERE role={role}"
+query = f"SELECT id AS user_id FROM users WHERE id={user_id}"
+query = f"SELECT {column} FROM users"
+query = f"SELECT * FROM {table} WHERE id={user_id}"
+query = f"UPDATE users AS u SET role={role} WHERE id={user_id}""#,
+        );
+        let sql_lines: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.kind == SecretKind::SqlInjection)
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(sql_lines, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn review_detects_execution_inside_template_and_fstring_expressions() {
+        let scanner = scanner();
+        let javascript = scanner.scan_content(
+            "template.js",
+            r#"const evaluated = `${eval(userInput)}`;
+const executed = `${child_process.exec(userInput)}`;
+const inert = `eval(userInput)`;
+const escaped = `\${eval(userInput)}`;"#,
+        );
+        let javascript_exec_lines: Vec<_> = javascript
+            .iter()
+            .filter(|finding| matches!(finding.kind, SecretKind::DangerousExecution(_)))
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(javascript_exec_lines, vec![1, 2]);
+
+        let python = scanner.scan_content(
+            "template.py",
+            "evaluated = f\"{eval(user_input)}\"\ninert = \"{eval(user_input)}\"",
+        );
+        let python_exec_lines: Vec<_> = python
+            .iter()
+            .filter(|finding| matches!(finding.kind, SecretKind::DangerousExecution("eval()")))
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(python_exec_lines, vec![1]);
+    }
+
+    #[test]
+    fn review_env_variable_references_are_not_hardcoded_secrets() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            ".env",
+            "DATABASE_PASSWORD=${DB_PASSWORD}\nAPI_KEY=$API_KEY\nDATABASE_PASSWORD=\"${DB_PASSWORD}\"",
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn review_system_function_definitions_are_not_calls() {
+        let scanner = scanner();
+        let c = scanner.scan_content(
+            "compat.c",
+            "int system(const char *command) { return 0; }",
+        );
+        assert!(c.is_empty());
+
+        let php = scanner.scan_content(
+            "compat.php",
+            "function system($command) { return 0; }",
+        );
+        assert!(php.is_empty());
+    }
+
+    #[test]
+    fn review_detects_sql_across_multi_operand_concatenation() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "queries.py",
+            r#"query = "SELECT * FROM " + table + " WHERE id = " + user_id
+query = "SELECT " + column + " FROM users""#,
+        );
+        let sql_lines: Vec<_> = findings
+            .iter()
+            .filter(|finding| finding.kind == SecretKind::SqlInjection)
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(sql_lines, vec![1, 2]);
+    }
+
+    #[test]
+    fn review_dynamic_ui_copy_is_not_sql_injection() {
+        let scanner = scanner();
+        let findings = scanner.scan_content(
+            "ui_text.py",
+            r#"label = f"Select {item} from menu""#,
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn review_detects_execution_in_triple_fstrings_and_nested_templates() {
+        let scanner = scanner();
+        let python = scanner.scan_content(
+            "template.py",
+            r#"query = f"""{eval(user_input)}""""#,
+        );
+        assert!(python
+            .iter()
+            .any(|finding| matches!(finding.kind, SecretKind::DangerousExecution("eval()"))));
+
+        let javascript = scanner.scan_content(
+            "template.js",
+            r#"const value = `${`nested ${eval(userInput)}`}`;"#,
+        );
+        assert!(javascript
+            .iter()
+            .any(|finding| matches!(finding.kind, SecretKind::DangerousExecution("eval()"))));
+    }
+
+    #[test]
+    fn review_system_declaration_does_not_hide_later_calls_on_the_same_line() {
+        let scanner = scanner();
+        let c = scanner.scan_content(
+            "compat.c",
+            "int system(const char *command); int rc = system(user_input);\nint system(const char *command) { return system(command); }",
+        );
+        let c_lines: Vec<_> = c
+            .iter()
+            .filter(|finding| matches!(finding.kind, SecretKind::DangerousExecution("system()")))
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(c_lines, vec![1, 2]);
+
+        let php = scanner.scan_content(
+            "compat.php",
+            r#"function system($command) { return \system($command); }"#,
+        );
+        assert!(php
+            .iter()
+            .any(|finding| matches!(finding.kind, SecretKind::DangerousExecution("system()"))));
+    }
+
+    #[test]
+    fn review_literal_environment_syntax_outside_shell_expansion_is_flagged() {
+        let scanner = scanner();
+        let env = scanner.scan_content(".env", "PASSWORD='$DB_PASSWORD'");
+        assert!(env
+            .iter()
+            .any(|finding| finding.kind == SecretKind::HardcodedAssignment));
+
+        let javascript = scanner.scan_content(
+            "config.js",
+            "const password = '$DB_PASSWORD';\nconst api_key = \"${API_KEY}\";",
+        );
+        let assignment_lines: Vec<_> = javascript
+            .iter()
+            .filter(|finding| finding.kind == SecretKind::HardcodedAssignment)
+            .map(|finding| finding.line)
+            .collect();
+        assert_eq!(assignment_lines, vec![1, 2]);
     }
 
     // ─── Layer 6: permissive IAM ───────────────────────────────────────────────
