@@ -90,3 +90,23 @@ let canonical = format!("{plan}:{valid_until}:{issued_at}:{user_id}:{device_id}"
 ```
 fix(auth): bind entitlement signature to device_id to prevent cross-device copy
 ```
+
+---
+
+## 执行结果（2026-07-10）
+
+- 状态：P1-7 代码与合同门禁 GREEN；发布安全 BLOCKED。
+- canonical 签名字段已加入 `device_id`，并冻结为八字段字典序 UTF-8 compact JSON + Ed25519 + standard Base64；篡改设备绑定或使用未覆盖 `device_id` 的旧签名都会验签失败。
+- CLI 不再覆盖服务端返回的已签名 `device_id`；登录、支付查询和刷新 mock 按请求设备生成匹配签名。
+- `device_id` 改为对 UTF-8 `trim(device_secret)|os|machine_identity` 计算 SHA-256 小写十六进制：macOS 使用 `IOPlatformUUID`，Linux 使用 `machine-id`，Windows 使用 `MachineGuid`；读取失败时 fail-closed 到 `device_mismatch`，不再使用主机名环境变量或 `unknown-host`。
+- 旧授权策略：不保留兼容验签路径，旧授权进入 `invalid`，必须重新执行 `audit-risk auth login`。
+- 发布阻塞：当前 release verifier 信任的公钥所对应测试私钥已存在于仓库历史，源码持有者仍可伪造新授权。恢复条件是由 auth 服务端生成并保管新的 Ed25519 私钥，只把新公钥写入客户端并完成服务端签发联调；禁止把新私钥写入仓库、日志或本地验收产物。
+
+Fresh 验证：
+
+```bash
+cargo test --manifest-path engine/Cargo.toml
+cargo +1.97.0 clippy --manifest-path engine/Cargo.toml --all-targets -- -D warnings
+```
+
+两条命令均通过。跨设备复制由自动化测试使用“相同 `device_secret`、不同 `machine_identity`”模拟；同一台机器仅把目录复制到 `/tmp` 不会改变机器身份，因此不能作为跨设备验收证据，也不应通过绑定目录路径来人为制造失败。以上结果只证明代码与合同链路，不替代新签名密钥的服务端联调和发布验收。

@@ -1,7 +1,7 @@
 /// Entitlement signature verification.
 ///
 /// The server signs a **canonical subset** of the entitlement document:
-///   { features, issued_at, last_refresh_time, plan, status, user_id, valid_until }
+///   { device_id, features, issued_at, last_refresh_time, plan, status, user_id, valid_until }
 /// serialised as compact JSON with keys in lexicographic order (BTreeMap).
 ///
 /// `last_refresh_time` MUST be signed: it is what gates whether the CLI
@@ -13,11 +13,9 @@
 /// entire remainder of its original `valid_until` + grace window, which can
 /// be arbitrarily long depending on plan length.
 ///
-/// `device_id` is intentionally excluded from the signed payload — it is
-/// derived on the client side from the local device_secret and is verified
-/// separately against the stored value.  The server vouches for "this user
-/// has this plan until this date, as of this refresh time"; the device
-/// binding is a client-side gate on top of that.
+/// `device_id` MUST be signed. Otherwise a copied entitlement can replace the
+/// stored device id with one derived on another machine while retaining a
+/// valid server signature.
 ///
 /// `payment_pending` and `next_billing_at` are intentionally excluded —
 /// they are display-only hints and never participate in `is_pro_allowed()`,
@@ -50,7 +48,16 @@ pub fn extract_canonical_signing_payload(raw_json: &str) -> Option<String> {
     let obj = value.as_object()?;
 
     let mut payload: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
-    for key in ["features", "issued_at", "last_refresh_time", "plan", "status", "user_id", "valid_until"] {
+    for key in [
+        "device_id",
+        "features",
+        "issued_at",
+        "last_refresh_time",
+        "plan",
+        "status",
+        "user_id",
+        "valid_until",
+    ] {
         payload.insert(key, obj.get(key)?.clone());
     }
 
@@ -114,10 +121,15 @@ pub fn entitlement_signature_is_valid(raw_entitlement_json: &str, signature_b64:
 /// `load_entitlement_status_from_dir` will accept them.
 #[cfg(test)]
 pub fn sign_for_test(raw_entitlement_json: &str) -> String {
-    use ed25519_dalek::{Signer, SigningKey};
-
     let canonical = extract_canonical_signing_payload(raw_entitlement_json)
         .expect("sign_for_test: JSON must contain required entitlement fields");
+
+    sign_canonical_for_test(&canonical)
+}
+
+#[cfg(test)]
+fn sign_canonical_for_test(canonical: &str) -> String {
+    use ed25519_dalek::{Signer, SigningKey};
 
     let priv_bytes = B64
         .decode("cMfSrF12tNvxmdMtD2gp1b4zL/gQ9Iexdyn0VgocUuo=")
@@ -128,39 +140,28 @@ pub fn sign_for_test(raw_entitlement_json: &str) -> String {
     B64.encode(sig.to_bytes())
 }
 
-/// Pre-compute the canonical-payload signature for a known fixed document
-/// (used to generate the constants embedded in mock:// responses).
-/// Only used during development to derive the hardcoded sigs below.
-#[cfg(test)]
-#[allow(dead_code)]
-fn compute_sig_for_mock(
-    user_id: &str,
-    plan: &str,
-    features: &[&str],
-    issued_at: &str,
-    valid_until: &str,
-    status: &str,
-) -> String {
-    let features_json: Vec<serde_json::Value> =
-        features.iter().map(|f| serde_json::Value::String(f.to_string())).collect();
-    let doc = serde_json::json!({
-        "user_id": user_id,
-        "plan": plan,
-        "features": features_json,
-        "issued_at": issued_at,
-        "valid_until": valid_until,
-        "status": status,
-        "device_id": "__placeholder__",
-        "last_refresh_time": issued_at,
-        "payment_pending": false,
-        "next_billing_at": null,
-    });
-    sign_for_test(&doc.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sign_legacy_payload_without_device_id(raw_entitlement_json: &str) -> String {
+        let value: serde_json::Value = serde_json::from_str(raw_entitlement_json).unwrap();
+        let obj = value.as_object().unwrap();
+        let mut payload: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
+        for key in [
+            "features",
+            "issued_at",
+            "last_refresh_time",
+            "plan",
+            "status",
+            "user_id",
+            "valid_until",
+        ] {
+            payload.insert(key, obj.get(key).unwrap().clone());
+        }
+        let canonical = serde_json::to_string(&payload).unwrap();
+        sign_canonical_for_test(&canonical)
+    }
 
     fn make_entitlement(plan: &str, status: &str, features: &[&str]) -> String {
         serde_json::json!({
@@ -231,16 +232,37 @@ mod tests {
     }
 
     #[test]
-    fn different_device_id_does_not_affect_signature() {
-        // device_id is excluded from canonical payload — changing it must not
-        // invalidate the signature.
+    fn tampered_device_id_invalidates_signature() {
         let json1 = make_entitlement("pro_personal_monthly", "active", &["observe"]);
         let sig = sign_for_test(&json1);
         let json2 = json1.replace("some-device-id", "completely-different-device");
-        assert_eq!(
+        assert_ne!(
             verify_entitlement_signature(&json2, &sig),
             SignatureVerifyResult::Valid,
-            "device_id change must not invalidate signature"
+            "device_id must be covered by the entitlement signature"
+        );
+    }
+
+    #[test]
+    fn canonical_payload_matches_server_byte_contract() {
+        let json = make_entitlement("pro_personal_monthly", "active", &["observe"]);
+        assert_eq!(
+            extract_canonical_signing_payload(&json).as_deref(),
+            Some(
+                r#"{"device_id":"some-device-id","features":["observe"],"issued_at":"2026-01-01T00:00:00Z","last_refresh_time":"2026-01-01T00:00:00Z","plan":"pro_personal_monthly","status":"active","user_id":"u1","valid_until":"2999-01-01T00:00:00Z"}"#
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_signature_without_device_binding_is_rejected() {
+        let json = make_entitlement("pro_personal_monthly", "active", &["observe"]);
+        let legacy_sig = sign_legacy_payload_without_device_id(&json);
+
+        assert_ne!(
+            verify_entitlement_signature(&json, &legacy_sig),
+            SignatureVerifyResult::Valid,
+            "legacy entitlements must be re-issued with a device-bound signature"
         );
     }
 
@@ -290,48 +312,4 @@ mod tests {
         assert!(!entitlement_signature_is_valid("not-json", "AAAA"));
     }
 
-    /// Helper: print the canonical sigs for all mock:// scenarios.
-    /// Run with `cargo test print_canonical_sigs -- --nocapture` to regenerate
-    /// the hardcoded constants used in auth_http_json mock responses.
-    #[test]
-    fn print_canonical_sigs_for_mock_responses() {
-        let scenarios = [
-            ("mock://approved exchange / payment-pending payment/query / payment-pending final",
-             serde_json::json!({
-                 "user_id":"user-1","plan":"pro_personal_monthly",
-                 "features":["observe","notify"],
-                 "issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z",
-                 "status":"active","device_id":"__x__","last_refresh_time":"2026-06-27T00:00:00Z",
-                 "payment_pending":false,"next_billing_at":"2999-01-31T00:00:00Z"
-             }).to_string()),
-            ("mock://refresh-active",
-             serde_json::json!({
-                 "user_id":"user-1","plan":"pro_personal_monthly",
-                 "features":["observe","notify"],
-                 "issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z",
-                 "status":"active","device_id":"__x__","last_refresh_time":"2999-01-01T00:00:00Z",
-                 "payment_pending":false,"next_billing_at":"2999-01-31T00:00:00Z"
-             }).to_string()),
-            ("mock://refresh-revoked",
-             serde_json::json!({
-                 "user_id":"user-1","plan":"pro_personal_monthly",
-                 "features":["observe"],
-                 "issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z",
-                 "status":"revoked","device_id":"__x__","last_refresh_time":"2999-01-01T00:00:00Z",
-                 "payment_pending":false,"next_billing_at":"2999-01-31T00:00:00Z"
-             }).to_string()),
-            ("mock://payment-pending/exchange and mock://payment-timeout/exchange (core_free)",
-             serde_json::json!({
-                 "user_id":"user-1","plan":"core_free",
-                 "features":[],
-                 "issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z",
-                 "status":"active","device_id":"__x__","last_refresh_time":"2026-06-27T00:00:00Z",
-                 "payment_pending":false,"next_billing_at":"2999-01-31T00:00:00Z"
-             }).to_string()),
-        ];
-        for (label, json) in &scenarios {
-            let sig = sign_for_test(json);
-            println!("{label}\n  sig = {sig}\n");
-        }
-    }
 }

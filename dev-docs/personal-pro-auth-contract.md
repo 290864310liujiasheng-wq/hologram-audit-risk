@@ -88,7 +88,10 @@ interface AuthSessionDocument {
 
 `device_id` 规则：
 
-- `SHA256(device_secret + os + hostname)`
+- exact bytes 为 UTF-8 `trim(device_secret) + "|" + os + "|" + machine_identity`，输出 SHA-256 小写十六进制；`os` 使用 Rust `std::env::consts::OS` 原值，`machine_identity` 去除来源格式的外围空白后保留原始大小写。
+- `machine_identity` 必须来自操作系统稳定标识：macOS 使用 `IOPlatformUUID`，Linux 使用 `machine-id`，Windows 使用 `MachineGuid`；读取失败时进入授权不可用状态，禁止退化到环境变量或共享占位值。
+- 服务端签名的 canonical payload 必须包含 `device_id`，并按八字段键名字典序序列化为 UTF-8 compact JSON exact bytes，使用标准 JSON escaping、Ed25519 和 standard Base64；CLI 不得覆盖服务端返回的已签名 `device_id`，只负责验签并与当前设备派生值比较。
+- 不兼容未覆盖 `device_id` 的旧签名；旧授权进入 `invalid`，用户必须重新执行 `audit-risk auth login` 完成设备绑定。
 
 ## CLI 状态机
 

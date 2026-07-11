@@ -4220,6 +4220,16 @@ fn load_auth_session_from_dir(dir: &Path) -> Option<AuthSessionStatus> {
 }
 
 fn load_entitlement_status_from_dir(dir: &Path) -> EntitlementStatus {
+    load_entitlement_status_from_dir_with_expected_device_id(
+        dir,
+        derive_device_id_for_dir(dir),
+    )
+}
+
+fn load_entitlement_status_from_dir_with_expected_device_id(
+    dir: &Path,
+    expected_device_id: Result<String, CliRuntimeError>,
+) -> EntitlementStatus {
     let json_path = dir.join("entitlement.json");
     let sig_path = dir.join("entitlement.sig");
     let device_secret_path = dir.join("device_secret");
@@ -4325,8 +4335,6 @@ fn load_entitlement_status_from_dir(dir: &Path) -> EntitlementStatus {
     let valid_until = Some(document.valid_until.clone());
     let next_billing_at = document.next_billing_at.clone();
     let payment_pending = document.payment_pending;
-    let expected_device_id = derive_device_id_for_dir(dir).ok();
-    let stored_device_id = Some(document.device_id.clone());
     let remote_status = document.status.as_str();
 
     if remote_status == "revoked" {
@@ -4350,17 +4358,31 @@ fn load_entitlement_status_from_dir(dir: &Path) -> EntitlementStatus {
         };
     }
 
-    if let (Some(expected), Some(stored)) = (expected_device_id.as_deref(), stored_device_id.as_deref()) {
-        if expected != stored {
+    let expected_device_id = match expected_device_id {
+        Ok(device_id) => device_id,
+        Err(error) => {
             return EntitlementStatus {
                 state: EntitlementState::DeviceMismatch,
                 plan,
                 valid_until,
                 next_billing_at,
                 payment_pending,
-                reason: "授权绑定的 device_id 与当前设备不一致，请重新运行 audit-risk auth login。".to_string(),
+                reason: format!(
+                    "无法确认当前设备身份：{}。请重新运行 audit-risk auth login。",
+                    error.message
+                ),
             };
         }
+    };
+    if expected_device_id != document.device_id {
+        return EntitlementStatus {
+            state: EntitlementState::DeviceMismatch,
+            plan,
+            valid_until,
+            next_billing_at,
+            payment_pending,
+            reason: "授权绑定的 device_id 与当前设备不一致，请重新运行 audit-risk auth login。".to_string(),
+        };
     }
 
     let Some(valid_until_raw) = valid_until.as_deref() else {
@@ -4418,11 +4440,130 @@ fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 fn derive_device_id_for_dir(dir: &Path) -> Result<String, CliRuntimeError> {
     let secret = fs::read_to_string(dir.join("device_secret"))
         .map_err(|error| CliRuntimeError::environment(format!("无法读取 device_secret：{error}")))?;
-    let hostname = std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .unwrap_or_else(|_| "unknown-host".to_string());
-    let source = format!("{}|{}|{}", secret.trim(), std::env::consts::OS, hostname);
-    Ok(sha256_hex(source.as_bytes()))
+    let machine_identity = current_machine_identity()?;
+    Ok(derive_device_id(
+        secret.trim(),
+        std::env::consts::OS,
+        &machine_identity,
+    ))
+}
+
+fn derive_device_id(secret: &str, os: &str, machine_identity: &str) -> String {
+    let source = format!("{secret}|{os}|{machine_identity}");
+    sha256_hex(source.as_bytes())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_ioreg_platform_uuid(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        if key.trim().trim_matches('"') != "IOPlatformUUID" {
+            return None;
+        }
+        let value = value.trim().trim_matches('"').trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_windows_machine_guid(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != "MachineGuid" || fields.next()? != "REG_SZ" {
+            return None;
+        }
+        let value = fields.next()?;
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn current_machine_identity() -> Result<String, CliRuntimeError> {
+    let output = Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .map_err(|error| CliRuntimeError::environment(format!("无法读取 macOS 设备标识：{error}")))?;
+    if !output.status.success() {
+        return Err(CliRuntimeError::environment(format!(
+            "读取 macOS 设备标识失败，ioreg 退出码为 {}。",
+            output.status.code().unwrap_or(-1)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_ioreg_platform_uuid(&stdout)
+        .ok_or_else(|| CliRuntimeError::environment("ioreg 未返回 IOPlatformUUID，无法绑定授权设备。"))
+}
+
+#[cfg(target_os = "linux")]
+fn current_machine_identity() -> Result<String, CliRuntimeError> {
+    for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+        if let Ok(value) = fs::read_to_string(path) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Ok(value.to_string());
+            }
+        }
+    }
+    Err(CliRuntimeError::environment(
+        "无法读取 Linux machine-id，不能安全绑定授权设备。",
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn current_machine_identity() -> Result<String, CliRuntimeError> {
+    let output = Command::new(windows_system_directory()?.join("reg.exe"))
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Cryptography",
+            "/v",
+            "MachineGuid",
+        ])
+        .output()
+        .map_err(|error| CliRuntimeError::environment(format!("无法读取 Windows 设备标识：{error}")))?;
+    if !output.status.success() {
+        return Err(CliRuntimeError::environment(format!(
+            "读取 Windows 设备标识失败，reg 退出码为 {}。",
+            output.status.code().unwrap_or(-1)
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_windows_machine_guid(&stdout)
+        .ok_or_else(|| CliRuntimeError::environment("注册表未返回 MachineGuid，无法绑定授权设备。"))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_system_directory() -> Result<PathBuf, CliRuntimeError> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;
+    }
+
+    let mut buffer = vec![0u16; 260];
+    loop {
+        let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        if length == 0 {
+            return Err(CliRuntimeError::environment(
+                "Windows GetSystemDirectoryW 失败，无法安全读取 MachineGuid。",
+            ));
+        }
+        if (length as usize) < buffer.len() {
+            return Ok(PathBuf::from(OsString::from_wide(
+                &buffer[..length as usize],
+            )));
+        }
+        buffer.resize(length as usize + 1, 0);
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn current_machine_identity() -> Result<String, CliRuntimeError> {
+    Err(CliRuntimeError::environment(format!(
+        "当前操作系统 `{}` 暂不支持稳定设备绑定。",
+        std::env::consts::OS
+    )))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -5532,12 +5673,11 @@ fn refresh_entitlement_for_dir(
         user_id: current.user_id,
         device_id: device_id.clone(),
     };
-    let mut refresh: AuthEntitlementEnvelope = auth_http_json_typed(
+    let refresh: AuthEntitlementEnvelope = auth_http_json_typed(
         "POST",
         &format!("{}/api/entitlement/refresh", base_url.trim_end_matches('/')),
         Some(&refresh_body),
     )?;
-    refresh.entitlement.device_id = device_id;
     let entitlement_value = serde_json::to_value(&refresh.entitlement)
         .map_err(|error| CliRuntimeError::internal(format!("无法编码 refreshed entitlement：{error}")))?;
     persist_entitlement_result(dir, &entitlement_value, &refresh.signature)?;
@@ -5569,7 +5709,6 @@ fn complete_auth_exchange(
         &format!("{}/api/auth/exchange", base_url.trim_end_matches('/')),
         Some(&exchange_body),
     )?;
-    exchange_result.entitlement.device_id = device_id.clone();
     // The server is the source of truth for user_id — it comes back on the
     // exchange response itself, never hardcode a placeholder here.
     let user_id = exchange_result.entitlement.user_id.clone();
@@ -5588,7 +5727,6 @@ fn complete_auth_exchange(
             return Err(error);
         }
     };
-    exchange_result.entitlement.device_id = device_id;
     let entitlement_value = serde_json::to_value(&exchange_result.entitlement)
         .map_err(|error| CliRuntimeError::internal(format!("无法编码最终 entitlement：{error}")))?;
     let (entitlement_path, signature_path) =
@@ -5648,6 +5786,32 @@ fn payment_query_attempts(_base_url: &str) -> usize {
     6
 }
 
+#[cfg(test)]
+fn signed_mock_entitlement(mut entitlement: Value, device_id: &str) -> Value {
+    entitlement["device_id"] = Value::String(device_id.to_string());
+    let raw = serde_json::to_string(&entitlement).expect("mock entitlement must serialize");
+    let signature = crate::entitlement::sign_for_test(&raw);
+    json!({
+        "entitlement": entitlement,
+        "signature": signature,
+    })
+}
+
+#[cfg(test)]
+fn mock_request_device_id(body: Option<&Value>) -> Result<&str, CliRuntimeError> {
+    body.and_then(|value| value.get("device_id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliRuntimeError::internal("mock auth request missing device_id"))
+}
+
+#[cfg(test)]
+fn mock_query_device_id(url: &str) -> Result<&str, CliRuntimeError> {
+    url.split_once("device_id=")
+        .map(|(_, value)| value.split('&').next().unwrap_or(value))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CliRuntimeError::internal("mock payment query missing device_id"))
+}
+
 fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value, CliRuntimeError> {
     #[cfg(test)]
     {
@@ -5693,100 +5857,94 @@ fn auth_http_json(method: &str, url: &str, body: Option<&Value>) -> Result<Value
         }));
     }
     if url == "mock://approved/api/auth/exchange" {
-        return Ok(json!({
-            "entitlement": {
+        return Ok(signed_mock_entitlement(
+            json!({
                 "user_id": "user-1",
                 "plan": "pro_personal_monthly",
                 "features": ["observe", "notify"],
                 "issued_at": "2026-06-27T00:00:00Z",
                 "valid_until": "2999-01-01T00:00:00Z",
-                "device_id": "__DEVICE_ID__",
                 "last_refresh_time": "2026-06-27T00:00:00Z",
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
-            },
-            "signature": "tEeoeuo4uZvt2y5YzziEHqk8wyK9ERcmtlBEelo3061qnzruxT4VKix0N76oxva16d021MXZsFvaOg2fdGEABA=="
-        }));
+            }),
+            mock_request_device_id(body)?,
+        ));
     }
     if url == "mock://refresh-active/api/entitlement/refresh" {
-        return Ok(json!({
-            "entitlement": {
+        return Ok(signed_mock_entitlement(
+            json!({
                 "user_id": "user-1",
                 "plan": "pro_personal_monthly",
                 "features": ["observe", "notify"],
                 "issued_at": "2026-06-27T00:00:00Z",
                 "valid_until": "2999-01-01T00:00:00Z",
-                "device_id": "__DEVICE_ID__",
                 "last_refresh_time": "2999-01-01T00:00:00Z",
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
-            },
-            "signature": "tr7VZaqXk6Uf2r6rt8y+GAgDL0oGQ0s8NGtCx/2e8oFOC0rnfC1Di+SrG1l08UrI9WlZgjZxEhFdLAxCDxLfCA=="
-        }));
+            }),
+            mock_request_device_id(body)?,
+        ));
     }
     if url == "mock://refresh-revoked/api/entitlement/refresh" {
-        return Ok(json!({
-            "entitlement": {
+        return Ok(signed_mock_entitlement(
+            json!({
                 "user_id": "user-1",
                 "plan": "pro_personal_monthly",
                 "features": ["observe"],
                 "issued_at": "2026-06-27T00:00:00Z",
                 "valid_until": "2999-01-01T00:00:00Z",
-                "device_id": "__DEVICE_ID__",
                 "last_refresh_time": "2999-01-01T00:00:00Z",
                 "status": "revoked",
                 "next_billing_at": "2999-01-31T00:00:00Z"
-            },
-            "signature": "zOkTncKPnbWDGxFdMY6QmFDLVumi5QRza9x2JKXr49myx4Y0buzx44mj7NOnkvF+EQV4eX1clQY2+jxV6GPbAA=="
-        }));
+            }),
+            mock_request_device_id(body)?,
+        ));
     }
     if url == "mock://payment-pending/api/auth/exchange" || url == "mock://payment-timeout/api/auth/exchange" {
-        return Ok(json!({
-            "entitlement": {
+        return Ok(signed_mock_entitlement(
+            json!({
                 "user_id": "user-1",
                 "plan": "core_free",
                 "features": [],
                 "issued_at": "2026-06-27T00:00:00Z",
                 "valid_until": "2999-01-01T00:00:00Z",
-                "device_id": "__DEVICE_ID__",
                 "last_refresh_time": "2026-06-27T00:00:00Z",
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
-            },
-            "signature": "VjxBSBheTBNcn1KZgll4HmsYyxDfyt+tmzLPwKptBI7bPear/mE5/o2yAf+d2TCANe3HUPHvxtLoOR7cZCgzDw=="
-        }));
+            }),
+            mock_request_device_id(body)?,
+        ));
     }
     if url.starts_with("mock://payment-pending/api/payment/query?") {
-        return Ok(json!({
-            "entitlement": {
+        return Ok(signed_mock_entitlement(
+            json!({
                 "user_id": "user-1",
                 "plan": "pro_personal_monthly",
                 "features": ["observe", "notify"],
                 "issued_at": "2026-06-27T00:00:00Z",
                 "valid_until": "2999-01-01T00:00:00Z",
-                "device_id": "__DEVICE_ID__",
                 "last_refresh_time": "2026-06-27T00:00:00Z",
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
-            },
-            "signature": "tEeoeuo4uZvt2y5YzziEHqk8wyK9ERcmtlBEelo3061qnzruxT4VKix0N76oxva16d021MXZsFvaOg2fdGEABA=="
-        }));
+            }),
+            mock_query_device_id(url)?,
+        ));
     }
     if url.starts_with("mock://payment-timeout/api/payment/query?") {
-        return Ok(json!({
-            "entitlement": {
+        return Ok(signed_mock_entitlement(
+            json!({
                 "user_id": "user-1",
                 "plan": "core_free",
                 "features": [],
                 "issued_at": "2026-06-27T00:00:00Z",
                 "valid_until": "2999-01-01T00:00:00Z",
-                "device_id": "__DEVICE_ID__",
                 "last_refresh_time": "2026-06-27T00:00:00Z",
                 "status": "active",
                 "next_billing_at": "2999-01-31T00:00:00Z"
-            },
-            "signature": "VjxBSBheTBNcn1KZgll4HmsYyxDfyt+tmzLPwKptBI7bPear/mE5/o2yAf+d2TCANe3HUPHvxtLoOR7cZCgzDw=="
-        }));
+            }),
+            mock_query_device_id(url)?,
+        ));
     }
     }
 
@@ -6092,6 +6250,100 @@ mod tests {
         let sig = crate::entitlement::sign_for_test(json);
         std::fs::write(dir.join("entitlement.json"), json).expect("entitlement.json");
         std::fs::write(dir.join("entitlement.sig"), sig).expect("entitlement.sig");
+    }
+
+    #[test]
+    fn parses_macos_platform_uuid_from_ioreg_output() {
+        let output = r#"    "IOPlatformUUID" = "A1B2C3D4-E5F6-47A8-9012-3456789ABCDE""#;
+        assert_eq!(
+            super::parse_ioreg_platform_uuid(output).as_deref(),
+            Some("A1B2C3D4-E5F6-47A8-9012-3456789ABCDE")
+        );
+    }
+
+    #[test]
+    fn parses_windows_machine_guid_from_registry_output() {
+        let output = "    MachineGuid    REG_SZ    a1b2c3d4-e5f6-47a8-9012-3456789abcde";
+        assert_eq!(
+            super::parse_windows_machine_guid(output).as_deref(),
+            Some("a1b2c3d4-e5f6-47a8-9012-3456789abcde")
+        );
+    }
+
+    #[test]
+    fn current_platform_exposes_stable_machine_identity() {
+        let identity = super::current_machine_identity().expect("stable machine identity");
+        assert!(!identity.trim().is_empty());
+        assert_ne!(identity, "unknown-host");
+    }
+
+    #[test]
+    fn copied_entitlement_is_rejected_on_another_machine() {
+        let root_path = std::env::temp_dir().join(format!(
+            "audit-risk-copied-entitlement-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root_path).expect("entitlement root");
+        std::fs::write(root_path.join("device_secret"), "copied-secret").expect("device secret");
+
+        let source_device = super::derive_device_id("copied-secret", "macos", "source-machine");
+        let target_device = super::derive_device_id("copied-secret", "macos", "target-machine");
+        let source_entitlement = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{source_device}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#
+        );
+        write_signed_entitlement(&root_path, &source_entitlement);
+
+        let copied = super::load_entitlement_status_from_dir_with_expected_device_id(
+            &root_path,
+            Ok(target_device.clone()),
+        );
+        assert!(matches!(copied.state, super::EntitlementState::DeviceMismatch));
+        assert!(!copied.is_pro_allowed());
+
+        let mut rebound: serde_json::Value =
+            serde_json::from_str(&source_entitlement).expect("source entitlement");
+        rebound["device_id"] = serde_json::Value::String(target_device);
+        std::fs::write(root_path.join("entitlement.json"), rebound.to_string())
+            .expect("rebound entitlement");
+        let tampered = super::load_entitlement_status_from_dir_with_expected_device_id(
+            &root_path,
+            Ok(super::derive_device_id(
+                "copied-secret",
+                "macos",
+                "target-machine",
+            )),
+        );
+        assert!(matches!(tampered.state, super::EntitlementState::Invalid));
+        assert!(!tampered.is_pro_allowed());
+
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn machine_identity_lookup_failure_never_allows_pro() {
+        let root_path = std::env::temp_dir().join(format!(
+            "audit-risk-device-identity-error-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root_path).expect("entitlement root");
+        std::fs::write(root_path.join("device_secret"), "device-secret").expect("device secret");
+        let device_id = super::derive_device_id("device-secret", "macos", "source-machine");
+        let entitlement = format!(
+            r#"{{"user_id":"user-1","plan":"pro_personal_monthly","features":["observe"],"issued_at":"2026-06-27T00:00:00Z","valid_until":"2999-01-01T00:00:00Z","device_id":"{device_id}","last_refresh_time":"2026-06-27T00:00:00Z","status":"active","next_billing_at":"2999-01-31T00:00:00Z"}}"#
+        );
+        write_signed_entitlement(&root_path, &entitlement);
+
+        let status = super::load_entitlement_status_from_dir_with_expected_device_id(
+            &root_path,
+            Err(super::CliRuntimeError::environment(
+                "machine identity unavailable",
+            )),
+        );
+        assert!(matches!(status.state, super::EntitlementState::DeviceMismatch));
+        assert!(!status.is_pro_allowed());
+        assert!(status.reason.contains("machine identity unavailable"));
+
+        let _ = std::fs::remove_dir_all(&root_path);
     }
 
     #[test]

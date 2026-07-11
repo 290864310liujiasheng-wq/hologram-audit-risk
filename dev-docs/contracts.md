@@ -460,6 +460,9 @@ interface PersonalEntitlement {
 - 本地 entitlement 目录固定为 `{app_support_dir}/audit-risk/entitlement/`，最少包含 `entitlement.json`、`entitlement.sig`、`device_secret` 三个文件。
 - `session.json` 为登录中会话缓存，至少包含 `session_id / status / created_at / expires_at / poll_url / exchange_url / login_url`；`expires_at` 过期后不能继续显示“登录进行中”。
 - `device_secret` 为首次登录生成的本机随机值，独立文件保存；丢失或 `device_id` 不匹配后必须进入 `device_mismatch`，提示重新 `audit-risk auth login`。
+- `device_id` 的 exact 输入为 UTF-8 `trim(device_secret) + "|" + os + "|" + machine_identity`，对这些字节计算 SHA-256 并输出小写十六进制；`os` 使用 Rust `std::env::consts::OS` 原值，`machine_identity` 去除来源格式的外围空白后保留原始大小写。`machine_identity` 必须来自 macOS `IOPlatformUUID`、Linux `machine-id` 或 Windows `MachineGuid`，不得使用可覆盖的主机名环境变量或 `unknown-host` 占位值。
+- entitlement canonical 签名字段固定包含 `device_id / features / issued_at / last_refresh_time / plan / status / user_id / valid_until`。服务端必须按键名字典序输出 UTF-8 compact JSON（无额外空白，字符串使用标准 JSON escaping），对这些 exact bytes 生成 Ed25519 签名，再以 standard Base64 编码 64 字节签名；CLI 使用同一字节合同验签，且不得改写服务端返回的已签名 `device_id`。
+- 未覆盖 `device_id` 的旧签名不做兼容，必须进入 `invalid` 并要求重新登录绑定设备。
 - 服务端 entitlement 的 `status` 当前只接受 `active / revoked`；本地状态机固定为 `active / grace / expired / revoked / device_mismatch / missing / invalid`，其中 `grace/expired` 由 `valid_until` 与 72 小时宽限期派生，未知远端 status 必须进入 `invalid`，不能放行 Pro。
 - `payment_pending=true` 且 `plan=core_free` 时，`auth status` 必须显示“支付确认中”，不能退回泛化未登录。
 - `auth login` 的浏览器流程、邮箱/手机号验证码、微信支付/支付宝、`GET /api/auth/poll`、`POST /api/auth/exchange`、`POST /api/entitlement/refresh` 的接口合同已经冻结，但当前 Core 仓库在服务端未接入前只能实现 CLI 侧合同与状态读取，不能伪造 Pro 成功态。
