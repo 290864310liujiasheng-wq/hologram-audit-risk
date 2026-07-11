@@ -29,6 +29,25 @@ fn check_rejects_extra_positional_argument() {
 }
 
 #[test]
+fn check_warns_when_existing_baseline_is_corrupted() {
+    let root = workspace();
+    fs::write(root.join(".hologram/baseline.json"), "{not valid json").expect("write corrupt baseline");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_audit-risk"))
+        .args(["check", root.to_str().expect("utf8 workspace"), "--json"])
+        .output()
+        .expect("run audit-risk check");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(output.status.success(), "check should continue without a usable baseline: {stderr}");
+    assert!(
+        stderr.contains("baseline.json") && stderr.contains("损坏"),
+        "corrupt baseline warning must be visible to the caller: {stderr}"
+    );
+}
+
+#[test]
 fn audit_command_returns_filtered_jsonl_records_without_node() {
     let root = workspace();
     let entries = [

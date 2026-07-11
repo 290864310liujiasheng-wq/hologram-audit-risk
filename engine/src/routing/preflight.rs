@@ -13,13 +13,23 @@ pub fn baseline_path(project_root: &Path) -> PathBuf {
 
 pub fn load_baseline(project_root: &Path) -> Graph {
     let path = baseline_path(project_root);
-    if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        Graph::default()
+    match std::fs::read_to_string(&path) {
+        Ok(raw) => match serde_json::from_str::<Graph>(&raw) {
+            Ok(baseline) => baseline,
+            Err(error) => {
+                eprintln!(
+                    "警告：.hologram/baseline.json 损坏或格式不兼容（{error}），本次以无基线模式运行。如需重置，删除该文件后重新运行 check。"
+                );
+                Graph::default()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Graph::default(),
+        Err(error) => {
+            eprintln!(
+                "警告：无法读取 .hologram/baseline.json（{error}），本次以无基线模式运行。"
+            );
+            Graph::default()
+        }
     }
 }
 
