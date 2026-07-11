@@ -28,8 +28,11 @@ use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 use std::collections::BTreeMap;
 
 /// Embedded public keys (base64-encoded raw 32-byte Ed25519 public keys).
+/// Key rotation: add the new public key here, then remove the old one once
+/// all issued entitlements have been re-signed by the server.
 const ENTITLEMENT_PUBLIC_KEYS: &[&str] = &[
-    "mJWif746kAj1hiW4evkcNXRej0qFyzuFEMBG4ugFEUo=",
+    // Rotated 2026-07-11: previous key was exposed in repository history.
+    "yq3GKlXgzYN9UIXexDwYzS6oWITssjONUn1HfWuqhRs=",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,7 +88,13 @@ pub fn verify_entitlement_signature(
     };
     let signature = Signature::from_bytes(&sig_array);
 
-    for &pub_key_b64 in ENTITLEMENT_PUBLIC_KEYS {
+    #[cfg(test)]
+    let test_keys = [TEST_ENTITLEMENT_PUBLIC_KEY];
+    #[cfg(not(test))]
+    let test_keys: [&str; 0] = [];
+    let all_keys = ENTITLEMENT_PUBLIC_KEYS.iter().chain(test_keys.iter()).copied();
+
+    for pub_key_b64 in all_keys {
         let pub_key_bytes = match B64.decode(pub_key_b64) {
             Ok(b) => b,
             Err(_) => continue,
@@ -127,18 +136,29 @@ pub fn sign_for_test(raw_entitlement_json: &str) -> String {
     sign_canonical_for_test(&canonical)
 }
 
+/// Signs `canonical` with the test-only Ed25519 key.
+/// This key pair is used exclusively in tests and does NOT match any key in
+/// `ENTITLEMENT_PUBLIC_KEYS`, so signatures produced here are rejected by the
+/// production verifier.
 #[cfg(test)]
 fn sign_canonical_for_test(canonical: &str) -> String {
     use ed25519_dalek::{Signer, SigningKey};
-
+    // Test-only private key. The corresponding public key is TEST_ENTITLEMENT_PUBLIC_KEY
+    // below, which is intentionally absent from ENTITLEMENT_PUBLIC_KEYS.
     let priv_bytes = B64
-        .decode("cMfSrF12tNvxmdMtD2gp1b4zL/gQ9Iexdyn0VgocUuo=")
-        .expect("hardcoded private key is valid base64");
+        .decode("AHYXomTTrs2Zc1nbsTfZsWPdE1msrwPB1MzGAlXbpLg=")
+        .expect("hardcoded test private key is valid base64");
     let priv_array: [u8; 32] = priv_bytes.try_into().expect("private key is 32 bytes");
     let signing_key = SigningKey::from_bytes(&priv_array);
     let sig = signing_key.sign(canonical.as_bytes());
     B64.encode(sig.to_bytes())
 }
+
+/// The public key matching `sign_canonical_for_test`. Added to
+/// `ENTITLEMENT_PUBLIC_KEYS` only inside tests that need to accept test-signed
+/// entitlements.
+#[cfg(test)]
+const TEST_ENTITLEMENT_PUBLIC_KEY: &str = "g5DqL4xbgVzepeDUHWNkhPCEU9UUJo+ElApyCyyu/ro=";
 
 #[cfg(test)]
 mod tests {

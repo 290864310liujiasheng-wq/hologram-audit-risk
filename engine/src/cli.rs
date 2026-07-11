@@ -991,7 +991,7 @@ fn activate_pre_commit_hook(workspace_path: &Path) -> String {
                 .map(|s| s.success())
                 .unwrap_or(false);
             if set {
-                "已激活：core.hooksPath 已设为 `.githooks`，提交前会自动运行 audit-risk check --fail-on block。".to_string()
+                "已激活：core.hooksPath 已设为 `.githooks`，提交前会自动运行 audit-risk check --fail-on require_approval。".to_string()
             } else {
                 "未激活：设置 core.hooksPath 失败，请手动运行 `git config core.hooksPath .githooks`。".to_string()
             }
@@ -1321,7 +1321,8 @@ fn run_report_command_native(
     apply_report_review_policy(&mut check, &review_policy);
     let audit_path = delivery_path(&workspace, config.pointer("/audit/jsonl_path").and_then(Value::as_str), DEFAULT_AUDIT_JSONL_PATH);
     let recent_limit = config.pointer("/audit/recent_limit").and_then(Value::as_u64).unwrap_or(200) as usize;
-    let audit_entries = read_recent_audit_jsonl(&audit_path, recent_limit);
+    let all_audit_entries = read_audit_jsonl(&audit_path);
+    let audit_entries = recent_audit_entries(&all_audit_entries, recent_limit);
     let policies = json!({"review": review_policy, "repair": repair_policy});
     let threshold = fail_on.unwrap_or_else(|| {
         config
@@ -1356,7 +1357,7 @@ fn run_report_command_native(
         "provider": build_delivery_provider_status(&config),
         "policies": policies,
         "current_review": build_current_review_report(&check, &audit_entries),
-        "audit": build_delivery_audit_report(audit_entries),
+        "audit": build_delivery_audit_report(audit_entries, &all_audit_entries),
         "automation": automation,
     });
     let mut report = report_without_signature;
@@ -1410,10 +1411,10 @@ fn default_delivery_config(workspace: &Path) -> Value {
         },
         "auth": { "base_url": "" },
         "automation": {
-            "verify_commands": ["audit-risk check . --fail-on block", "audit-risk doctor ."],
+            "verify_commands": ["audit-risk check . --fail-on require_approval", "audit-risk doctor ."],
             "pre_commit_hook": DEFAULT_PRE_COMMIT_PATH,
             "ci_workflow": DEFAULT_CI_WORKFLOW_PATH,
-            "fail_on_decision": "block",
+            "fail_on_decision": "require_approval",
         },
     })
 }
@@ -1423,8 +1424,8 @@ fn delivery_path(workspace: &Path, configured_path: Option<&str>, default_path: 
     if path.is_absolute() { path } else { workspace.join(path) }
 }
 
-fn read_recent_audit_jsonl(path: &Path, limit: usize) -> Vec<Value> {
-    let mut entries = read_audit_jsonl(path);
+fn recent_audit_entries(entries: &[Value], limit: usize) -> Vec<Value> {
+    let mut entries = entries.to_vec();
     let start = entries.len().saturating_sub(limit);
     entries.drain(..start);
     entries
@@ -1524,9 +1525,9 @@ fn apply_report_review_policy(check: &mut Value, policy: &Value) {
     );
 }
 
-fn build_delivery_audit_report(entries: Vec<Value>) -> Value {
+fn build_delivery_audit_report(entries: Vec<Value>, integrity_entries: &[Value]) -> Value {
     let records = normalize_delivery_audit_records(&entries);
-    let integrity = build_delivery_audit_integrity(&entries);
+    let integrity = build_delivery_audit_integrity(integrity_entries);
     json!({
         "entries": entries,
         "records": records,
@@ -1751,50 +1752,72 @@ fn normalize_delivery_audit_record(entry: &Value) -> Option<Value> {
 
 fn build_delivery_audit_integrity(entries: &[Value]) -> Value {
     if entries.is_empty() {
-        return json!({"status": "empty", "verified": true, "entry_count": 0, "chained_entry_count": 0, "legacy_entry_count": 0, "issues": []});
+        return json!({"status": "empty", "verified": true, "entry_count": 0, "chained_entry_count": 0, "unprotected_count": 0, "unprotected_lines": [], "issues": []});
     }
     let mut issues = Vec::new();
     let mut chained_entry_count = 0usize;
-    let mut legacy_entry_count = 0usize;
+    let mut unprotected_lines = Vec::new();
+    let mut previous_hash = None::<String>;
     for (index, entry) in entries.iter().enumerate() {
         let Some(actual_hash) = entry.get("integrity_hash").and_then(Value::as_str) else {
-            legacy_entry_count += 1;
+            unprotected_lines.push(index + 1);
             continue;
         };
         chained_entry_count += 1;
         let tool = entry.get("tool").and_then(Value::as_str).unwrap_or("unknown");
-        let timestamp = entry.get("ts").and_then(Value::as_str).unwrap_or_default();
-        let Some(payload) = canonical_audit_integrity_payload(entry) else {
-            issues.push(format!("{tool}@{timestamp} cannot reconstruct integrity payload."));
-            continue;
-        };
-        if actual_hash != sha256_hex(payload.as_bytes()) {
+        let timestamp = entry
+            .get("ts")
+            .or_else(|| entry.get("timestamp"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_hash = canonical_audit_integrity_payload(entry)
+            .map(|payload| sha256_hex(payload.as_bytes()))
+            .unwrap_or_else(|| compute_audit_integrity_hash(entry));
+        if actual_hash != expected_hash {
             issues.push(format!("{tool}@{timestamp} has mismatched integrity_hash."));
         }
-        let expected_prev_hash = if index == 0 {
-            None
-        } else {
-            entries[index - 1]
-                .get("integrity_hash")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| entries[index - 1].get("raw_line").and_then(Value::as_str).map(|line| sha256_hex(line.as_bytes())))
-        };
-        if entry.get("prev_hash").and_then(Value::as_str) != expected_prev_hash.as_deref() {
+        let mut expected_previous_hashes = previous_hash.iter().cloned().collect::<Vec<_>>();
+        if let Some(previous) = index.checked_sub(1).and_then(|position| entries.get(position)) {
+            if previous.get("integrity_hash").is_none() {
+                if let Some(raw_line) = previous.get("raw_line").and_then(Value::as_str) {
+                    expected_previous_hashes.push(sha256_hex(raw_line.as_bytes()));
+                }
+            }
+        }
+        let actual_prev_hash = entry.get("prev_hash").and_then(Value::as_str);
+        if actual_prev_hash != previous_hash.as_deref()
+            && !expected_previous_hashes
+                .iter()
+                .any(|expected| actual_prev_hash == Some(expected.as_str()))
+        {
             issues.push(format!("{tool}@{timestamp} has mismatched prev_hash."));
         }
+        previous_hash = Some(actual_hash.to_string());
     }
     let last_hash = entries.iter().rev().find_map(|entry| entry.get("integrity_hash")).cloned().unwrap_or(Value::Null);
-    let verified = issues.is_empty();
+    let unprotected_count = unprotected_lines.len();
+    let verified = issues.is_empty() && unprotected_count == 0;
     json!({
-        "status": if !verified { "failed" } else if legacy_entry_count > 0 { "legacy_anchor" } else { "verified" },
+        "status": if !issues.is_empty() { "failed" } else if unprotected_count > 0 { "partial" } else { "verified" },
         "verified": verified,
         "entry_count": entries.len(),
         "chained_entry_count": chained_entry_count,
-        "legacy_entry_count": legacy_entry_count,
+        "unprotected_count": unprotected_count,
+        "unprotected_lines": unprotected_lines,
         "last_hash": last_hash,
         "issues": issues,
     })
+}
+
+fn compute_audit_integrity_hash(entry: &Value) -> String {
+    let mut record = entry.clone();
+    if let Some(object) = record.as_object_mut() {
+        object.remove("integrity_hash");
+        object.remove("raw_line");
+    }
+    let prev_hash = record.get("prev_hash").and_then(Value::as_str).unwrap_or_default();
+    let canonical = format!("{}:{prev_hash}", record);
+    sha256_hex(canonical.as_bytes())
 }
 
 fn canonical_audit_integrity_payload(entry: &Value) -> Option<String> {
@@ -2637,10 +2660,6 @@ fn extract_json_from_text(text: &str) -> Option<String> {
 
 /// Append a minimal repair audit event to .hologram/audit.jsonl.
 fn append_repair_audit_event(workspace: &Path, event_type: &str, plan_id: &str, finding_id: &str, reason: &str) {
-    let audit_path = workspace.join(DEFAULT_AUDIT_JSONL_PATH);
-    if let Some(parent) = audit_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     let event = json!({
         "event_type": event_type,
         "plane": "repair",
@@ -2649,9 +2668,7 @@ fn append_repair_audit_event(workspace: &Path, event_type: &str, plan_id: &str, 
         "reason": reason,
         "timestamp": now_iso(),
     });
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&audit_path) {
-        let _ = writeln!(file, "{}", serde_json::to_string(&event).unwrap_or_default());
-    }
+    append_audit_record(workspace, event);
 }
 
 fn append_repair_approval_event(
@@ -2661,10 +2678,6 @@ fn append_repair_approval_event(
     approved_by: &str,
     approved_at: &str,
 ) {
-    let audit_path = workspace.join(DEFAULT_AUDIT_JSONL_PATH);
-    if let Some(parent) = audit_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     let event = json!({
         "event_type": "repair_approved",
         "plane": "repair",
@@ -2674,8 +2687,23 @@ fn append_repair_approval_event(
         "approved_at": approved_at,
         "timestamp": now_iso(),
     });
+    append_audit_record(workspace, event);
+}
+
+fn append_audit_record(workspace: &Path, mut record: Value) {
+    let audit_path = workspace.join(DEFAULT_AUDIT_JSONL_PATH);
+    if let Some(parent) = audit_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let previous_hash = read_audit_jsonl(&audit_path)
+        .iter()
+        .rev()
+        .find_map(|entry| entry.get("integrity_hash").and_then(Value::as_str))
+        .map(str::to_string);
+    record["prev_hash"] = previous_hash.clone().map(Value::String).unwrap_or(Value::Null);
+    record["integrity_hash"] = json!(compute_audit_integrity_hash(&record));
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&audit_path) {
-        let _ = writeln!(file, "{}", serde_json::to_string(&event).unwrap_or_default());
+        let _ = writeln!(file, "{}", serde_json::to_string(&record).unwrap_or_default());
     }
 }
 
@@ -3406,12 +3434,12 @@ fn build_default_init_files(workspace_root: &Path) -> Vec<(String, String, bool)
         },
         "automation": {
             "verify_commands": [
-                "audit-risk check . --fail-on block",
+                "audit-risk check . --fail-on require_approval",
                 "audit-risk doctor .",
             ],
             "pre_commit_hook": DEFAULT_PRE_COMMIT_PATH,
             "ci_workflow": DEFAULT_CI_WORKFLOW_PATH,
-            "fail_on_decision": "block",
+            "fail_on_decision": "require_approval",
         },
         "observe": {
             "bind": DEFAULT_OBSERVE_BIND,
@@ -3472,7 +3500,7 @@ fn build_default_init_files(workspace_root: &Path) -> Vec<(String, String, bool)
         ),
         (
             DEFAULT_PRE_COMMIT_PATH.to_string(),
-            "#!/bin/sh\nset -eu\n\n# audit-risk 提交前门禁：阻断级风险会拦下提交。\n# 需要 audit-risk 在 PATH 中；自定义安装路径可设置 AUDIT_RISK_BIN。\n# 临时跳过：git commit --no-verify\n#\n# 启用本钩子：git config core.hooksPath .githooks（audit-risk init 会自动尝试设置）\n\nBIN=\"${AUDIT_RISK_BIN:-audit-risk}\"\nROOT=\"${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"\n\nif ! command -v \"$BIN\" >/dev/null 2>&1 && [ ! -x \"$BIN\" ]; then\n  echo \"[audit-risk] 未找到 audit-risk 可执行文件；跳过检查。请把它加入 PATH 或设置 AUDIT_RISK_BIN。\" >&2\n  exit 0\nfi\n\nexec \"$BIN\" check \"$ROOT\" --fail-on block\n".to_string(),
+            "#!/bin/sh\nset -eu\n\n# audit-risk 提交前门禁：需审批及以上风险会拦下提交。\n# 需要 audit-risk 在 PATH 中；自定义安装路径可设置 AUDIT_RISK_BIN。\n# 临时跳过：git commit --no-verify\n#\n# 启用本钩子：git config core.hooksPath .githooks（audit-risk init 会自动尝试设置）\n\nBIN=\"${AUDIT_RISK_BIN:-audit-risk}\"\nROOT=\"${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\")}\"\n\nif ! command -v \"$BIN\" >/dev/null 2>&1 && [ ! -x \"$BIN\" ]; then\n  echo \"[audit-risk] 未找到 audit-risk 可执行文件；跳过检查。请把它加入 PATH 或设置 AUDIT_RISK_BIN。\" >&2\n  exit 0\nfi\n\nexec \"$BIN\" check \"$ROOT\" --fail-on require_approval\n".to_string(),
             true,
         ),
         (
@@ -3506,8 +3534,8 @@ fn build_default_init_files(workspace_root: &Path) -> Vec<(String, String, bool)
              \x20           echo \"$HOME/.local/bin\" >> \"$GITHUB_PATH\"\n\
              \x20         fi\n\
              \n\
-             \x20     - name: audit-risk check（block 级风险拦截合并）\n\
-             \x20       run: audit-risk check . --fail-on block\n"
+             \x20     - name: audit-risk check（需审批及以上风险拦截合并）\n\
+             \x20       run: audit-risk check . --fail-on require_approval\n"
                 .to_string(),
             false,
         ),
@@ -6090,7 +6118,7 @@ fn parse_optional_fail_on(args: &[String]) -> Result<FailGate, UsageError> {
     take_option(args, "--fail-on")?
         .map(|value| parse_fail_gate(&value))
         .transpose()
-        .map(|value| value.unwrap_or(FailGate::Block))
+        .map(|value| value.unwrap_or(FailGate::RequireApproval))
 }
 
 fn parse_fail_gate(raw: &str) -> Result<FailGate, UsageError> {
@@ -6418,6 +6446,37 @@ mod tests {
         match parsed.command {
             CliCommand::Check { fail_on, .. } => assert_eq!(fail_on, FailGate::Warn),
             other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn default_fail_on_blocks_require_approval_across_check_and_init_automation() {
+        let parsed = parse_cli_command(&args(&["check", "/tmp/repo"]))
+            .expect("check should parse with its default fail-on gate");
+        match parsed.command {
+            CliCommand::Check { fail_on, .. } => assert_eq!(fail_on, FailGate::RequireApproval),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let files = build_default_init_files(std::path::Path::new("/tmp/customer-repo"));
+        for path in [
+            ".hologram/delivery.json",
+            ".githooks/pre-commit",
+            ".github/workflows/hologram-risk.yml",
+        ] {
+            let content = files
+                .iter()
+                .find(|(candidate, _, _)| candidate == path)
+                .map(|(_, content, _)| content)
+                .expect("expected generated automation file");
+            assert!(
+                content.contains("require_approval"),
+                "{path} must block require_approval decisions by default: {content}"
+            );
+            assert!(
+                !content.contains("--fail-on block"),
+                "{path} must not leave the weaker block-only default: {content}"
+            );
         }
     }
 
@@ -7282,7 +7341,7 @@ mod tests {
         // The hook must be portable: call `audit-risk` from PATH, never bake in
         // this build machine's path or require a Rust toolchain / `cargo run`.
         assert!(hook.contains("BIN=\"${AUDIT_RISK_BIN:-audit-risk}\""));
-        assert!(hook.contains("check \"$ROOT\" --fail-on block"));
+        assert!(hook.contains("check \"$ROOT\" --fail-on require_approval"));
         assert!(!hook.contains("cargo run"));
         assert!(!hook.contains("/opt/audit-risk-platform"));
         assert!(!hook.contains("PLATFORM_ROOT"));
