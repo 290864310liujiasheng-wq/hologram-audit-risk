@@ -48,6 +48,60 @@ fn check_warns_when_existing_baseline_is_corrupted() {
 }
 
 #[test]
+fn check_keeps_hologram_artifacts_out_of_git_status_and_changed_files() {
+    let root = workspace();
+    fs::write(root.join("main.rs"), "fn main() {}\n").expect("write source file");
+    Command::new("git")
+        .args(["init", root.to_str().expect("utf8 workspace")])
+        .output()
+        .expect("initialize git workspace");
+    Command::new("git")
+        .args(["-C", root.to_str().expect("utf8 workspace"), "add", "main.rs"])
+        .output()
+        .expect("stage source file");
+    let commit = Command::new("git")
+        .args([
+            "-C",
+            root.to_str().expect("utf8 workspace"),
+            "-c",
+            "user.name=audit-risk-test",
+            "-c",
+            "user.email=audit-risk-test@example.com",
+            "commit",
+            "-m",
+            "initial workspace",
+        ])
+        .output()
+        .expect("commit source file");
+    assert!(commit.status.success(), "git commit must succeed: {}", String::from_utf8_lossy(&commit.stderr));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_audit-risk"))
+        .args(["check", root.to_str().expect("utf8 workspace"), "--json"])
+        .output()
+        .expect("run audit-risk check");
+    let response: Value = serde_json::from_slice(&output.stdout).expect("check JSON response");
+    let status = Command::new("git")
+        .args(["-C", root.to_str().expect("utf8 workspace"), "status", "--short"])
+        .output()
+        .expect("read git status");
+    let status_stdout = String::from_utf8_lossy(&status.stdout);
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(output.status.success(), "check must succeed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(status.status.success(), "git status must succeed");
+    assert!(status_stdout.trim().is_empty(), "check artifacts must not dirty the workspace: {status_stdout}");
+    assert!(
+        response["changed_files"]
+            .as_array()
+            .expect("check response changed_files")
+            .iter()
+            .all(|path| !path.as_str().unwrap_or_default().starts_with(".hologram/")),
+        "check must not treat its own artifacts as user changes: {}",
+        response["changed_files"]
+    );
+}
+
+#[test]
 fn audit_command_returns_filtered_jsonl_records_without_node() {
     let root = workspace();
     let entries = [
