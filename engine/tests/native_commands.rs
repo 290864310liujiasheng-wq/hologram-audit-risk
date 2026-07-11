@@ -399,6 +399,9 @@ fn report_normalizes_delivery_audit_entries_and_renders_the_gate() {
     let _ = fs::remove_dir_all(&root);
 
     assert!(json_output.status.success());
+    assert_eq!(response["audit"]["integrity"]["status"], "partial");
+    assert_eq!(response["audit"]["integrity"]["verified"], false);
+    assert_eq!(response["audit"]["integrity"]["unprotected_count"], 1);
     assert_eq!(response["audit"]["records"][0]["event_id"], "review_check:2026-01-01T00:00:00Z:.");
     assert_eq!(response["audit"]["records"][0]["plane"], "review");
     assert!(response["current_review"]["gate_decision"].is_object());

@@ -134,15 +134,40 @@ fn repair_apply_requires_recorded_approval_before_writing() {
     let applied = run_cli(&root, &apply_args(&root, "waiting-plan"));
     let source_after_approval = fs::read_to_string(root.join("source.rs")).expect("source after approved apply");
     let audit = fs::read_to_string(root.join(".hologram/audit.jsonl")).expect("approval audit");
-    let _ = fs::remove_dir_all(&root);
 
     assert!(!output.status.success(), "unapproved apply must be rejected");
     assert_eq!(source_before_approval, "let value = 1;\n", "unapproved plan must not write files");
     assert!(audit.contains("\"event_type\":\"repair_approved\""), "approval must write a standalone audit event");
     assert!(audit.contains("\"approved_by\":"), "approval audit must identify the local CLI approver");
     assert!(audit.contains("\"approved_at\":"), "approval audit must record approval time");
+    let audit_entries = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("parse audit event"))
+        .collect::<Vec<_>>();
+    assert!(
+        audit_entries
+            .iter()
+            .all(|entry| entry["integrity_hash"].as_str().is_some()),
+        "every Rust CLI audit event must carry an integrity hash"
+    );
+    assert_eq!(
+        audit_entries[1]["prev_hash"],
+        audit_entries[0]["integrity_hash"],
+        "the second CLI audit event must link to the first hash"
+    );
+    let report = run_cli(
+        &root,
+        &[
+            "report".to_string(),
+            root.display().to_string(),
+            "--json".to_string(),
+        ],
+    );
+    let report: Value = serde_json::from_slice(&report.stdout).expect("parse report");
+    assert_eq!(report["audit"]["integrity"]["status"], "verified");
     assert!(applied.status.success(), "approved plan must apply");
     assert_eq!(source_after_approval, "let value = 2;\n");
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

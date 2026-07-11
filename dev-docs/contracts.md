@@ -201,8 +201,8 @@ interface AuditEvent {
 要求：
 
 - 审计是 append-only。
-- `.hologram/audit.jsonl` 的新记录必须带 `prev_hash` 与 `integrity_hash`，形成顺序哈希链。
-- 当历史文件里仍有旧格式记录时，新的链式记录允许把上一行原始 JSON 文本作为锚点继续追加，但导出报告必须明确这是 `legacy_anchor`，不能伪装成全量链式历史。
+- `.hologram/audit.jsonl` 的新记录必须带 `prev_hash` 与 `integrity_hash`，形成顺序 SHA-256 哈希链。
+- 没有 `integrity_hash` 的历史记录属于未受保护记录。报告必须将完整性状态标为 `partial`、`verified=false` 并给出 `unprotected_count`，不得标为已验证。哈希链不具有密钥绑定，不能单独宣称为不可篡改。
 - 不记录密钥、完整敏感源码或无关个人信息。
 - 如果只记录摘要，必须保留可追溯的 evidence 引用。
 
@@ -249,11 +249,12 @@ interface AuditQueryResult {
 
 ```ts
 interface DeliveryAuditIntegritySummary {
-  status: 'empty' | 'verified' | 'legacy_anchor' | 'failed';
+  status: 'empty' | 'verified' | 'partial' | 'failed';
   verified: boolean;
   entry_count: number;
   chained_entry_count: number;
-  legacy_entry_count: number;
+  unprotected_count: number;
+  unprotected_lines: number[];
   last_hash?: string;
   issues: string[];
 }
@@ -268,6 +269,7 @@ interface DeliveryReportSignature {
 
 - `audit-risk report` 必须导出 `audit.integrity`，明确最近导出窗口内审计链是否可信。
 - 发现哈希链损坏时，`audit.integrity.status` 必须为 `failed`，并给出最小可定位的 `issues`。
+- `audit.integrity` 必须基于全量 JSONL 链校验，展示窗口不能截断校验链；无哈希记录必须返回 `partial` 而不是 `verified`。
 - 导出 JSON 必须附带 `report_signature`，用于对整个 machine-readable report 做二次校验。
 - `doctor` 与管理侧只读视图不得自定义另一套完整性口径，必须复用同一个 `audit.integrity` 结果。
 

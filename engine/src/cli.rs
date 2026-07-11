@@ -4669,7 +4669,7 @@ fn render_product_shell(
     if mode == RenderMode::Plain {
         let mut lines = Vec::new();
         lines.push(format!("{bright}audit-risk{reset}"));
-        lines.push(format!("{muted}AI 编码风控平台 — 为 AI 生成的代码提供实时审查、规则拦截和不可篡改的审计证据{reset}"));
+        lines.push(format!("{muted}AI 编码风控平台 — 为 AI 生成的代码提供实时审查、规则拦截和可追溯的审计证据{reset}"));
         lines.push(String::new());
         lines.push(render_panel_plain("当前概览", status_lines, title, text, muted, reset));
         lines.push(render_panel_plain(
@@ -4691,7 +4691,7 @@ fn render_product_shell(
     lines.push(format!("{bg}{bright}  audit-risk{reset}"));
     lines.push(String::new());
     lines.push(format!("{bg}{bright}AI 编码风控平台 · {title}audit-risk{reset}"));
-    lines.push(format!("{bg}{muted}为 AI 生成的代码提供实时审查、规则拦截和不可篡改的审计证据{reset}"));
+    lines.push(format!("{bg}{muted}为 AI 生成的代码提供实时审查、规则拦截和可追溯的审计证据{reset}"));
     lines.push(String::new());
     lines.push(render_panel(
         "当前概览",
