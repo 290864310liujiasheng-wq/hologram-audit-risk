@@ -1,0 +1,24 @@
+name: audit-risk
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  audit-risk:
+    name: AI代码风险审查
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/audit-risk
+        with:
+          workspace: '.'
+          fail-on: 'require_approval'
+          comment-on-pr: 'true'
