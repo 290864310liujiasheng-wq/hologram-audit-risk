@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f85149"/>
+      <stop offset="100%" style="stop-color:#ff7b72"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="300" fill="url(#bg)" rx="8"/>
+
+  <!-- grid -->
+  <g opacity="0.05" stroke="#58a6ff" stroke-width="0.5">
+    <line x1="0" y1="75" x2="1200" y2="75"/><line x1="0" y1="150" x2="1200" y2="150"/>
+    <line x1="0" y1="225" x2="1200" y2="225"/>
+    <line x1="240" y1="0" x2="240" y2="300"/><line x1="480" y1="0" x2="480" y2="300"/>
+    <line x1="720" y1="0" x2="720" y2="300"/><line x1="960" y1="0" x2="960" y2="300"/>
+  </g>
+
+  <!-- shield -->
+  <g transform="translate(148, 82)" filter="url(#glow)">
+    <path d="M64 0 L128 28 L128 80 Q128 124 64 144 Q0 124 0 80 L0 28 Z"
+          fill="none" stroke="url(#accent)" stroke-width="3"/>
+    <path d="M64 32 L96 46 L96 76 Q96 100 64 114 Q32 100 32 76 L32 46 Z"
+          fill="url(#accent)" opacity="0.12"/>
+    <polyline points="44,76 58,90 86,62" fill="none" stroke="#f85149"
+              stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- title -->
+  <text x="330" y="148" font-family="'SF Mono',Consolas,Monaco,monospace"
+        font-size="76" font-weight="700" fill="url(#accent)" filter="url(#glow)"
+        letter-spacing="-2">audit-risk</text>
+
+  <!-- subtitle -->
+  <text x="332" y="192" font-family="-apple-system,'PingFang SC','Helvetica Neue',sans-serif"
+        font-size="21" fill="#8b949e" letter-spacing="1">
+    AI 编码治理平台 · AI Code Governance Platform
+  </text>
+
+  <!-- tagline -->
+  <text x="332" y="232" font-family="-apple-system,'PingFang SC','Helvetica Neue',sans-serif"
+        font-size="15" fill="#484f58">
+    不管哪个 AI 工具生成的代码，高风险代码合并前都要经过你的规则
+  </text>
+
+  <!-- badges -->
+  <rect x="332" y="250" width="78" height="22" rx="11" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+  <text x="371" y="266" font-family="'SF Mono',monospace" font-size="11"
+        fill="#f85149" text-anchor="middle" font-weight="600">v0.4.0</text>
+
+  <rect x="420" y="250" width="98" height="22" rx="11" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+  <text x="469" y="266" font-family="'SF Mono',monospace" font-size="11"
+        fill="#3fb950" text-anchor="middle">MIT · Rust</text>
+
+  <rect x="528" y="250" width="118" height="22" rx="11" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+  <text x="587" y="266" font-family="'SF Mono',monospace" font-size="11"
+        fill="#58a6ff" text-anchor="middle">476 tests ✓</text>
+</svg>

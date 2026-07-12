@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="audit-risk" />
+  <img src="assets/banner.svg" alt="audit-risk" />
 </p>
 
 <p align="center">
