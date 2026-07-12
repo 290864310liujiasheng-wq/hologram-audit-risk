@@ -655,6 +655,7 @@ mod tests {
 
     #[test]
     fn test_handle_query_no_graph() {
+        let _lock = lock_bin();
         clear_graph();
         let resp = handle_query("neighbors:a", "neighbors:");
         let v: serde_json::Value = serde_json::from_slice(&resp).unwrap();
