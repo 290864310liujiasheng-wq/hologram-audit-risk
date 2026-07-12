@@ -9,8 +9,13 @@ pub fn generate_summary(changed_files: &[String], violations: &[Value], coupling
     let one_line = if passed {
         "No violations detected — all checks passed.".to_string()
     } else {
-        format!("{} violations: L5={} L4={} L3={} L2={} (coupling_L4={} cycles={})",
-            violations.len(), l5, l4, l3, l2, coupling_l4, cycle_count)
+        let security = violations.iter().filter(|v| v["level"].as_u64() == Some(5)).count();
+        let arch = violations.len() - security;
+        match (security, arch) {
+            (s, 0) => format!("发现 {} 条安全风险（密钥/注入/危险执行）", s),
+            (0, a) => format!("发现 {} 条架构变更信号（配置/耦合）", a),
+            (s, a) => format!("发现 {} 条安全风险 + {} 条架构变更信号", s, a),
+        }
     };
     json!({
         "passed": passed, "one_line": one_line,

@@ -5008,10 +5008,16 @@ fn format_finding_line(entry: &Value) -> String {
             )
         })
         .unwrap_or_else(|| "unknown".to_string());
-    let line = format!("{severity} · {location} · {explanation}");
-    // Color by severity so the eye lands on critical/high findings first —
-    // matches the coloring watch mode already applies, now shared by
-    // check/report/diff's panel-based finding preview too.
+    let finding_id = entry
+        .get("finding_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let id_suffix = if finding_id.is_empty() {
+        String::new()
+    } else {
+        format!("  [ID: {}]", finding_id)
+    };
+    let line = format!("{severity} · {location} · {explanation}{id_suffix}");
     match severity_str {
         "critical" | "high" => ansi_red(&line),
         "medium" => ansi_yellow(&line),
@@ -5085,21 +5091,50 @@ fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRunt
             "block" => "这次变更已经达到阻断阈值，继续提交会把风险带进主线。".to_string(),
             _ => "当前结果不完整，需要重新审查确认。".to_string(),
         }],
-        &[
-            "先处理高置信度风险（密钥/注入/危险执行），确认是不是业务必须。".to_string(),
-            "如果只是测试或演练代码，明确隔离到非生产路径。".to_string(),
-            "需要自动化消费时，改用 `audit-risk check <目录> --json`。".to_string(),
-        ],
-        &[
-            "`audit-risk check . --verbose`".to_string(),
-            "`audit-risk watch .`".to_string(),
-            "`audit-risk report .`".to_string(),
-            "`audit-risk check . --json`".to_string(),
-        ],
-        &[
-            format!("原始 gate 值：{gate}"),
-            "JSON 合同键名保持英文；这里只有人类模式文案被中文化。".to_string(),
-        ],
+        &{
+            // Build actionable repair suggestions using real finding IDs
+            let high_finding_ids: Vec<&str> = preview_pool
+                .iter()
+                .filter_map(|f| f.get("finding_id").and_then(Value::as_str))
+                .take(3)
+                .collect();
+            if high_finding_ids.is_empty() {
+                vec![
+                    "运行 `--verbose` 查看详细信息。".to_string(),
+                    "需要自动化消费时，改用 `audit-risk check <目录> --json`。".to_string(),
+                ]
+            } else {
+                let mut actions = vec![
+                    "可用以下命令生成 AI 修复方案（需先在 .hologram/delivery.json 配置模型 API）：".to_string(),
+                ];
+                for id in &high_finding_ids {
+                    actions.push(format!("  audit-risk repair plan . --finding {id} --approve"));
+                }
+                actions
+            }
+        },
+        &{
+            let mut next: Vec<String> = vec![];
+            // Show repair command first if there are high-confidence findings with IDs
+            let first_id = preview_pool
+                .iter()
+                .find_map(|f| f.get("finding_id").and_then(Value::as_str));
+            if let Some(id) = first_id {
+                next.push(format!("`audit-risk repair plan . --finding {id} --approve`  # 生成修复方案"));
+            }
+            next.push("`audit-risk check . --verbose`  # 查看所有风险（含结构信号）".to_string());
+            next.push("`audit-risk watch .`  # 持续监听变更".to_string());
+            next.push("`audit-risk check . --json`  # 机器可读输出（CI/脚本消费）".to_string());
+            next
+        },
+        &if verbose {
+            vec![
+                format!("原始 gate 值：{gate}"),
+                "JSON 合同键名保持英文；这里只有人类模式文案被中文化。".to_string(),
+            ]
+        } else {
+            vec![format!("原始 gate 值：{gate}")]
+        },
     ))
 }
 
