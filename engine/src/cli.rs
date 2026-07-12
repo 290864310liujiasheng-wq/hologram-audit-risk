@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, UNIX_EPOCH};
 
 use unicode_width::UnicodeWidthStr;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -741,7 +742,38 @@ fn run_check_command(
     output_mode: DefaultOutputMode,
 ) -> Result<CommandOutcome, CliRuntimeError> {
     let workspace_path = resolve_existing_workspace_path(workspace)?;
+
+    // Show spinner while scanning — only in human mode (not JSON/CI)
+    let spinner = if output_mode != DefaultOutputMode::Json {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+                .template("{spinner:.cyan} {msg}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        pb.set_message("正在扫描代码风险...");
+        pb.enable_steady_tick(std::time::Duration::from_millis(80));
+        Some(pb)
+    } else {
+        None
+    };
+
     let payload = build_workspace_check_payload(&workspace_path)?;
+
+    if let Some(pb) = spinner {
+        let count = payload
+            .pointer("/review/findings")
+            .and_then(Value::as_array)
+            .map(|a| a.len())
+            .unwrap_or(0);
+        if count == 0 {
+            pb.finish_with_message("✓ 扫描完成，未发现风险");
+        } else {
+            pb.finish_with_message(format!("⚠ 扫描完成，发现 {count} 条风险"));
+        }
+    }
+
     let exit_code = gate_exit_code(payload["review"]["gate_decision"]["decision"].as_str(), fail_on);
     if output_mode == DefaultOutputMode::Json {
         let mut outcome = CommandOutcome::json(exit_code, payload);
@@ -4990,6 +5022,92 @@ fn severity_label(severity: &str) -> &'static str {
     }
 }
 
+fn read_code_snippet(file_path: &str, line_number: usize, workspace: &str) -> Option<String> {
+    let abs_path = if std::path::Path::new(file_path).is_absolute() {
+        file_path.to_string()
+    } else {
+        format!("{}/{}", workspace.trim_end_matches('/'), file_path)
+    };
+    let content = fs::read_to_string(&abs_path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    if total == 0 || line_number == 0 { return None; }
+    let target = (line_number - 1).min(total - 1);
+    let start = target.saturating_sub(1);
+    let end = (target + 2).min(total);
+    let mut snippet = String::new();
+    for (i, line) in lines[start..end].iter().enumerate() {
+        let lineno = start + i + 1;
+        if lineno == line_number {
+            snippet.push_str(&format!("  \x1b[31m► {:4}│ {}\x1b[0m\n", lineno, line));
+        } else {
+            snippet.push_str(&format!("    {:4}│ {}\n", lineno, line));
+        }
+    }
+    Some(snippet)
+}
+
+fn build_findings_table(findings: &[&Value], _verbose: bool, workspace: &str) -> String {
+    use tabled::{Table, Tabled, settings::Style};
+
+    #[derive(Tabled)]
+    struct FindingRow {
+        #[tabled(rename = "级别")]
+        severity: String,
+        #[tabled(rename = "文件:行")]
+        location: String,
+        #[tabled(rename = "描述")]
+        description: String,
+        #[tabled(rename = "修复命令（复制后直接运行）")]
+        repair: String,
+    }
+
+    let rows: Vec<FindingRow> = findings.iter().map(|f| {
+        let sev = f.get("severity").and_then(Value::as_str).unwrap_or("low");
+        let severity = match sev {
+            "critical" => "🚫 严重".to_string(),
+            "high"     => "⚠  高危".to_string(),
+            "medium"   => "⚡ 中等".to_string(),
+            _          => "💡 低".to_string(),
+        };
+        let loc = f.get("location").and_then(Value::as_object);
+        let file = loc.and_then(|l| l.get("file_path")).and_then(Value::as_str).unwrap_or("unknown");
+        let line = loc.and_then(|l| l.get("start_line")).and_then(Value::as_u64).unwrap_or(0);
+        let location = if line > 0 { format!("{file}:{line}") } else { file.to_string() };
+        let desc = f.get("plain_explanation").and_then(Value::as_str)
+            .unwrap_or(f.get("rule_id").and_then(Value::as_str).unwrap_or("风险"));
+        let description = if desc.chars().count() > 38 {
+            format!("{}...", desc.chars().take(38).collect::<String>())
+        } else {
+            desc.to_string()
+        };
+        let id = f.get("finding_id").and_then(Value::as_str).unwrap_or("");
+        let repair = if id.is_empty() { String::new() } else {
+            format!("audit-risk repair plan . --finding {id} --approve")
+        };
+        FindingRow { severity, location, description, repair }
+    }).collect();
+
+    if rows.is_empty() { return String::new(); }
+
+    let table = Table::new(rows).with(Style::rounded()).to_string();
+
+    let mut output = format!("\n{table}\n");
+    for f in findings.iter().take(3) {
+        let sev = f.get("severity").and_then(Value::as_str).unwrap_or("low");
+        if !matches!(sev, "critical" | "high") { continue; }
+        let loc = f.get("location").and_then(Value::as_object);
+        let file = loc.and_then(|l| l.get("file_path")).and_then(Value::as_str).unwrap_or("");
+        let line = loc.and_then(|l| l.get("start_line")).and_then(Value::as_u64).unwrap_or(0) as usize;
+        if file.is_empty() || line == 0 { continue; }
+        if let Some(snippet) = read_code_snippet(file, line, workspace) {
+            let desc = f.get("plain_explanation").and_then(Value::as_str).unwrap_or("风险代码");
+            output.push_str(&format!("\n\x1b[33m  ▶ {file}:{line} — {desc}\x1b[0m\n{snippet}"));
+        }
+    }
+    output
+}
+
 fn format_finding_line(entry: &Value) -> String {
     let severity_str = entry.get("severity").and_then(Value::as_str).unwrap_or("low");
     let severity = severity_label(severity_str);
@@ -5069,19 +5187,21 @@ fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRunt
         .take(if verbose { 10 } else { 3 })
         .map(|entry| format_finding_line(entry))
         .collect::<Vec<_>>();
+
+    // Build a tabled table for findings when not in plain-panel mode
+    let findings_table = build_findings_table(&preview_pool, verbose, workspace);
     let risk_count_line = if verbose || low_count == 0 {
         format!("风险条数：{} 条", findings.len())
     } else {
         format!("风险条数：{high_count} 条高置信度（另有 {low_count} 条结构信号折叠）")
     };
-    Ok(render_product_shell(
+    let shell = render_product_shell(
         &[
             format!("当前视图：项目审查（{workspace}）"),
             format!("审查结论：{}", gate_decision_label(gate)),
             risk_count_line,
         ],
         &std::iter::once(reason.to_string())
-            .chain(finding_preview.clone())
             .chain(hidden_note)
             .collect::<Vec<_>>(),
         &[match gate {
@@ -5092,7 +5212,6 @@ fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRunt
             _ => "当前结果不完整，需要重新审查确认。".to_string(),
         }],
         &{
-            // Build actionable repair suggestions using real finding IDs
             let high_finding_ids: Vec<&str> = preview_pool
                 .iter()
                 .filter_map(|f| f.get("finding_id").and_then(Value::as_str))
@@ -5115,7 +5234,6 @@ fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRunt
         },
         &{
             let mut next: Vec<String> = vec![];
-            // Show repair command first if there are high-confidence findings with IDs
             let first_id = preview_pool
                 .iter()
                 .find_map(|f| f.get("finding_id").and_then(Value::as_str));
@@ -5135,7 +5253,9 @@ fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRunt
         } else {
             vec![format!("原始 gate 值：{gate}")]
         },
-    ))
+    );
+    // Append the tabled findings table + code snippets after the panel
+    Ok(format!("{shell}{findings_table}"))
 }
 
 fn render_diff_screen(payload: &Value) -> Result<String, CliRuntimeError> {
@@ -6772,11 +6892,8 @@ mod tests {
 
     #[test]
     fn check_screen_finding_preview_carries_severity_color_through_the_panel() {
-        // Regression guard: render_panel wraps every content line uniformly
-        // in the panel's default text color. Confirm an embedded severity
-        // color on a finding line survives that wrapping instead of being
-        // silently overwritten, and that the CJK-width padding math (which
-        // strips ANSI before measuring) still lines up the right border.
+        // Regression guard: findings are now rendered in a tabled table below
+        // the panel. Check that the table is present and contains the finding.
         let payload = json!({
             "workspace_root": "/tmp/customer-repo",
             "review": {
@@ -6787,8 +6904,9 @@ mod tests {
             }
         });
         let rendered = super::render_check_screen(&payload, false).expect("check shell");
-        assert!(rendered.contains("\u{1b}[31m"), "embedded red must survive panel wrapping");
-        assert!(rendered.contains("严重问题示例"));
+        assert!(rendered.contains("严重问题示例"), "finding explanation must appear in output");
+        assert!(rendered.contains("🚫 严重"), "critical severity emoji must appear in table");
+        assert!(rendered.contains("a.py"), "file path must appear in table");
     }
 
     #[test]

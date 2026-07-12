@@ -55,3 +55,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 notify = "6"
+tabled = "0.21.0"
+indicatif = "0.18.6"
