@@ -73,10 +73,9 @@ need curl
 
 if [ -z "$VERSION" ]; then
   say "Fetching latest release version..."
-  VERSION="$(curl -sSf "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | head -1 \
-    | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
+  VERSION="$(curl -sSfL -o /dev/null -w '%{url_effective}' \
+    "https://github.com/${REPO}/releases/latest" \
+    | sed 's|.*/tag/||')"
   [ -n "$VERSION" ] || err "Could not determine latest version. Set --version to install a specific release."
 fi
 
