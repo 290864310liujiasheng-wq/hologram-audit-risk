@@ -1,0 +1,225 @@
+name: 'audit-risk'
+description: 'AI 编码风控：在 PR 合并前检测高风险 AI 生成代码，输出结构化风险报告'
+author: 'audit-risk'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  workspace:
+    description: '要扫描的工作区目录'
+    required: false
+    default: '.'
+  fail-on:
+    description: '触发失败的最低风险等级：allow / warn / require_approval / block'
+    required: false
+    default: 'require_approval'
+  version:
+    description: 'audit-risk 版本，默认使用最新 release'
+    required: false
+    default: 'latest'
+  comment-on-pr:
+    description: '是否在 PR 上发布风险报告评论'
+    required: false
+    default: 'true'
+
+outputs:
+  gate-decision:
+    description: '最终门禁决定：allow / warn / require_approval / block'
+    value: ${{ steps.scan.outputs.gate_decision }}
+  finding-count:
+    description: '发现的风险数量'
+    value: ${{ steps.scan.outputs.finding_count }}
+  report-path:
+    description: '机器可读 JSON 报告路径'
+    value: ${{ steps.scan.outputs.report_path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install audit-risk
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        VERSION="${{ inputs.version }}"
+        INSTALL_DIR="$HOME/.local/bin"
+        mkdir -p "$INSTALL_DIR"
+
+        # 检测平台
+        OS="$(uname -s)"
+        ARCH="$(uname -m)"
+
+        case "$OS" in
+          Linux)
+            case "$ARCH" in
+              x86_64)  PLATFORM="linux-x64" ;;
+              aarch64) PLATFORM="linux-arm64" ;;
+              *) echo "::error::不支持的架构：$ARCH"; exit 1 ;;
+            esac
+            ;;
+          Darwin)
+            case "$ARCH" in
+              x86_64)  PLATFORM="macos-x64" ;;
+              arm64)   PLATFORM="macos-arm64" ;;
+              *) echo "::error::不支持的架构：$ARCH"; exit 1 ;;
+            esac
+            ;;
+          *) echo "::error::不支持的操作系统：$OS"; exit 1 ;;
+        esac
+
+        REPO="290864310liujiasheng-wq/hologram-audit-risk"
+
+        # 获取版本号
+        if [ "$VERSION" = "latest" ]; then
+          VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
+            -H "Authorization: token ${{ github.token }}" \
+            | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/')
+        fi
+
+        echo "::notice::安装 audit-risk $VERSION ($PLATFORM)"
+
+        BINARY_NAME="audit-risk-$PLATFORM"
+        DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$BINARY_NAME"
+
+        curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/audit-risk"
+        chmod +x "$INSTALL_DIR/audit-risk"
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+
+    - name: Run audit-risk scan
+      id: scan
+      shell: bash
+      env:
+        WORKSPACE: ${{ inputs.workspace }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+
+        REPORT_PATH="${{ runner.temp }}/audit-risk-report.json"
+
+        # 执行扫描，输出 JSON
+        set +e
+        audit-risk check "$WORKSPACE" \
+          --json \
+          --fail-on "$FAIL_ON" \
+          > "$REPORT_PATH" 2>&1
+        EXIT_CODE=$?
+        set -e
+
+        # 解析结果
+        if command -v jq &>/dev/null && [ -f "$REPORT_PATH" ]; then
+          GATE_DECISION=$(jq -r '.review.gate_decision.decision // "unknown"' "$REPORT_PATH" 2>/dev/null || echo "unknown")
+          FINDING_COUNT=$(jq -r '.review.findings | length // 0' "$REPORT_PATH" 2>/dev/null || echo "0")
+        else
+          GATE_DECISION="unknown"
+          FINDING_COUNT="0"
+        fi
+
+        echo "gate_decision=$GATE_DECISION" >> "$GITHUB_OUTPUT"
+        echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
+        echo "report_path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+        echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+        echo "::notice::gate_decision=$GATE_DECISION, findings=$FINDING_COUNT"
+
+    - name: Post PR comment
+      if: ${{ inputs.comment-on-pr == 'true' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      env:
+        REPORT_PATH: ${{ steps.scan.outputs.report_path }}
+        GATE_DECISION: ${{ steps.scan.outputs.gate_decision }}
+        FINDING_COUNT: ${{ steps.scan.outputs.finding_count }}
+      with:
+        script: |
+          const fs = require('fs');
+          const reportPath = process.env.REPORT_PATH;
+          const gateDecision = process.env.GATE_DECISION;
+          const findingCount = parseInt(process.env.FINDING_COUNT || '0');
+
+          // 门禁状态图标
+          const gateIcon = {
+            'allow': '✅',
+            'warn': '⚠️',
+            'require_approval': '🔶',
+            'block': '🚫',
+          }[gateDecision] || '❓';
+
+          const gateLabel = {
+            'allow': '通过',
+            'warn': '警告',
+            'require_approval': '需要审批',
+            'block': '已阻断',
+          }[gateDecision] || gateDecision;
+
+          let report = null;
+          try {
+            report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+          } catch (e) {
+            // report 解析失败，降级到基础输出
+          }
+
+          // 构建 PR 评论
+          let body = `## ${gateIcon} audit-risk 风险报告\n\n`;
+          body += `**门禁决定**：${gateLabel}　**发现风险**：${findingCount} 条\n\n`;
+
+          if (report && report.review && report.review.findings && report.review.findings.length > 0) {
+            body += `### 风险详情\n\n`;
+            body += `| 级别 | 位置 | 规则 | 说明 |\n`;
+            body += `|---|---|---|---|\n`;
+
+            const findings = report.review.findings.slice(0, 20); // 最多显示20条
+            for (const f of findings) {
+              const severity = f.severity || 'unknown';
+              const location = f.location?.file_path
+                ? `\`${f.location.file_path}${f.location.start_line ? ':' + f.location.start_line : ''}\``
+                : '—';
+              const rule = f.rule_id || '—';
+              const explanation = (f.explanation || f.message || '').slice(0, 80);
+              body += `| ${severity} | ${location} | ${rule} | ${explanation} |\n`;
+            }
+
+            if (report.review.findings.length > 20) {
+              body += `\n> 共 ${report.review.findings.length} 条风险，上方仅显示前 20 条。完整报告见 Actions 产物。\n`;
+            }
+          } else if (findingCount === 0) {
+            body += `> 未发现风险，代码通过审查。\n`;
+          }
+
+          if (gateDecision === 'require_approval' || gateDecision === 'block') {
+            body += `\n---\n`;
+            body += `> **如何处理**：查看上方风险详情，修复或由负责人审批后重新推送。\n`;
+            body += `> 本报告由 [audit-risk](https://github.com/290864310liujiasheng-wq/hologram-audit-risk) 自动生成。\n`;
+          }
+
+          // 查找已有评论，避免刷屏
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c =>
+            c.user.login === 'github-actions[bot]' &&
+            c.body.includes('audit-risk 风险报告')
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Set final exit code
+      shell: bash
+      run: exit ${{ steps.scan.outputs.exit_code }}
