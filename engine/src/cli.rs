@@ -5182,7 +5182,7 @@ fn render_check_screen(payload: &Value, verbose: bool) -> Result<String, CliRunt
         });
         (pool, note)
     };
-    let finding_preview = preview_pool
+    let _finding_preview = preview_pool
         .iter()
         .take(if verbose { 10 } else { 3 })
         .map(|entry| format_finding_line(entry))
