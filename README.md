@@ -4,38 +4,56 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
-  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/actions"><img src="https://img.shields.io/badge/tests-404%20passed-brightgreen" /></a>
+  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/actions"><img src="https://img.shields.io/badge/tests-476%20passed-brightgreen" /></a>
   <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/releases"><img src="https://img.shields.io/github/v/release/290864310liujiasheng-wq/hologram-audit-risk?label=latest" /></a>
   <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
-> **AI 编码风控平台**
+> **AI 编码治理平台**
 >
-> 为 AI 生成的代码提供实时审查、规则拦截和可追溯的审计证据。
+> 不管团队用 Codex、Cursor、Copilot 还是其他 AI 工具写代码，高风险代码在进入主分支前都经过同一套规则检查，留下可复核的审计记录。
 
 ---
 
-## 安装
+## 快速接入（GitHub Action）
 
-**从源码构建（当前推荐）：**
+在你的仓库里新建 `.github/workflows/audit-risk.yml`：
 
-```sh
-git clone https://github.com/290864310liujiasheng-wq/hologram-audit-risk.git
-cd hologram-audit-risk/engine
-cargo build --release --bin audit-risk
-# 二进制在 target/release/audit-risk，将其加入 PATH
+```yaml
+name: audit-risk
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  audit-risk:
+    name: AI代码风险审查
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: 290864310liujiasheng-wq/hologram-audit-risk/.github/actions/audit-risk@v0.4.0
+        with:
+          workspace: '.'
+          fail-on: 'require_approval'   # warn / require_approval / block
+          comment-on-pr: 'true'
 ```
 
-**一行安装（macOS / Linux，需要已发布的 Release）：**
+接入后，每个 PR 自动触发风险扫描，结果以 Check Run 显示在 PR 页面，命中高危规则自动在 PR 下方发布中文说明。
+
+---
+
+## 本地安装
+
+**一行安装（macOS / Linux）：**
 
 ```sh
 curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh
-```
-
-安装到自定义路径（不需要 sudo）：
-
-```sh
-curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-audit-risk/main/install.sh | sh -s -- --prefix ~/.local
 ```
 
 **手动下载：** 从 [Releases](https://github.com/290864310liujiasheng-wq/hologram-audit-risk/releases) 页面下载对应平台的预编译二进制：
@@ -48,149 +66,111 @@ curl -sSf https://raw.githubusercontent.com/290864310liujiasheng-wq/hologram-aud
 | Linux ARM64 | `audit-risk-linux-arm64` |
 | Windows x64 | `audit-risk-windows-x64.exe` |
 
+**从源码构建：**
+
+```sh
+git clone https://github.com/290864310liujiasheng-wq/hologram-audit-risk.git
+cd hologram-audit-risk/engine
+cargo build --release --bin audit-risk
+# 二进制在 target/release/audit-risk，将其加入 PATH
+```
 
 ---
 
-## 清理磁盘空间
+## 这是什么
 
-构建产物（`target/`）、依赖（`node_modules/`）和运行时缓存（`.hologram/`）会占用大量空间。仓库根目录提供 `clean.sh` 一键清理，删除的都是可自动重建的东西，不影响源码和项目运行：
+`audit-risk` 是 AI 代码进入主分支前不可绕过的治理门。
 
-```sh
-./clean.sh --dry-run   # 预览：列出会删什么、能省多少（不实际删除）
-./clean.sh             # 实际清理
-```
+**解决的问题**：团队里有人用 Cursor、有人用 Copilot、有人用 Codex，每个工具生成的代码风格不同，安全边界不同，但它们都要进同一个 git 仓库。`audit-risk` 在 PR 合并前统一拦截高风险 AI 代码，要求审批或直接阻断，并留下谁提交了什么、命中了什么规则、谁批准或拦截的完整记录。
 
-也可以从前端目录用 npm 脚本调用：
-
-```sh
-npm --prefix src-ui run clean            # 实际清理
-npm --prefix src-ui run clean:dry        # 预览
-```
-
-清理后按需重建：`cargo build`（引擎/桌面）、`npm ci`（前端依赖）、`npm run build`（前端产物），首次运行应用会自动重建 `.hologram` 索引。
+**和 Semgrep / CodeQL 的区别**：它们是代码扫描器，发现问题后告诉你。`audit-risk` 是治理门，发现问题后可以阻止合并、要求审批、并记录决策链——证据不只是"扫到了什么"，而是"谁在什么时间对什么做了什么决定"。
 
 ---
-
-## 一句话
-
-`audit-risk` 是一个面向 Codex、Cursor、Copilot、CodeGeeX 等 AI 编码工具的通用本地风控层。它持续审查 AI 生成或修改的代码，给出白话解释、修复建议、审批信号和可追溯的审计记录，而不是再造一个新的 IDE。
-
-## 电梯演讲
-
-- Apiiro 是商业 CLI，我们是开源 CLI + 纯本地合规证据链。
-- Meta CodeShield 是扫描引擎，我们是在它这类底层扫描能力之上，补齐白话解释、修复方案验证、审批流和审计哈希链的风控平台。
-
-## 我们和别人的区别
-
-| 差异化 | 说明 |
-|---|---|
-| **白话解释 + 一键修复** | 不只报规则编号或漏洞名；每个 finding 都要解释位置、原因、影响和建议，并把修复方案纳入受控流程。 |
-| **纯本地 + 可追溯审计日志** | 客户接入自己的模型和环境，代码、密钥、审计记录不需要交给平台统一托管；审计记录受 SHA-256 哈希链保护。该链不具备密钥绑定，密码学绑定仍需服务端 HMAC 或签名支持。 |
-| **跨 AI 工具通用** | 主交付形态是 CLI，可被终端、Git Hook、CI/CD 以及主流 AI 编码工具的扩展命令统一调用。 |
 
 ## 核心能力
 
-- **实时风险审查**：对 AI 生成代码、工作区变更和 Git diff 持续审查。
-- **规则拦截**：按规则把风险动作收口为 `allow`、`warn`、`require_approval`、`block`。
-- **白话解释**：每个 finding 必须说明原因、影响和建议，而不是只给扫描器结果。
-- **受控自修复**：生成修复方案后，先做二次审计、验证和审批，再决定是否允许应用。
-- **多代理并行审计**：把静态结构、依赖影响、权限/供应链、测试回归等审计面并行化，再由主审查器汇总。
-- **机器可读集成**：输出结构化 JSON 和退出码，方便接入 Git Hook、CI/CD 和外部平台。
-- **本地审计证据**：所有关键决策、审批、修复和回滚都进入 append-only 审计链路。
-- **轻量观察模式**：`watch --observe` 会起本地只读观察页，并打印本地/LAN 地址与二维码图片路径，便于手机或旁路观察。
+- **规则拦截**：把 AI 生成的高风险代码收口为 `allow`、`warn`、`require_approval`、`block`
+- **中文白话解释**：每个 finding 说明位置、原因、影响和建议，不只是规则编号
+- **受控自修复**：修复方案经二次审计、验证和审批，才允许应用
+- **可追溯审计链**：所有决策、审批、修复、回滚进入 SHA-256 哈希链审计日志
+- **CI/CD 集成**：输出结构化 JSON 和退出码，Git Hook、GitHub Action 直接消费
+- **纯本地部署**：源码、diff、密钥、审计记录不上传云端；客户接入自己的模型 API
 
-## 检测能力与边界（诚实口径）
+---
 
-我们用一个固定语料集（`engine/tests/detection_corpus/`）持续测量检测质量，数字而非感觉，随代码回归：
+## 检测能力（诚实口径）
 
-| 指标 | 当前 | 说明 |
-|---|---|---|
-| **召回率** | **37/37 = 100%** | 必检出样本（各类硬编码密钥、SQL 注入、危险执行、IAM 通配符）全部命中 |
-| **误报率** | **0/12 = 0%** | 干净样本（env 读取、参数化查询、占位符、注释）零误报 |
-| **已知盲区** | 1/8 | 见下 |
+用固定语料集（`engine/tests/detection_corpus/`）持续测量，CI 门禁锁定退化即失败：
 
-`cargo test --test detection_quality -- --nocapture` 可复现，CI 门禁锁定「召回 100% 且零误报」，退化即失败。
+| 指标 | 当前 |
+|---|---|
+| 召回率 | **37/37 = 100%** |
+| 误报率 | **0/12 = 0%** |
 
-**我们现在检测什么**：已知前缀密钥（OpenAI/AWS/Stripe/GitHub/Slack/Google/私钥等）、高熵字符串、敏感变量硬编码赋值、字符串拼接/插值式 SQL 注入（含 f-string / 模板字面量、`+` 拼接、Python `%` 格式化、`str.format()`）、`eval`/`exec`/`os.system`/`shell=True`/`execSync` 等危险动态执行、IAM `*` 通配符。
+**现在检测**：硬编码密钥（OpenAI/AWS/Stripe/GitHub/Slack/Google等前缀）、高熵字符串、`.env` 无引号密码赋值、数据库连接串明文密码、字符串拼接/插值式 SQL 注入（Python f-string、JS 模板字面量、`+` 拼接、`%` 格式化、`str.format()`）、危险动态执行（`eval`/`exec`/`os.system`/`os.popen`/`shell=True`/`execSync`/`subprocess.getoutput`）、IAM `*` 通配符、Hex 格式密钥
 
-**我们暂时不检测（诚实标注的盲区）**：命令注入的 `os.popen` 变体、路径穿越、弱哈希（MD5）、云服务连接串（GCP service account / Azure connection string）、SSRF、不安全反序列化等语义/数据流类风险。这些需要更深的分析，在路线图上，不在当前版本里假装能做。
+**已知盲区**：路径穿越、弱哈希（MD5）、SSRF、不安全反序列化、云服务连接串（GCP/Azure）。这些在路线图上，当前版本不假装能做。
 
-## 当前产品形态
+---
 
-- **主产品**：通用 CLI `audit-risk`
-- **主要接入方式**：终端、Git Hook、CI/CD、外部 AI 工具扩展命令
-- **桌面版角色**：继续保留，但定位调整为安全负责人和团队管理者使用的管理后台，用于规则配置、审计检索、团队看板和导出报告
+## 常用命令
 
-## 当前公开命令
+```sh
+# 初始化工作区（生成 .hologram/ 配置、Git Hook、CI workflow 模板）
+audit-risk init .
 
-- **开发者主路径**：`audit-risk check`、`audit-risk watch`、`audit-risk diff`、`audit-risk init`、`audit-risk doctor`
-- **管理员/集成路径**：`audit-risk report`、`audit-risk rules`、`audit-risk audit`、`audit-risk verify`
-- **授权与个人版路径**：`audit-risk`（零参数中文首页）、`audit-risk help`、`audit-risk tour`、`audit-risk auth login`、`audit-risk auth status`、`audit-risk auth logout`
+# 扫描当前工作区
+audit-risk check .
 
-## Core 与 Pro
+# 持续监听变化
+audit-risk watch .
 
-- **Core 免费版**：保留零参数中文首页、`help/tour`、`init`、`doctor`、`check`、`watch`、`diff`、基础白话解释、基础修复建议与 diff 预览、修复方案二次审计验证、基础规则包、JSON/Markdown 基础报告。
-- **Pro 个人版**：29 元/月，解锁高级规则包、历史风险对比、增强报告导出、审计日志哈希链签名导出包、`observe`、`notify`、个人规则自定义加载。
-- **当前仓库边界**：这个 MIT Core 仓库先实现 CLI 侧授权合同、本地 entitlement 状态机、中文 gate 和登录入口；不会在服务端未接入时伪造 Pro 授权，也不会把闭源 Pro 简化成同仓库里的一层 if/else 开关。真实 auth/payment 服务端、29 元/月订单、支付回调、续费和撤销样本仍需做外部 fresh 验收；仓库内已提供合同样例 `docs/auth-payment-live-samples.json` 和联调脚本模板 `scripts/auth-payment-live-verification.sh`。
+# 扫描两个版本之间的差异
+audit-risk diff <before> <after>
 
-## 仓库当前状态
+# 诊断环境配置
+audit-risk doctor .
 
-这个仓库正在把既有的 HoloGram 桌面基座收敛为 AI 编码风控平台：
+# 查看审计日志
+audit-risk audit . --query review --limit 20
 
-- Rust 引擎、tree-sitter 多语言分析、规则命中、审计、修复链路继续保留
-- 既有桌面壳和前端工作台继续作为管理后台基座
-- 主交付链正在从既有桌面基座收敛到 CLI-first
+# 生成机器可读报告
+audit-risk report . --output report.json
 
-换句话说，当前仓库里同时存在：
-
-- **已保留的内核**：证据引擎、审查合同、规则系统、审计系统、自修复 owner
-- **待收口的外层**：CLI 命令面、初始化/诊断体验、守护输出、对外接入文案
-
-## 当前可复用基座
-
-- **Rust 引擎**：代码分析、依赖影响、静态信号、watcher、MCP/TCP 服务底座
-- **风险核心**：`ReviewJob`、`ReviewFinding`、`GateDecision`、`RulePackage`、`RepairPlan`、`PatchProposal`
-- **审计平面**：append-only 审计日志、统一审计查询读模型、修复/审批/回滚证据
-- **Provider 与代理编排**：客户自带模型 provider、多代理审计和权限门禁
-
-## 适用场景
-
-- 开发者在本地配合 Codex、Cursor、Copilot 等 AI 编码工具写代码
-- 团队希望在提交前对 AI 生成代码做风险拦截
-- 安全或平台团队需要保留审批和审计证据，而不是只跑一次扫描
-- 组织希望保留纯本地部署和自带模型 API 的边界
-
-## 技术方向
-
-当前单一推荐架构是：
-
-```text
-AI Tool / Git Diff / Workspace Change
-  -> Evidence Collector
-  -> Rule + Static Signal Engine
-  -> Model Review Provider
-  -> Risk Aggregator
-  -> Gate Decision
-  -> Audit Trail
-  -> CLI Output / Hook / CI / Admin Console
+# 查看当前规则摘要
+audit-risk rules .
 ```
 
-实现上继续复用：
+---
 
-- `engine/`：Rust 证据引擎和多语言分析底座
-- `src-ui/src/risk/`：风险合同、规则、审计查询、自修复 owner
-- `src-tauri/`：本地能力和既有桌面壳基座
+## 产品版本
 
-## 设计原则
+| 版本 | 价格 | 包含 |
+|---|---|---|
+| **Core** | 免费 | CLI 全部命令 + 基础规则包（MIT 开源） |
+| **Team** | ¥299/月（按仓库数）| + GitHub Action + MCP 约束注入 + LLM 语义审查 |
+| **Enterprise** | 合同制 | + 数据飞轮 + 团队专属规则模型 |
 
-- 不做平台统一托管的模型额度服务
-- 不做通用聊天机器人
-- 不把风险语义藏在 prompt 或 UI 文案里
-- 不让 CLI、桌面后台、Hook、CI 各自维护一套风控结论
-- 不在没有证据、验证和审批的情况下宣称“自动修复”
+---
 
-## 当前文档口径
+## 技术栈
 
-- 对外 README 以本页为准
-- 内部产品和架构真源以 `dev-docs/README.md` 及其索引文档为准
-- 旧 HoloGram 叙事只作为历史基座说明，不再作为当前产品定位
+- **语言**：Rust（单一自包含二进制，无运行时依赖）
+- **代码解析**：tree-sitter，支持 30 种语言
+- **存储**：SQLite（代码图谱）+ JSONL（审计链）
+- **签名**：Ed25519（授权验签）+ SHA-256（审计链完整性）
+
+---
+
+## 清理构建产物
+
+```sh
+./clean.sh --dry-run   # 预览将删除的内容
+./clean.sh             # 实际清理（仅删除可重建产物）
+```
+
+---
+
+## 参与贡献
+
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。新增检测能力请在 `engine/tests/detection_corpus/bad/` 添加样本，确保 `cargo test --test detection_quality` 仍保持召回 100%/误报 0%。
