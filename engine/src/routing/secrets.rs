@@ -1,6 +1,7 @@
 /// Secret scanning engine.
 ///
-/// Six detection layers (applied to each line of each changed file):
+/// Seven detection layers. The first six scan each changed line; the seventh
+/// uses bounded content windows for multi-line LLM calls:
 ///
 /// 1. **Known prefix patterns** — fixed patterns like `sk-`, `AKIA`, `ghp_`.
 ///    Very low false-positive rate; catches the most dangerous leaks.
@@ -28,11 +29,18 @@
 ///    policy that lets this service read from S3" and reach for a
 ///    wildcard instead of scoping it down.
 ///
+/// 7. **Prompt injection residue** — user-controlled values concatenated into
+///    prompts or passed directly inside bounded LLM API call windows.
+///
 /// Output signals use level 5 (critical) for definite known-prefix hits,
 /// level 4 (high) for entropy, assignment, SQL injection, dangerous
 /// execution, and permissive IAM hits.
 use regex::Regex;
 use serde_json::{json, Value};
+
+const AI_001_RULE_ID: &str = "AI-001";
+const AI_001_SEVERITY: &str = "high";
+const AI_001_EXPLANATION: &str = "用户输入未经过滤直接拼入 LLM prompt（Prompt Injection 风险）。攻击者可通过构造输入操控模型行为，泄露系统提示或执行越权操作。应对用户输入进行长度限制、特殊字符转义，并将系统提示与用户输入严格分离。";
 
 /// A single secret detection finding.
 #[derive(Debug, Clone)]
@@ -52,6 +60,7 @@ pub enum SecretKind {
     SqlInjection,
     DangerousExecution(&'static str),
     PermissiveIam(&'static str),
+    PromptInjection,
 }
 
 pub struct SecretScanner {
@@ -87,6 +96,13 @@ pub struct SecretScanner {
     shell_exec_pattern: Regex,
     /// Overly permissive IAM/policy statement patterns: (display label, regex)
     permissive_iam_patterns: Vec<(&'static str, Regex)>,
+    /// AI-001 prompt construction and bounded LLM call patterns.
+    prompt_assignment_pattern: Regex,
+    messages_assignment_pattern: Regex,
+    user_message_content_pattern: Regex,
+    llm_call_pattern: Regex,
+    llm_prompt_argument_pattern: Regex,
+    user_input_pattern: Regex,
 }
 
 impl Default for SecretScanner {
@@ -255,6 +271,38 @@ impl SecretScanner {
             ),
         ];
 
+        let prompt_assignment_pattern =
+            Regex::new(r"(?i)\b(?:prompt|messages?)(?:_[A-Za-z0-9]+)?\s*=").unwrap();
+        let messages_assignment_pattern =
+            Regex::new(r"(?i)\bmessages?(?:_[A-Za-z0-9]+)?\s*=\s*\[").unwrap();
+        let user_input_pattern = Regex::new(
+            r"(?ix)\b(?:
+                user[_A-Za-z0-9]*(?:input|message|query|request|body|param|data)
+                |(?:input|message|query|request|body|param|data)[_A-Za-z0-9]*user
+                |(?:request|req)\s*\.\s*(?:body|json)(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)?
+                |(?:flask|django)\s*\.\s*request(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)?
+            )\b",
+        )
+        .unwrap();
+        let user_message_content_pattern =
+            Regex::new(r#"(?isx)["']role["']\s*:\s*["']user["'][^}]{0,512}["']content["']\s*:"#)
+                .unwrap();
+        let llm_call_pattern = Regex::new(
+            r"(?ix)\b(?:
+                (?:openai\s*\.\s*)?chat\s*\.\s*completions\s*\.\s*create
+                |openai\s*\.\s*completions\s*\.\s*create
+                |(?:anthropic\s*\.\s*)?messages\s*\.\s*create
+                |langchain(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*){1,6}
+                |llm(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*){1,6}
+                |chat_completion(?:s)?(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*){0,3}
+            )\s*\(",
+        )
+        .unwrap();
+        let llm_prompt_argument_pattern = Regex::new(
+            r#"(?i)(?:\bmessages?\b|\bprompt\b|["']content["'])\s*(?:=|:)"#,
+        )
+        .unwrap();
+
         Self {
             known_prefixes,
             assignment_pattern,
@@ -276,6 +324,12 @@ impl SecretScanner {
             system_declaration_pattern,
             shell_exec_pattern,
             permissive_iam_patterns,
+            prompt_assignment_pattern,
+            messages_assignment_pattern,
+            user_message_content_pattern,
+            llm_call_pattern,
+            llm_prompt_argument_pattern,
+            user_input_pattern,
         }
     }
 
@@ -598,8 +652,515 @@ impl SecretScanner {
                 .retain(|(_, declared_depth, _)| *declared_depth <= brace_depth);
         }
 
+        self.scan_prompt_injection(file_path, content, &mut findings);
+        findings.sort_by_key(|finding| finding.line);
         findings
     }
+
+    fn scan_prompt_injection(
+        &self,
+        file_path: &str,
+        content: &str,
+        findings: &mut Vec<SecretFinding>,
+    ) {
+        let code_context = build_code_context(content);
+        let mut line_start = 0usize;
+        for (index, segment) in content.split_inclusive('\n').enumerate() {
+            let line = segment.strip_suffix('\n').unwrap_or(segment);
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let mut detected = false;
+
+            for assignment in self.prompt_assignment_pattern.find_iter(line) {
+                if !is_code_offset(&code_context, line_start + assignment.start()) {
+                    continue;
+                }
+                let expression = &line[assignment.end()..];
+                let has_code_plus = expression.match_indices('+').any(|(offset, _)| {
+                    is_code_offset(&code_context, line_start + assignment.end() + offset)
+                });
+                detected = self.user_input_pattern.find_iter(expression).any(|user_input| {
+                    let absolute_offset = line_start + assignment.end() + user_input.start();
+                    (has_code_plus && is_code_offset(&code_context, absolute_offset))
+                        || is_interpolated_user_input(
+                            expression,
+                            user_input.start(),
+                            user_input.end(),
+                        )
+                });
+                if detected {
+                    break;
+                }
+            }
+
+            if !detected {
+                for content_field in self.user_message_content_pattern.find_iter(line) {
+                    let separator = line_start + content_field.end() - 1;
+                    if !is_code_offset(&code_context, separator) {
+                        continue;
+                    }
+                    let (value_start, value_end) =
+                        bounded_argument_value_span(line, content_field.end());
+                    let value = &line[value_start..value_end];
+                    detected = self.user_input_pattern.find_iter(value).any(|user_input| {
+                        let absolute_offset = line_start + value_start + user_input.start();
+                        is_code_offset(&code_context, absolute_offset)
+                            || is_interpolated_user_input(
+                                value,
+                                user_input.start(),
+                                user_input.end(),
+                            )
+                    });
+                    if detected {
+                        break;
+                    }
+                }
+            }
+
+            if detected {
+                push_prompt_injection_finding(
+                    findings,
+                    file_path,
+                    index + 1,
+                    truncate_line_for_display(line),
+                );
+            }
+            line_start += segment.len();
+        }
+
+        for assignment in self.prompt_assignment_pattern.find_iter(content) {
+            if !is_code_offset(&code_context, assignment.start()) {
+                continue;
+            }
+            let remaining = &content[assignment.end()..];
+            let whitespace = remaining.len() - remaining.trim_start().len();
+            let open_paren = assignment.end() + whitespace;
+            if content.as_bytes().get(open_paren) != Some(&b'(') {
+                continue;
+            }
+            let window = bounded_parenthesized_window(content, open_paren, 24);
+            for user_input in self.user_input_pattern.find_iter(window) {
+                let absolute_offset = open_paren + user_input.start();
+                let is_concatenated_user = window.contains('+')
+                    && is_code_offset(&code_context, absolute_offset);
+                let is_interpolated_user = is_interpolated_user_input(
+                    window,
+                    user_input.start(),
+                    user_input.end(),
+                );
+                if is_concatenated_user || is_interpolated_user {
+                    let line = line_number_at_offset(content, absolute_offset);
+                    push_prompt_injection_finding(
+                        findings,
+                        file_path,
+                        line,
+                        truncate_line_for_display(
+                            content.lines().nth(line - 1).unwrap_or_default(),
+                        ),
+                    );
+                    break;
+                }
+            }
+        }
+
+        for assignment in self.messages_assignment_pattern.find_iter(content) {
+            if !is_code_offset(&code_context, assignment.start()) {
+                continue;
+            }
+            let open_bracket = assignment.end() - 1;
+            let window = bounded_delimited_window(content, open_bracket, '[', ']', 24);
+            for content_field in self.user_message_content_pattern.find_iter(window) {
+                let separator = open_bracket + content_field.end() - 1;
+                if !is_code_offset(&code_context, separator) {
+                    continue;
+                }
+                let (value_start, value_end) =
+                    bounded_argument_value_span(window, content_field.end());
+                let value = &window[value_start..value_end];
+                if let Some(user_input) = self.user_input_pattern.find_iter(value).find(|matched| {
+                    let absolute_offset = open_bracket + value_start + matched.start();
+                    is_code_offset(&code_context, absolute_offset)
+                        || is_interpolated_user_input(value, matched.start(), matched.end())
+                }) {
+                    let absolute_offset = open_bracket + value_start + user_input.start();
+                    let line = line_number_at_offset(content, absolute_offset);
+                    push_prompt_injection_finding(
+                        findings,
+                        file_path,
+                        line,
+                        truncate_line_for_display(
+                            content.lines().nth(line - 1).unwrap_or_default(),
+                        ),
+                    );
+                    break;
+                }
+            }
+        }
+
+        for llm_call in self.llm_call_pattern.find_iter(content) {
+            if !is_code_offset(&code_context, llm_call.start()) {
+                continue;
+            }
+            let open_paren = llm_call.end() - 1;
+            let window = bounded_parenthesized_window(content, open_paren, 24);
+            for argument in self.llm_prompt_argument_pattern.find_iter(window) {
+                let separator = open_paren + argument.end() - 1;
+                if !is_code_offset(&code_context, separator) {
+                    continue;
+                }
+                let (value_start, value_end) =
+                    bounded_argument_value_span(window, argument.end());
+                let value = &window[value_start..value_end];
+                if let Some(user_input) = self.user_input_pattern.find_iter(value).find(|matched| {
+                    let absolute_offset = open_paren + value_start + matched.start();
+                    is_code_offset(&code_context, absolute_offset)
+                        || is_interpolated_user_input(value, matched.start(), matched.end())
+                }) {
+                    let absolute_offset = open_paren + value_start + user_input.start();
+                    let line = line_number_at_offset(content, absolute_offset);
+                    push_prompt_injection_finding(
+                        findings,
+                        file_path,
+                        line,
+                        truncate_line_for_display(
+                            content.lines().nth(line - 1).unwrap_or_default(),
+                        ),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn is_interpolated_user_input(window: &str, start: usize, end: usize) -> bool {
+    let before = &window[..start];
+    let after = &window[end..];
+    let Some(open_brace) = before.rfind('{') else {
+        return false;
+    };
+    let Some(close_brace) = after.find('}') else {
+        return false;
+    };
+    if before[open_brace + 1..].contains('}') {
+        return false;
+    }
+
+    let bytes = before.as_bytes();
+    let is_javascript_interpolation = open_brace > 0
+        && bytes[open_brace - 1] == b'$'
+        && preceding_backslashes_are_even(bytes, open_brace - 1);
+    if is_javascript_interpolation {
+        return true;
+    }
+
+    let escaped_open = open_brace > 0 && bytes[open_brace - 1] == b'{';
+    let escaped_close = after.as_bytes().get(close_brace + 1) == Some(&b'}');
+    !escaped_open && !escaped_close && has_open_fstring(&before[..open_brace])
+}
+
+fn preceding_backslashes_are_even(bytes: &[u8], offset: usize) -> bool {
+    let count = bytes[..offset]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count();
+    count % 2 == 0
+}
+
+fn has_open_fstring(prefix: &str) -> bool {
+    for (marker, delimiter) in [
+        ("f\"\"\"", "\"\"\""),
+        ("F\"\"\"", "\"\"\""),
+        ("f'''", "'''"),
+        ("F'''", "'''"),
+        ("f\"", "\""),
+        ("F\"", "\""),
+        ("f'", "'"),
+        ("F'", "'"),
+    ] {
+        if let Some(start) = prefix.rfind(marker) {
+            let content_start = start + marker.len();
+            if !prefix[content_start..].contains(delimiter) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn push_prompt_injection_finding(
+    findings: &mut Vec<SecretFinding>,
+    file_path: &str,
+    line: usize,
+    matched_text: String,
+) {
+    if findings
+        .iter()
+        .any(|finding| finding.line == line && finding.kind == SecretKind::PromptInjection)
+    {
+        return;
+    }
+    findings.push(SecretFinding {
+        file_path: file_path.to_string(),
+        line,
+        kind: SecretKind::PromptInjection,
+        matched_text,
+        level: 4,
+    });
+}
+
+fn bounded_parenthesized_window(content: &str, open_paren: usize, max_lines: usize) -> &str {
+    bounded_delimited_window(content, open_paren, '(', ')', max_lines)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DelimitedScanState {
+    Code,
+    Quoted(char),
+    LineComment,
+    BlockComment,
+}
+
+fn bounded_delimited_window(
+    content: &str,
+    open_offset: usize,
+    open: char,
+    close: char,
+    max_lines: usize,
+) -> &str {
+    let tail = &content[open_offset..];
+    let mut depth = 0usize;
+    let mut lines = 0usize;
+    let mut state = DelimitedScanState::Code;
+    let mut chars = tail.char_indices().peekable();
+
+    while let Some((offset, ch)) = chars.next() {
+        if ch == '\n' {
+            lines += 1;
+            if lines >= max_lines {
+                return &tail[..offset];
+            }
+            if state == DelimitedScanState::LineComment {
+                state = DelimitedScanState::Code;
+            }
+        }
+
+        match state {
+            DelimitedScanState::Quoted(quote) => {
+                if ch == '\\' {
+                    if let Some((escaped_offset, escaped)) = chars.next() {
+                        if escaped == '\n' {
+                            lines += 1;
+                            if lines >= max_lines {
+                                return &tail[..escaped_offset];
+                            }
+                        }
+                    }
+                } else if ch == quote {
+                    state = DelimitedScanState::Code;
+                }
+            }
+            DelimitedScanState::LineComment => {}
+            DelimitedScanState::BlockComment => {
+                if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                    chars.next();
+                    state = DelimitedScanState::Code;
+                }
+            }
+            DelimitedScanState::Code => {
+                if matches!(ch, '\'' | '"' | '`') {
+                    state = DelimitedScanState::Quoted(ch);
+                } else if ch == '#'
+                    || (ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '/'))
+                {
+                    if ch == '/' {
+                        chars.next();
+                    }
+                    state = DelimitedScanState::LineComment;
+                } else if ch == '/'
+                    && chars.peek().is_some_and(|(_, next)| *next == '*')
+                {
+                    chars.next();
+                    state = DelimitedScanState::BlockComment;
+                } else if ch == open {
+                    depth += 1;
+                } else if ch == close {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return &tail[..offset + ch.len_utf8()];
+                    }
+                }
+            }
+        }
+    }
+    tail
+}
+
+fn bounded_argument_value_span(input: &str, start: usize) -> (usize, usize) {
+    let remaining = &input[start..];
+    let whitespace = remaining.len() - remaining.trim_start().len();
+    let value_start = start + whitespace;
+    let value = &input[value_start..];
+    let mut state = DelimitedScanState::Code;
+    let mut depths = [0usize; 3];
+    let mut chars = value.char_indices().peekable();
+
+    while let Some((offset, ch)) = chars.next() {
+        match state {
+            DelimitedScanState::Quoted(quote) => {
+                if ch == '\\' {
+                    chars.next();
+                } else if ch == quote {
+                    state = DelimitedScanState::Code;
+                }
+            }
+            DelimitedScanState::LineComment => {
+                if ch == '\n' {
+                    state = DelimitedScanState::Code;
+                }
+            }
+            DelimitedScanState::BlockComment => {
+                if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                    chars.next();
+                    state = DelimitedScanState::Code;
+                }
+            }
+            DelimitedScanState::Code => {
+                if matches!(ch, '\'' | '"' | '`') {
+                    state = DelimitedScanState::Quoted(ch);
+                } else if ch == '#'
+                    || (ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '/'))
+                {
+                    if ch == '/' {
+                        chars.next();
+                    }
+                    state = DelimitedScanState::LineComment;
+                } else if ch == '/'
+                    && chars.peek().is_some_and(|(_, next)| *next == '*')
+                {
+                    chars.next();
+                    state = DelimitedScanState::BlockComment;
+                } else if ch == '(' {
+                    depths[0] += 1;
+                } else if ch == '[' {
+                    depths[1] += 1;
+                } else if ch == '{' {
+                    depths[2] += 1;
+                } else if ch == ')' {
+                    if depths[0] == 0 && depths[1] == 0 && depths[2] == 0 {
+                        return (value_start, value_start + offset);
+                    }
+                    depths[0] = depths[0].saturating_sub(1);
+                } else if ch == ']' {
+                    if depths[0] == 0 && depths[1] == 0 && depths[2] == 0 {
+                        return (value_start, value_start + offset);
+                    }
+                    depths[1] = depths[1].saturating_sub(1);
+                } else if ch == '}' {
+                    if depths[0] == 0 && depths[1] == 0 && depths[2] == 0 {
+                        return (value_start, value_start + offset);
+                    }
+                    depths[2] = depths[2].saturating_sub(1);
+                } else if ch == ',' && depths == [0, 0, 0] {
+                    return (value_start, value_start + offset);
+                }
+            }
+        }
+    }
+
+    (value_start, input.len())
+}
+
+fn line_number_at_offset(content: &str, offset: usize) -> usize {
+    content[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CodeContextState {
+    Code,
+    Quoted(u8),
+    TripleQuoted(u8),
+    LineComment,
+    BlockComment,
+}
+
+fn build_code_context(content: &str) -> Vec<bool> {
+    let bytes = content.as_bytes();
+    let mut code = vec![false; bytes.len()];
+    let mut state = CodeContextState::Code;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match state {
+            CodeContextState::Code => {
+                let byte = bytes[index];
+                let is_triple_quote = matches!(byte, b'\'' | b'"')
+                    && bytes.get(index + 1) == Some(&byte)
+                    && bytes.get(index + 2) == Some(&byte);
+                if is_triple_quote {
+                    state = CodeContextState::TripleQuoted(byte);
+                    index += 3;
+                } else if matches!(byte, b'\'' | b'"' | b'`') {
+                    state = CodeContextState::Quoted(byte);
+                    index += 1;
+                } else if byte == b'#'
+                    || (byte == b'/' && bytes.get(index + 1) == Some(&b'/'))
+                {
+                    state = CodeContextState::LineComment;
+                    index += if byte == b'/' { 2 } else { 1 };
+                } else if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+                    state = CodeContextState::BlockComment;
+                    index += 2;
+                } else {
+                    code[index] = true;
+                    index += 1;
+                }
+            }
+            CodeContextState::Quoted(quote) => {
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                } else if bytes[index] == quote {
+                    state = CodeContextState::Code;
+                    index += 1;
+                } else {
+                    index += 1;
+                }
+            }
+            CodeContextState::TripleQuoted(quote) => {
+                let closes_triple = bytes[index] == quote
+                    && bytes.get(index + 1) == Some(&quote)
+                    && bytes.get(index + 2) == Some(&quote);
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                } else if closes_triple {
+                    state = CodeContextState::Code;
+                    index += 3;
+                } else {
+                    index += 1;
+                }
+            }
+            CodeContextState::LineComment => {
+                if bytes[index] == b'\n' {
+                    state = CodeContextState::Code;
+                }
+                index += 1;
+            }
+            CodeContextState::BlockComment => {
+                if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                    state = CodeContextState::Code;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    code
+}
+
+fn is_code_offset(code_context: &[bool], offset: usize) -> bool {
+    code_context.get(offset).copied().unwrap_or(false)
 }
 
 /// Convert a `SecretFinding` into the JSON signal format used by `run_full_check`.
@@ -629,8 +1190,9 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
             "检测到过度宽松的权限声明：{label}。（{}）通配符权限违反最小权限原则，请把 Action/Resource 收窄到实际需要的范围。",
             f.matched_text
         ),
+        SecretKind::PromptInjection => AI_001_EXPLANATION.to_string(),
     };
-    json!({
+    let mut output = json!({
         "signal": {
             "description": description,
             "file_path": f.file_path,
@@ -639,7 +1201,13 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
             "affected_nodes": [],
         },
         "level": f.level,
-    })
+    });
+    if f.kind == SecretKind::PromptInjection {
+        output["signal"]["rule_id"] = json!(AI_001_RULE_ID);
+        output["signal"]["severity"] = json!(AI_001_SEVERITY);
+        output["signal"]["plain_explanation"] = json!(AI_001_EXPLANATION);
+    }
+    output
 }
 
 /// Scan the file at each `read_paths[i]` and report findings under the
@@ -2216,6 +2784,331 @@ query = "SELECT " + column + " FROM users""#,
             !findings.iter().any(|f| matches!(f.kind, SecretKind::PermissiveIam(_))),
             "a resource ARN that merely ends with a wildcard suffix (scoped to one bucket) must not be flagged"
         );
+    }
+
+    #[test]
+    fn detects_multiline_openai_call_with_direct_user_message() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"response = openai.chat.completions.create(
+    model="gpt-4",
+    messages=[{"role": "user", "content": user_message}]
+)"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 3);
+    }
+
+    #[test]
+    fn detects_client_chat_completion_with_direct_user_message() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            "response = client.chat.completions.create(messages=[user_message])",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn detects_preconstructed_messages_with_direct_request_body() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"messages = [{"role": "user", "content": req.body.message}]"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn detects_multiline_preconstructed_messages_with_direct_request_body() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"messages = [
+    {"role": "user",
+     "content": req.body.message}
+]
+response = client.chat.completions.create(messages=messages)"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 3);
+    }
+
+    #[test]
+    fn llm_call_window_ignores_parentheses_inside_strings() {
+        let balanced = scanner().scan_content(
+            "chat.py",
+            r#"client.chat.completions.create(system="Answer (briefly)", messages=[user_message])"#,
+        );
+        assert_eq!(balanced.len(), 1);
+        assert_eq!(balanced[0].kind, SecretKind::PromptInjection);
+
+        let unmatched_close = scanner().scan_content(
+            "chat.py",
+            r#"client.chat.completions.create(system="Answer ) briefly", messages=[user_message])"#,
+        );
+        assert_eq!(unmatched_close.len(), 1);
+        assert_eq!(unmatched_close[0].kind, SecretKind::PromptInjection);
+    }
+
+    #[test]
+    fn detects_interpolated_user_input_in_preconstructed_messages() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"messages = [{"content": f"Answer: {user_input}"}]"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn detects_prompt_concatenated_with_user_input() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = "You are helpful. Answer: " + user_input"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn ignores_prompt_assignment_in_line_comment() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"# prompt = "x" + user_input"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_prompt_comment_with_user_input_and_legacy_plus() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = "safe"  # user_input + legacy"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_comment_user_input_after_sanitized_message_content() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"messages = [{"role": "user", "content": sanitized}]  # user_input"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_llm_call_in_python_triple_quoted_docstring() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#""""Example only:
+client.chat.completions.create(messages=[user_input])
+""""#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_llm_call_in_javascript_block_comment() {
+        let findings = scanner().scan_content(
+            "chat.js",
+            r#"/*
+client.chat.completions.create(messages=[user_input]);
+*/"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_openai_audio_transcription_with_user_file_data() {
+        let findings = scanner().scan_content(
+            "audio.py",
+            "openai.audio.transcriptions.create(file=user_input_data)",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_openai_file_upload_with_user_file_data() {
+        let findings = scanner().scan_content(
+            "files.py",
+            "openai.files.create(file=user_input_data)",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_user_input_in_non_prompt_api_parameter() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            "client.chat.completions.create(messages=safe_messages, user=user_input_id)",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn detects_valid_api_message_after_invalid_user_input_matches() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"client.chat.completions.create(
+    note="user_input is documented",
+    # user_input is sanitized elsewhere
+    messages=[user_input]
+)"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 4);
+    }
+
+    #[test]
+    fn detects_multiline_prompt_concatenation() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = (
+    "Answer: "
+    + user_input
+)
+client.chat.completions.create(prompt=prompt)"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 3);
+    }
+
+    #[test]
+    fn detects_multiline_python_fstring_prompt() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = (
+    f"Answer: {user_input}"
+)"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 2);
+    }
+
+    #[test]
+    fn ignores_user_input_mentioned_in_comment_after_static_fstring() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = (
+    f"Static text"
+    # user_input is sanitized elsewhere
+)"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn detects_valid_interpolation_after_user_input_mentioned_in_comment() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = (
+    # user_input is untrusted
+    f"Answer: {user_input}"
+)"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 3);
+    }
+
+    #[test]
+    fn ignores_user_input_text_outside_fstring_interpolation() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = (
+    f"Static text"
+    "Document user_input as a variable name"
+)"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn detects_multiline_javascript_template_prompt() {
+        let findings = scanner().scan_content(
+            "chat.js",
+            r#"const prompt = (
+    `Answer: ${user_input}`
+);"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 2);
+    }
+
+    #[test]
+    fn detects_openai_completions_prompt_with_direct_user_input() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            "openai.completions.create(prompt=user_input)",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::PromptInjection);
+        assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn ignores_sanitized_user_message_in_llm_call() {
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"sanitized = user_message[:500].replace("<", "").replace(">", "")
+response = openai.chat.completions.create(
+    model="gpt-4",
+    messages=[
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": sanitized}
+    ]
+)"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn finding_to_signal_carries_ai_001_metadata() {
+        const EXPLANATION: &str = "用户输入未经过滤直接拼入 LLM prompt（Prompt Injection 风险）。攻击者可通过构造输入操控模型行为，泄露系统提示或执行越权操作。应对用户输入进行长度限制、特殊字符转义，并将系统提示与用户输入严格分离。";
+        let findings = scanner().scan_content(
+            "chat.py",
+            r#"prompt = "You are helpful. Answer: " + user_input"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        let signal = finding_to_signal(&findings[0]);
+        assert_eq!(signal["level"], 4);
+        assert_eq!(signal["signal"]["level"], 4);
+        assert_eq!(signal["signal"]["rule_id"], "AI-001");
+        assert_eq!(signal["signal"]["severity"], "high");
+        assert_eq!(signal["signal"]["plain_explanation"], EXPLANATION);
     }
 
     #[test]

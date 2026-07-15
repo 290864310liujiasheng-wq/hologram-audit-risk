@@ -2172,16 +2172,26 @@ fn derive_findings(check: &Value) -> Vec<Value> {
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
                 let line = signal.get("line").and_then(Value::as_u64).unwrap_or(1);
-                let description = signal
-                    .get("description")
+                let plain_explanation = signal
+                    .get("plain_explanation")
                     .and_then(Value::as_str)
+                    .or_else(|| signal.get("description").and_then(Value::as_str))
                     .or_else(|| entry.get("message").and_then(Value::as_str))
                     .unwrap_or("发现一条需要关注的风险，建议查看源码确认影响范围。");
+                let rule_id = signal
+                    .get("rule_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| bucket.replace("_violations", "").replace("l", "check.l"));
+                let severity = signal
+                    .get("severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or(severity);
                 findings.push(json!({
                     "finding_id": format!("{bucket}:{index}"),
-                    "rule_id": bucket.replace("_violations", "").replace("l", "check.l"),
+                    "rule_id": rule_id,
                     "severity": severity,
-                    "plain_explanation": description,
+                    "plain_explanation": plain_explanation,
                     "location": {
                         "file_path": file_path,
                         "start_line": line,
@@ -6970,6 +6980,34 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0]["location"]["file_path"], "src/handler.rs");
+        assert_eq!(findings[0]["rule_id"], "check.l3");
+        assert_eq!(findings[0]["severity"], "medium");
+        assert_eq!(findings[0]["plain_explanation"], "shared data coupling");
+    }
+
+    #[test]
+    fn derive_findings_preserves_scanner_rule_metadata() {
+        const EXPLANATION: &str = "用户输入未经过滤直接拼入 LLM prompt（Prompt Injection 风险）。攻击者可通过构造输入操控模型行为，泄露系统提示或执行越权操作。应对用户输入进行长度限制、特殊字符转义，并将系统提示与用户输入严格分离。";
+        let findings = super::derive_findings(&json!({
+            "l4_violations": [{
+                "signal": {
+                    "description": EXPLANATION,
+                    "plain_explanation": EXPLANATION,
+                    "rule_id": "AI-001",
+                    "severity": "high",
+                    "file_path": "src/chat.py",
+                    "line": 7,
+                    "level": 4,
+                    "affected_nodes": []
+                },
+                "level": 4
+            }]
+        }));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["rule_id"], "AI-001");
+        assert_eq!(findings[0]["severity"], "high");
+        assert_eq!(findings[0]["plain_explanation"], EXPLANATION);
     }
 
     #[test]
