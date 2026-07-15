@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
-  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/actions"><img src="https://img.shields.io/badge/tests-476%20passed-brightgreen" /></a>
+  <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/actions"><img src="https://img.shields.io/badge/tests-513%20passed-brightgreen" /></a>
   <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/releases"><img src="https://img.shields.io/github/v/release/290864310liujiasheng-wq/hologram-audit-risk?label=latest" /></a>
   <a href="https://github.com/290864310liujiasheng-wq/hologram-audit-risk/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
