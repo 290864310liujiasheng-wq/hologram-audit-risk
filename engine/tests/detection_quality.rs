@@ -46,20 +46,36 @@ fn inject_secret(name: &str, content: &str) -> String {
     }
 }
 
-/// (file_name, finding_count) for every file in a corpus subdir, sorted by name.
+fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read corpus dir {}: {e}", dir.display()));
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name == ".hologram") {
+                continue;
+            }
+            collect_files(&path, files);
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+}
+
+/// (relative_path, finding_count) for every file in a corpus subdir, sorted by path.
 fn scan_dir(sub: &str) -> Vec<(String, usize)> {
     let scanner = SecretScanner::new();
     let dir = corpus_dir(sub);
     let mut out = Vec::new();
-    let mut entries: Vec<_> = fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read corpus dir {}: {e}", dir.display()))
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_file())
-        .collect();
+    let mut entries = Vec::new();
+    collect_files(&dir, &mut entries);
     entries.sort();
     for path in entries {
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let name = path
+            .strip_prefix(&dir)
+            .expect("corpus entry must be under its root")
+            .to_string_lossy()
+            .replace('\\', "/");
         let content = inject_secret(&name, &fs::read_to_string(&path).unwrap_or_default());
         let findings = scanner.scan_content(&name, &content);
         out.push((name, findings.len()));

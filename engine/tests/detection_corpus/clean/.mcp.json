@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx @modelcontextprotocol/server-filesystem"
+    }
+  },
+  "allowedTools": ["Read"],
+  "denyTools": ["Bash", "Write"],
+  "hooks": {}
+}
