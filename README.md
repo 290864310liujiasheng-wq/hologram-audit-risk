@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: 290864310liujiasheng-wq/hologram-audit-risk/.github/actions/audit-risk@v0.4.0
+      - uses: 290864310liujiasheng-wq/hologram-audit-risk/.github/actions/audit-risk@v0.4.1
         with:
           workspace: '.'
           fail-on: 'require_approval'   # warn / require_approval / block
