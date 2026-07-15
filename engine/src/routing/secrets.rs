@@ -693,6 +693,9 @@ impl SecretScanner {
         content: &str,
         findings: &mut Vec<SecretFinding>,
     ) {
+        if !is_prompt_injection_source_file(file_path) {
+            return;
+        }
         let code_context = build_code_context(content);
         let mut line_start = 0usize;
         for (index, segment) in content.split_inclusive('\n').enumerate() {
@@ -860,6 +863,40 @@ impl SecretScanner {
             }
         }
     }
+}
+
+fn is_prompt_injection_source_file(file_path: &str) -> bool {
+    let Some(extension) = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    else {
+        return false;
+    };
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "py" | "pyw"
+            | "js" | "jsx" | "mjs" | "cjs"
+            | "ts" | "tsx" | "mts" | "cts"
+            | "rs"
+            | "java"
+            | "kt" | "kts"
+            | "go"
+            | "rb"
+            | "php"
+            | "cs"
+            | "c" | "cc" | "cpp" | "cxx"
+            | "h" | "hh" | "hpp" | "hxx"
+            | "swift"
+            | "scala"
+            | "ex" | "exs"
+            | "lua"
+            | "sh" | "bash" | "zsh"
+            | "ps1"
+            | "r"
+            | "dart"
+            | "vue"
+            | "svelte"
+    )
 }
 
 fn is_interpolated_user_input(window: &str, start: usize, end: usize) -> bool {
@@ -3796,6 +3833,43 @@ query = "SELECT " + column + " FROM users""#,
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].kind, SecretKind::PromptInjection);
         assert_eq!(findings[0].line, 1);
+    }
+
+    #[test]
+    fn ignores_prompt_injection_examples_in_markdown_documents() {
+        for (path, content) in [
+            (
+                "README.md",
+                r#"Unsafe prompt example:
+prompt = "Answer: " + user_input"#,
+            ),
+            (
+                "dev-docs/session-F-AI-rules.md",
+                r#"```python
+client.chat.completions.create(messages=[user_input])
+```"#,
+            ),
+        ] {
+            let findings = scanner().scan_content(path, content);
+            assert!(
+                !findings
+                    .iter()
+                    .any(|finding| finding.kind == SecretKind::PromptInjection),
+                "documentation example in {path} must not produce AI-001"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_prompt_injection_examples_in_text_documents() {
+        let findings = scanner().scan_content(
+            "docs/prompt-example.txt",
+            r#"prompt = "Answer: " + user_input"#,
+        );
+
+        assert!(!findings
+            .iter()
+            .any(|finding| finding.kind == SecretKind::PromptInjection));
     }
 
     #[test]
