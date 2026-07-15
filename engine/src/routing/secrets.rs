@@ -1,7 +1,7 @@
 /// Secret scanning engine.
 ///
-/// Seven detection layers. The first six scan each changed line; the seventh
-/// uses bounded content windows for multi-line LLM calls:
+/// Eight detection layers. The first six scan each changed line; the final two
+/// use bounded content windows or local block structure:
 ///
 /// 1. **Known prefix patterns** — fixed patterns like `sk-`, `AKIA`, `ghp_`.
 ///    Very low false-positive rate; catches the most dangerous leaks.
@@ -32,6 +32,9 @@
 /// 7. **Prompt injection residue** — user-controlled values concatenated into
 ///    prompts or passed directly inside bounded LLM API call windows.
 ///
+/// 8. **Silent error swallowing** — Python except suites and JavaScript/
+///    TypeScript catch blocks that are empty or only print the error.
+///
 /// Output signals use level 5 (critical) for definite known-prefix hits,
 /// level 4 (high) for entropy, assignment, SQL injection, dangerous
 /// execution, and permissive IAM hits.
@@ -41,6 +44,9 @@ use serde_json::{json, Value};
 const AI_001_RULE_ID: &str = "AI-001";
 const AI_001_SEVERITY: &str = "high";
 const AI_001_EXPLANATION: &str = "用户输入未经过滤直接拼入 LLM prompt（Prompt Injection 风险）。攻击者可通过构造输入操控模型行为，泄露系统提示或执行越权操作。应对用户输入进行长度限制、特殊字符转义，并将系统提示与用户输入严格分离。";
+const AI_003_RULE_ID: &str = "AI-003";
+const AI_003_SEVERITY: &str = "high";
+const AI_003_EXPLANATION: &str = "检测到静默错误吞没：异常被捕获后没有有效处理（空 catch 或仅打印）。AI 生成的代码最常见缺陷，占比 42%。这会导致错误被掩盖、调用方无法感知失败、数据静默损坏。应重新抛出异常或向上传播错误状态。";
 
 /// A single secret detection finding.
 #[derive(Debug, Clone)]
@@ -61,6 +67,7 @@ pub enum SecretKind {
     DangerousExecution(&'static str),
     PermissiveIam(&'static str),
     PromptInjection,
+    SilentErrorSwallowing,
 }
 
 pub struct SecretScanner {
@@ -653,8 +660,26 @@ impl SecretScanner {
         }
 
         self.scan_prompt_injection(file_path, content, &mut findings);
+        self.scan_silent_error_swallowing(file_path, content, &mut findings);
         findings.sort_by_key(|finding| finding.line);
         findings
+    }
+
+    fn scan_silent_error_swallowing(
+        &self,
+        file_path: &str,
+        content: &str,
+        findings: &mut Vec<SecretFinding>,
+    ) {
+        let code_context = build_code_context(content);
+        let masked = mask_non_code_content(content, &code_context);
+
+        if is_python_source(file_path) {
+            scan_python_except_suites(file_path, content, &masked, findings);
+        } else if is_javascript_source(file_path) {
+            let masked = mask_javascript_regex_literals(&masked);
+            scan_javascript_catch_blocks(file_path, content, &masked, findings);
+        }
     }
 
     fn scan_prompt_injection(
@@ -1163,6 +1188,500 @@ fn is_code_offset(code_context: &[bool], offset: usize) -> bool {
     code_context.get(offset).copied().unwrap_or(false)
 }
 
+fn mask_non_code_content(content: &str, code_context: &[bool]) -> String {
+    let masked = content
+        .bytes()
+        .enumerate()
+        .map(|(offset, byte)| {
+            if matches!(byte, b'\n' | b'\r') || is_code_offset(code_context, offset) {
+                byte
+            } else {
+                b' '
+            }
+        })
+        .collect();
+    String::from_utf8(masked).expect("masking preserves valid UTF-8")
+}
+
+fn is_python_source(file_path: &str) -> bool {
+    let path = file_path.to_ascii_lowercase();
+    path.ends_with(".py") || path.ends_with(".pyw")
+}
+
+fn is_javascript_source(file_path: &str) -> bool {
+    let path = file_path.to_ascii_lowercase();
+    [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+}
+
+fn scan_python_except_suites(
+    file_path: &str,
+    content: &str,
+    masked: &str,
+    findings: &mut Vec<SecretFinding>,
+) {
+    let source_lines: Vec<_> = content.lines().collect();
+    let masked_lines: Vec<_> = masked.lines().collect();
+
+    for (index, line) in masked_lines.iter().enumerate() {
+        let Some((header_end, header_colon)) = python_except_header_end(&masked_lines, index) else {
+            continue;
+        };
+
+        let header_indent = python_indent_width(line);
+        let inline_suite = &masked_lines[header_end][header_colon + 1..];
+        let mut suite = String::new();
+        let mut has_statement = !inline_suite.trim().is_empty();
+
+        if has_statement {
+            suite.push_str(inline_suite);
+        } else {
+            for suite_line in masked_lines.iter().skip(header_end + 1) {
+                let statement = suite_line.trim();
+                if !statement.is_empty() && python_indent_width(suite_line) <= header_indent {
+                    break;
+                }
+                if !statement.is_empty() {
+                    has_statement = true;
+                }
+                suite.push_str(suite_line);
+                suite.push('\n');
+            }
+        }
+
+        if !has_statement || contains_only_ignored_python_statements(&suite) {
+            push_silent_error_finding(
+                findings,
+                file_path,
+                index + 1,
+                truncate_line_for_display(source_lines.get(index).copied().unwrap_or_default()),
+            );
+        }
+    }
+}
+
+fn python_except_header_end(lines: &[&str], start: usize) -> Option<(usize, usize)> {
+    let first_line = *lines.get(start)?;
+    let leading_whitespace = first_line.len() - first_line.trim_start().len();
+    let header = &first_line[leading_whitespace..];
+    let after_except = header.strip_prefix("except")?;
+    if !matches!(
+        after_except.as_bytes().first(),
+        Some(b':') | Some(b' ') | Some(b'\t')
+    ) {
+        return None;
+    }
+
+    let mut depths = [0usize; 3];
+    for (line_index, line) in lines.iter().enumerate().skip(start) {
+        let scan_start = if line_index == start {
+            leading_whitespace + "except".len()
+        } else {
+            0
+        };
+        for (offset, byte) in line.bytes().enumerate().skip(scan_start) {
+            match byte {
+                b'(' => depths[0] += 1,
+                b'[' => depths[1] += 1,
+                b'{' => depths[2] += 1,
+                b')' => depths[0] = depths[0].saturating_sub(1),
+                b']' => depths[1] = depths[1].saturating_sub(1),
+                b'}' => depths[2] = depths[2].saturating_sub(1),
+                b':' if depths == [0, 0, 0] => return Some((line_index, offset)),
+                _ => {}
+            }
+        }
+        if depths == [0, 0, 0] {
+            return None;
+        }
+    }
+    None
+}
+
+fn python_indent_width(line: &str) -> usize {
+    line.bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t' | 0x0c))
+        .fold(0usize, |width, byte| {
+            if byte == b'\t' {
+                (width / 8 + 1) * 8
+            } else {
+                width + 1
+            }
+        })
+}
+
+fn contains_only_ignored_python_statements(suite: &str) -> bool {
+    const IGNORED_CALLS: [&str; 4] = [
+        "print",
+        "logging.info",
+        "logging.debug",
+        "logging.warning",
+    ];
+
+    let mut cursor = 0usize;
+    loop {
+        cursor = skip_python_statement_separators(suite, cursor);
+        if cursor == suite.len() {
+            return true;
+        }
+
+        if suite[cursor..].starts_with("pass")
+            && suite
+                .as_bytes()
+                .get(cursor + "pass".len())
+                .is_none_or(|byte| !is_python_identifier_byte(*byte))
+        {
+            cursor += "pass".len();
+            continue;
+        }
+
+        let Some(callee) = IGNORED_CALLS
+            .iter()
+            .find(|callee| suite[cursor..].starts_with(**callee))
+        else {
+            return false;
+        };
+        let after_callee = cursor + callee.len();
+        if suite
+            .as_bytes()
+            .get(after_callee)
+            .is_some_and(|byte| is_python_identifier_byte(*byte) || *byte == b'.')
+        {
+            return false;
+        }
+        let open_paren = skip_ascii_whitespace(suite, after_callee);
+        if suite.as_bytes().get(open_paren) != Some(&b'(') {
+            return false;
+        }
+        let Some(close_paren) = matching_delimiter_offset(suite, open_paren, b'(', b')') else {
+            return false;
+        };
+        cursor = close_paren + 1;
+    }
+}
+
+fn skip_python_statement_separators(input: &str, mut offset: usize) -> usize {
+    while input
+        .as_bytes()
+        .get(offset)
+        .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b';')
+    {
+        offset += 1;
+    }
+    offset
+}
+
+fn is_python_identifier_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
+}
+
+fn scan_javascript_catch_blocks(
+    file_path: &str,
+    content: &str,
+    masked: &str,
+    findings: &mut Vec<SecretFinding>,
+) {
+    let mut search_offset = 0usize;
+    while let Some(relative_offset) = masked[search_offset..].find("catch") {
+        let catch_offset = search_offset + relative_offset;
+        search_offset = catch_offset + "catch".len();
+        if !is_identifier_keyword(masked, catch_offset, "catch".len()) {
+            continue;
+        }
+        if !is_try_body_before_catch(masked, catch_offset) {
+            continue;
+        }
+
+        let mut cursor = skip_ascii_whitespace(masked, search_offset);
+        if masked.as_bytes().get(cursor) == Some(&b'(') {
+            let Some(close_paren) = matching_delimiter_offset(masked, cursor, b'(', b')') else {
+                continue;
+            };
+            cursor = skip_ascii_whitespace(masked, close_paren + 1);
+        }
+        if masked.as_bytes().get(cursor) != Some(&b'{') {
+            continue;
+        }
+        let Some(close_brace) = matching_delimiter_offset(masked, cursor, b'{', b'}') else {
+            continue;
+        };
+        let body = &masked[cursor + 1..close_brace];
+        if is_empty_javascript_body(body) || is_console_only_javascript_body(body) {
+            let line = line_number_at_offset(content, catch_offset);
+            push_silent_error_finding(
+                findings,
+                file_path,
+                line,
+                truncate_line_for_display(content.lines().nth(line - 1).unwrap_or_default()),
+            );
+        }
+        search_offset = close_brace + 1;
+    }
+}
+
+fn is_identifier_keyword(input: &str, offset: usize, length: usize) -> bool {
+    let bytes = input.as_bytes();
+    let is_identifier_byte =
+        |byte: u8| byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric();
+    offset
+        .checked_sub(1)
+        .and_then(|before| bytes.get(before))
+        .is_none_or(|byte| !is_identifier_byte(*byte))
+        && bytes
+            .get(offset + length)
+            .is_none_or(|byte| !is_identifier_byte(*byte))
+}
+
+fn skip_ascii_whitespace(input: &str, mut offset: usize) -> usize {
+    while input
+        .as_bytes()
+        .get(offset)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        offset += 1;
+    }
+    offset
+}
+
+fn matching_delimiter_offset(input: &str, open: usize, opening: u8, closing: u8) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, byte) in input.as_bytes().iter().copied().enumerate().skip(open) {
+        if byte == opening {
+            depth += 1;
+        } else if byte == closing {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(offset);
+            }
+        }
+    }
+    None
+}
+
+fn is_try_body_before_catch(input: &str, catch_offset: usize) -> bool {
+    let Some(close_brace) = previous_non_whitespace_offset(input, catch_offset) else {
+        return false;
+    };
+    if input.as_bytes().get(close_brace) != Some(&b'}') {
+        return false;
+    }
+    let Some(open_brace) = matching_opening_delimiter_offset(input, close_brace, b'{', b'}') else {
+        return false;
+    };
+    let Some(try_end) = previous_non_whitespace_offset(input, open_brace).map(|offset| offset + 1)
+    else {
+        return false;
+    };
+    let Some(try_offset) = try_end.checked_sub("try".len()) else {
+        return false;
+    };
+    &input[try_offset..try_end] == "try"
+        && is_identifier_keyword(input, try_offset, "try".len())
+}
+
+fn previous_non_whitespace_offset(input: &str, before: usize) -> Option<usize> {
+    input.as_bytes()[..before]
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+}
+
+fn matching_opening_delimiter_offset(
+    input: &str,
+    close: usize,
+    opening: u8,
+    closing: u8,
+) -> Option<usize> {
+    let mut depth = 0usize;
+    for offset in (0..=close).rev() {
+        match input.as_bytes()[offset] {
+            byte if byte == closing => depth += 1,
+            byte if byte == opening => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn mask_javascript_regex_literals(input: &str) -> String {
+    let mut masked = input.as_bytes().to_vec();
+    let mut index = 0usize;
+
+    while index < masked.len() {
+        if masked[index] != b'/' || !javascript_regex_can_start(input, index) {
+            index += 1;
+            continue;
+        }
+
+        let mut cursor = index + 1;
+        let mut in_character_class = false;
+        let mut close = None;
+        while cursor < masked.len() && masked[cursor] != b'\n' {
+            match masked[cursor] {
+                b'\\' => cursor = (cursor + 2).min(masked.len()),
+                b'[' => {
+                    in_character_class = true;
+                    cursor += 1;
+                }
+                b']' => {
+                    in_character_class = false;
+                    cursor += 1;
+                }
+                b'/' if !in_character_class => {
+                    close = Some(cursor);
+                    break;
+                }
+                _ => cursor += 1,
+            }
+        }
+
+        let Some(close) = close else {
+            index += 1;
+            continue;
+        };
+        masked[index..=close].fill(b' ');
+        index = close + 1;
+    }
+
+    String::from_utf8(masked).expect("regex masking preserves valid UTF-8")
+}
+
+fn javascript_regex_can_start(input: &str, slash: usize) -> bool {
+    let Some(previous) = previous_non_whitespace_offset(input, slash) else {
+        return true;
+    };
+    let byte = input.as_bytes()[previous];
+    if matches!(
+        byte,
+        b'=' | b'(' | b'[' | b'{' | b',' | b':' | b';' | b'!' | b'?' | b'&' | b'|'
+            | b'+' | b'-' | b'*' | b'%' | b'^' | b'~' | b'<' | b'>'
+    ) {
+        return true;
+    }
+    if byte == b')' {
+        let Some(open_paren) =
+            matching_opening_delimiter_offset(input, previous, b'(', b')')
+        else {
+            return false;
+        };
+        let Some(keyword_end) =
+            previous_non_whitespace_offset(input, open_paren).map(|offset| offset + 1)
+        else {
+            return false;
+        };
+        let keyword_start = input.as_bytes()[..keyword_end]
+            .iter()
+            .rposition(|byte| !is_identifier_keyword_byte(*byte))
+            .map_or(0, |offset| offset + 1);
+        return matches!(
+            &input[keyword_start..keyword_end],
+            "if" | "while" | "for" | "switch" | "catch"
+        );
+    }
+    if !is_identifier_keyword_byte(byte) {
+        return false;
+    }
+
+    let end = previous + 1;
+    let start = input.as_bytes()[..end]
+        .iter()
+        .rposition(|byte| !is_identifier_keyword_byte(*byte))
+        .map_or(0, |offset| offset + 1);
+    matches!(
+        &input[start..end],
+        "return"
+            | "throw"
+            | "case"
+            | "delete"
+            | "typeof"
+            | "void"
+            | "new"
+            | "in"
+            | "of"
+            | "yield"
+            | "await"
+    )
+}
+
+fn is_identifier_keyword_byte(byte: u8) -> bool {
+    byte == b'_' || byte == b'$' || byte.is_ascii_alphanumeric()
+}
+
+fn is_empty_javascript_body(body: &str) -> bool {
+    body.chars()
+        .all(|character| character.is_whitespace() || character == ';')
+}
+
+fn is_console_only_javascript_body(body: &str) -> bool {
+    let mut cursor = 0usize;
+    let mut calls = 0usize;
+
+    loop {
+        cursor = skip_javascript_statement_separators(body, cursor);
+        if cursor == body.len() {
+            return calls > 0;
+        }
+
+        let Some(after_console) = body[cursor..].strip_prefix("console.") else {
+            return false;
+        };
+        let method_length = after_console
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        if method_length == 0 {
+            return false;
+        }
+        let after_method = cursor + "console.".len() + method_length;
+        let open_paren = skip_ascii_whitespace(body, after_method);
+        if body.as_bytes().get(open_paren) != Some(&b'(') {
+            return false;
+        }
+        let Some(close_paren) = matching_delimiter_offset(body, open_paren, b'(', b')') else {
+            return false;
+        };
+        calls += 1;
+        cursor = close_paren + 1;
+    }
+}
+
+fn skip_javascript_statement_separators(input: &str, mut offset: usize) -> usize {
+    while input
+        .as_bytes()
+        .get(offset)
+        .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b';')
+    {
+        offset += 1;
+    }
+    offset
+}
+
+fn push_silent_error_finding(
+    findings: &mut Vec<SecretFinding>,
+    file_path: &str,
+    line: usize,
+    matched_text: String,
+) {
+    if findings
+        .iter()
+        .any(|finding| finding.line == line && finding.kind == SecretKind::SilentErrorSwallowing)
+    {
+        return;
+    }
+    findings.push(SecretFinding {
+        file_path: file_path.to_string(),
+        line,
+        kind: SecretKind::SilentErrorSwallowing,
+        matched_text,
+        level: 4,
+    });
+}
+
 /// Convert a `SecretFinding` into the JSON signal format used by `run_full_check`.
 pub fn finding_to_signal(f: &SecretFinding) -> Value {
     let description = match f.kind {
@@ -1191,6 +1710,7 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
             f.matched_text
         ),
         SecretKind::PromptInjection => AI_001_EXPLANATION.to_string(),
+        SecretKind::SilentErrorSwallowing => AI_003_EXPLANATION.to_string(),
     };
     let mut output = json!({
         "signal": {
@@ -1206,6 +1726,10 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
         output["signal"]["rule_id"] = json!(AI_001_RULE_ID);
         output["signal"]["severity"] = json!(AI_001_SEVERITY);
         output["signal"]["plain_explanation"] = json!(AI_001_EXPLANATION);
+    } else if f.kind == SecretKind::SilentErrorSwallowing {
+        output["signal"]["rule_id"] = json!(AI_003_RULE_ID);
+        output["signal"]["severity"] = json!(AI_003_SEVERITY);
+        output["signal"]["plain_explanation"] = json!(AI_003_EXPLANATION);
     }
     output
 }
@@ -3107,6 +3631,180 @@ response = openai.chat.completions.create(
         assert_eq!(signal["level"], 4);
         assert_eq!(signal["signal"]["level"], 4);
         assert_eq!(signal["signal"]["rule_id"], "AI-001");
+        assert_eq!(signal["signal"]["severity"], "high");
+        assert_eq!(signal["signal"]["plain_explanation"], EXPLANATION);
+    }
+
+    #[test]
+    fn detects_python_except_with_pass_or_print_only() {
+        let pass = scanner().scan_content(
+            "payment.py",
+            "try:\n    charge()\nexcept Exception:\n    pass\n",
+        );
+        assert_eq!(pass.len(), 1);
+        assert_eq!(pass[0].line, 3);
+        assert_eq!(pass[0].kind, SecretKind::SilentErrorSwallowing);
+
+        let print_only = scanner().scan_content(
+            "payment.py",
+            "try:\n    charge()\nexcept Exception as error:\n    print(error)\n",
+        );
+        assert_eq!(print_only.len(), 1);
+        assert_eq!(print_only[0].line, 3);
+        assert_eq!(print_only[0].kind, SecretKind::SilentErrorSwallowing);
+    }
+
+    #[test]
+    fn detects_python_inline_and_multiline_ignored_except_suites() {
+        for source in [
+            "try: work()\nexcept Exception: pass\n",
+            "try: work()\nexcept Exception: print(error)\n",
+            "try: work()\nexcept Exception: pass;\n",
+            "try:\n    work()\nexcept Exception:\n    print(\n        error\n    )\n",
+            "try:\n    work()\nexcept Exception:\n    logging.warning(\n        error\n    )\n",
+        ] {
+            let findings = scanner().scan_content("worker.py", source);
+            assert_eq!(findings.len(), 1, "source must be detected: {source}");
+            assert_eq!(findings[0].kind, SecretKind::SilentErrorSwallowing);
+        }
+    }
+
+    #[test]
+    fn detects_python_multiline_except_header_with_pass_suite() {
+        let findings = scanner().scan_content(
+            "worker.py",
+            "try:\n    work()\nexcept (\n    ValueError,\n    TypeError,\n):\n    pass\n",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].line, 3);
+        assert_eq!(findings[0].kind, SecretKind::SilentErrorSwallowing);
+    }
+
+    #[test]
+    fn ignores_python_except_that_logs_and_raises() {
+        let bare_raise = scanner().scan_content(
+            "payment.py",
+            "try:\n    charge()\nexcept PaymentError as error:\n    logging.error(error)\n    raise\n",
+        );
+        assert!(bare_raise.is_empty());
+
+        let new_error = scanner().scan_content(
+            "payment.py",
+            "try:\n    charge()\nexcept PaymentError as error:\n    logging.error(error)\n    raise RuntimeError(\"payment failed\") from error\n",
+        );
+        assert!(new_error.is_empty());
+    }
+
+    #[test]
+    fn detects_javascript_empty_or_console_only_catch() {
+        let empty = scanner().scan_content(
+            "storage.js",
+            "try {\n  save();\n} catch (error) {\n  // intentionally left blank\n}\n",
+        );
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].line, 3);
+        assert_eq!(empty[0].kind, SecretKind::SilentErrorSwallowing);
+
+        let console_only = scanner().scan_content(
+            "storage.ts",
+            "try {\n  save();\n} catch (error) {\n  console.log(error);\n}\n",
+        );
+        assert_eq!(console_only.len(), 1);
+        assert_eq!(console_only[0].line, 3);
+        assert_eq!(console_only[0].kind, SecretKind::SilentErrorSwallowing);
+    }
+
+    #[test]
+    fn detects_javascript_catch_with_multiple_console_calls_only() {
+        let findings = scanner().scan_content(
+            "storage.js",
+            "try { work(); } catch (error) { console.error(\"failed\"); console.log(error); }\n",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::SilentErrorSwallowing);
+    }
+
+    #[test]
+    fn detects_javascript_catch_after_regex_literal_with_brace() {
+        let findings = scanner().scan_content(
+            "storage.js",
+            "try { const re = /}/; work(); } catch (error) {}\n",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::SilentErrorSwallowing);
+    }
+
+    #[test]
+    fn detects_javascript_catch_after_control_condition_regex_literal() {
+        let findings = scanner().scan_content(
+            "storage.js",
+            "try { if (enabled) /}/.test(value); } catch (error) {}\n",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, SecretKind::SilentErrorSwallowing);
+    }
+
+    #[test]
+    fn javascript_regex_mask_preserves_division_after_function_call() {
+        let source = "const ratio = calculate() / divisor;";
+        assert_eq!(mask_javascript_regex_literals(source), source);
+    }
+
+    #[test]
+    fn ignores_javascript_object_and_class_methods_named_catch() {
+        let object_method =
+            scanner().scan_content("storage.js", "const obj = { catch(error) {} };\n");
+        assert!(object_method.is_empty());
+
+        let class_method = scanner().scan_content(
+            "storage.ts",
+            "class X { catch(error) { console.log(error); } }\n",
+        );
+        assert!(class_method.is_empty());
+    }
+
+    #[test]
+    fn ignores_javascript_catch_that_logs_and_throws() {
+        let findings = scanner().scan_content(
+            "storage.js",
+            "try {\n  save();\n} catch (error) {\n  console.log(error);\n  throw error;\n}\n",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_silent_error_examples_in_comments_and_strings() {
+        let python = scanner().scan_content(
+            "docs.py",
+            "# except Exception:\n#     pass\nexample = \"except Exception: pass\"\ndocumentation = \"\"\"except (\n    ValueError,\n):\n    pass\n\"\"\"\ndef except_handler(\n    error,\n):\n    pass\n",
+        );
+        assert!(python.is_empty());
+
+        let javascript = scanner().scan_content(
+            "docs.js",
+            "// catch (error) {}\nconst example = \"catch (error) { console.log(error); }\";\n",
+        );
+        assert!(javascript.is_empty());
+    }
+
+    #[test]
+    fn finding_to_signal_carries_ai_003_metadata() {
+        const EXPLANATION: &str = "检测到静默错误吞没：异常被捕获后没有有效处理（空 catch 或仅打印）。AI 生成的代码最常见缺陷，占比 42%。这会导致错误被掩盖、调用方无法感知失败、数据静默损坏。应重新抛出异常或向上传播错误状态。";
+        let findings = scanner().scan_content(
+            "payment.py",
+            "try:\n    charge()\nexcept Exception:\n    pass\n",
+        );
+
+        assert_eq!(findings.len(), 1);
+        let signal = finding_to_signal(&findings[0]);
+        assert_eq!(signal["level"], 4);
+        assert_eq!(signal["signal"]["level"], 4);
+        assert_eq!(signal["signal"]["rule_id"], "AI-003");
         assert_eq!(signal["signal"]["severity"], "high");
         assert_eq!(signal["signal"]["plain_explanation"], EXPLANATION);
     }
