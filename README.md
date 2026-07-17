@@ -36,8 +36,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - uses: 290864310liujiasheng-wq/hologram-audit-risk/.github/actions/audit-risk@v0.4.1
+      - uses: 290864310liujiasheng-wq/hologram-audit-risk/.github/actions/audit-risk@v0.4.2
         with:
           workspace: '.'
           fail-on: 'require_approval'   # warn / require_approval / block
@@ -77,7 +80,40 @@ cargo build --release --bin audit-risk
 
 ---
 
-## 这是什么
+## 本地快速上手
+
+安装后，完成首次接入只需四步：
+
+```sh
+# 1. 初始化工作区（生成 .hologram/ 配置、Git Hook、CI workflow 模板）
+# 可先加 --dry-run 预览；--force 覆盖时会保留 .bak.<timestamp>-<uuid> 备份
+audit-risk init /path/to/your-project
+
+# 2. 体检环境（确认 Core 功能就绪）
+audit-risk doctor /path/to/your-project
+
+# 3. 扫描风险
+audit-risk check /path/to/your-project
+
+# 4. 生成报告（输出到 .hologram/latest-risk-report.json）
+audit-risk report /path/to/your-project
+```
+
+验证二进制已安装：
+```sh
+audit-risk --version
+```
+
+`doctor` 会显示两类状态：
+- **Core：已就绪** — 扫描和门禁功能可用
+- **可选未配置** — 模型 API（LLM 解释）或 Pro 授权未配置，不影响核心扫描
+
+开发时实时守护（另开一个终端）：
+```sh
+audit-risk watch /path/to/your-project
+```
+
+---
 
 `audit-risk` 是 AI 代码进入主分支前不可绕过的治理门。
 
@@ -91,10 +127,9 @@ cargo build --release --bin audit-risk
 
 - **规则拦截**：把 AI 生成的高风险代码收口为 `allow`、`warn`、`require_approval`、`block`
 - **中文白话解释**：每个 finding 说明位置、原因、影响和建议，不只是规则编号
-- **受控自修复**：修复方案经二次审计、验证和审批，才允许应用
-- **可追溯审计链**：所有决策、审批、修复、回滚进入 SHA-256 哈希链审计日志
+- **可追溯审计链**：所有决策、审批进入 SHA-256 哈希链审计日志，谁在什么时间对什么做了什么决定
 - **CI/CD 集成**：输出结构化 JSON 和退出码，Git Hook、GitHub Action 直接消费
-- **纯本地部署**：源码、diff、密钥、审计记录不上传云端；客户接入自己的模型 API
+- **纯本地部署**：源码、diff、密钥、审计记录不上传云端
 
 ---
 
@@ -119,8 +154,14 @@ cargo build --release --bin audit-risk
 # 初始化工作区（生成 .hologram/ 配置、Git Hook、CI workflow 模板）
 audit-risk init .
 
+# 只预览将创建或覆盖的文件，不写盘、不修改 core.hooksPath
+audit-risk init . --dry-run
+
 # 扫描当前工作区
 audit-risk check .
+
+# 审批最近一次审查中的指定 finding（完整日期在该 UTC 日期结束后失效）
+audit-risk approve . --finding <finding_id> --reason "已完成人工复核" --expires 2026-07-31
 
 # 持续监听变化
 audit-risk watch .
@@ -148,8 +189,8 @@ audit-risk rules .
 | 版本 | 价格 | 包含 |
 |---|---|---|
 | **Core** | 免费 | CLI 全部命令 + 基础规则包（MIT 开源） |
-| **Team** | ¥299/月（按仓库数）| + GitHub Action + MCP 约束注入 + LLM 语义审查 |
-| **Enterprise** | 合同制 | + 数据飞轮 + 团队专属规则模型 |
+| **Pro 个人版** | 29 元/月 | + 高级规则包、历史风险对比、增强报告、observe、notify |
+| **Team / Enterprise** | 合同制，[提 Issue 联系](https://github.com/290864310liujiasheng-wq/hologram-audit-risk/issues/new) | 面向团队的 GitHub Action 集成、组织级规则和审批策略——按需定制，尚未标准化定价 |
 
 ---
 

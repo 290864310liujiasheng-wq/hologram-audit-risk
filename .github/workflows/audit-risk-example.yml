@@ -8,7 +8,7 @@ on:
 
 jobs:
   audit-risk:
-    name: AI代码风险审查
+    name: AI 代码风险审查
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,5 +22,5 @@ jobs:
       - uses: ./.github/actions/audit-risk
         with:
           workspace: '.'
-          fail-on: 'require_approval'
-          comment-on-pr: 'false'
+          fail-on: 'require_approval'   # warn / require_approval / block
+          comment-on-pr: 'false'   # 本地 Action 随 PR 代码变化，不授予写权限

@@ -23,6 +23,10 @@ inputs:
     description: '是否在 PR 上发布风险报告评论'
     required: false
     default: 'true'
+  files-from:
+    description: '可选清单文件路径（相对 checkout 根目录或绝对路径）；内容为 NUL 分隔的工作区相对路径'
+    required: false
+    default: ''
 
 outputs:
   gate-decision:
@@ -34,58 +38,30 @@ outputs:
   report-path:
     description: '机器可读 JSON 报告路径'
     value: ${{ steps.scan.outputs.report_path }}
+  stderr-path:
+    description: '扫描器 stderr 日志路径'
+    value: ${{ steps.scan.outputs.stderr_path }}
 
 runs:
   using: 'composite'
   steps:
     - name: Install audit-risk
       shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
 
-        VERSION="${{ inputs.version }}"
-        INSTALL_DIR="$HOME/.local/bin"
-        mkdir -p "$INSTALL_DIR"
+        INSTALL_PREFIX="$HOME/.local"
+        INSTALLER_PATH="$GITHUB_ACTION_PATH/../../../install.sh"
 
-        # 检测平台
-        OS="$(uname -s)"
-        ARCH="$(uname -m)"
-
-        case "$OS" in
-          Linux)
-            case "$ARCH" in
-              x86_64)  PLATFORM="linux-x64" ;;
-              aarch64) PLATFORM="linux-arm64" ;;
-              *) echo "::error::不支持的架构：$ARCH"; exit 1 ;;
-            esac
-            ;;
-          Darwin)
-            case "$ARCH" in
-              x86_64)  PLATFORM="macos-x64" ;;
-              arm64)   PLATFORM="macos-arm64" ;;
-              *) echo "::error::不支持的架构：$ARCH"; exit 1 ;;
-            esac
-            ;;
-          *) echo "::error::不支持的操作系统：$OS"; exit 1 ;;
-        esac
-
-        REPO="290864310liujiasheng-wq/hologram-audit-risk"
-
-        # 获取版本号
         if [ "$VERSION" = "latest" ]; then
-          VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-            -H "Authorization: token ${{ github.token }}" \
-            | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/')
+          sh "$INSTALLER_PATH" "--prefix=$INSTALL_PREFIX" --require-checksum
+        else
+          sh "$INSTALLER_PATH" "--prefix=$INSTALL_PREFIX" \
+            "--version=$VERSION" --require-checksum
         fi
-
-        echo "::notice::安装 audit-risk $VERSION ($PLATFORM)"
-
-        BINARY_NAME="audit-risk-$PLATFORM"
-        DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$BINARY_NAME"
-
-        curl -fsSL "$DOWNLOAD_URL" -o "$INSTALL_DIR/audit-risk"
-        chmod +x "$INSTALL_DIR/audit-risk"
-        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+        echo "$INSTALL_PREFIX/bin" >> "$GITHUB_PATH"
 
     - name: Run audit-risk scan
       id: scan
@@ -93,35 +69,114 @@ runs:
       env:
         WORKSPACE: ${{ inputs.workspace }}
         FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_FILES_FROM: ${{ inputs.files-from }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PUSH_BASE_SHA: ${{ github.event.before }}
+        EVENT_SHA: ${{ github.sha }}
       run: |
         set -euo pipefail
 
-        REPORT_PATH="${{ runner.temp }}/audit-risk-report.json"
+        REPORT_PATH="$RUNNER_TEMP/audit-risk-report.json"
+        STDERR_PATH="$RUNNER_TEMP/audit-risk-stderr.log"
+        FILES_FROM="$INPUT_FILES_FROM"
 
-        # 执行扫描，输出 JSON
+        if [ -z "$FILES_FROM" ]; then
+          BASE_SHA=""
+          HEAD_SHA=""
+          case "$EVENT_NAME" in
+            pull_request)
+              BASE_SHA="$PR_BASE_SHA"
+              HEAD_SHA="$PR_HEAD_SHA"
+              ;;
+            push)
+              BASE_SHA="$PUSH_BASE_SHA"
+              HEAD_SHA="$EVENT_SHA"
+              ;;
+            *)
+              echo "::error::事件 $EVENT_NAME 没有可推导的 base/head；请显式传入 files-from"
+              exit 3
+              ;;
+          esac
+
+          if [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+            case "$BASE_SHA$HEAD_SHA" in
+              *[!0-9a-fA-F]*)
+                echo "::error::base/head SHA 格式无效"
+                exit 3
+                ;;
+            esac
+            if ! git -C "$WORKSPACE" cat-file -e "$HEAD_SHA^{commit}"; then
+              echo "::error::head commit 不存在：$HEAD_SHA"
+              exit 3
+            fi
+            if [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] && \
+              ! git -C "$WORKSPACE" cat-file -e "$BASE_SHA^{commit}"; then
+              echo "::error::base commit 不存在：$BASE_SHA；请确认 checkout 使用 fetch-depth: 0"
+              exit 3
+            fi
+            FILES_FROM="$RUNNER_TEMP/audit-risk-changed-files"
+            if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              BASE_SHA="$(git -C "$WORKSPACE" hash-object -t tree -w /dev/null)"
+            fi
+            git -C "$WORKSPACE" diff --find-renames --name-only -z --diff-filter=ACMR \
+              --relative "$BASE_SHA" "$HEAD_SHA" -- . > "$FILES_FROM"
+          fi
+        fi
+
+        CHECK_ARGS=(check "$WORKSPACE" --json --fail-on "$FAIL_ON")
+        if [ -n "$FILES_FROM" ]; then
+          CHECK_ARGS+=(--files-from "$FILES_FROM")
+        fi
+
         set +e
-        audit-risk check "$WORKSPACE" \
-          --json \
-          --fail-on "$FAIL_ON" \
-          > "$REPORT_PATH" 2>&1
+        audit-risk "${CHECK_ARGS[@]}" > "$REPORT_PATH" 2> "$STDERR_PATH"
         EXIT_CODE=$?
         set -e
 
-        # 解析结果
-        if command -v jq &>/dev/null && [ -f "$REPORT_PATH" ]; then
-          GATE_DECISION=$(jq -r '.review.gate_decision.decision // "unknown"' "$REPORT_PATH" 2>/dev/null || echo "unknown")
-          FINDING_COUNT=$(jq -r '.review.findings | length // 0' "$REPORT_PATH" 2>/dev/null || echo "0")
-        else
+        PARSE_FAILED=false
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "::error::jq 不可用，无法验证 audit-risk JSON 报告合同"
+          PARSE_FAILED=true
+        elif ! GATE_DECISION="$(jq -er \
+          '.review.gate_decision.decision | select(. == "allow" or . == "warn" or . == "require_approval" or . == "block")' \
+          "$REPORT_PATH")"; then
+          echo "::error::audit-risk 报告缺少有效的 review.gate_decision.decision"
+          PARSE_FAILED=true
+        elif ! FINDING_COUNT="$(jq -er '.review.findings | arrays | length' "$REPORT_PATH")"; then
+          echo "::error::audit-risk 报告缺少 review.findings 数组"
+          PARSE_FAILED=true
+        fi
+
+        if [ "$PARSE_FAILED" = true ]; then
           GATE_DECISION="unknown"
           FINDING_COUNT="0"
+          EXIT_CODE=3
+          if [ -s "$STDERR_PATH" ]; then
+            echo "::group::audit-risk stderr"
+            sed -n '1,200p' "$STDERR_PATH"
+            echo "::endgroup::"
+          fi
         fi
 
         echo "gate_decision=$GATE_DECISION" >> "$GITHUB_OUTPUT"
         echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
         echo "report_path=$REPORT_PATH" >> "$GITHUB_OUTPUT"
+        echo "stderr_path=$STDERR_PATH" >> "$GITHUB_OUTPUT"
         echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
         echo "::notice::gate_decision=$GATE_DECISION, findings=$FINDING_COUNT"
+
+    - name: Upload audit-risk report
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: audit-risk-report
+        path: |
+          ${{ steps.scan.outputs.report_path }}
+          ${{ steps.scan.outputs.stderr_path }}
+        if-no-files-found: error
 
     - name: Post PR comment
       if: ${{ inputs.comment-on-pr == 'true' && github.event_name == 'pull_request' }}
@@ -136,6 +191,12 @@ runs:
           const reportPath = process.env.REPORT_PATH;
           const gateDecision = process.env.GATE_DECISION;
           const findingCount = parseInt(process.env.FINDING_COUNT || '0');
+          const reportValid = gateDecision !== 'unknown';
+
+          const escapeTableCell = (value) => String(value ?? '')
+            .replace(/`/g, "'")
+            .replace(/\|/g, '\\|')
+            .replace(/[\r\n]+/g, ' ');
 
           // 门禁状态图标
           const gateIcon = {
@@ -170,20 +231,24 @@ runs:
 
             const findings = report.review.findings.slice(0, 20); // 最多显示20条
             for (const f of findings) {
-              const severity = f.severity || 'unknown';
+              const severity = escapeTableCell(f.severity || 'unknown');
               const location = f.location?.file_path
-                ? `\`${f.location.file_path}${f.location.start_line ? ':' + f.location.start_line : ''}\``
+                ? `\`${escapeTableCell(f.location.file_path)}${f.location.start_line ? ':' + f.location.start_line : ''}\``
                 : '—';
-              const rule = f.rule_id || '—';
-              const explanation = (f.explanation || f.message || '').slice(0, 80);
+              const rule = escapeTableCell(f.rule_id || '—');
+              const explanation = escapeTableCell(
+                f.plain_explanation || f.explanation || f.message || ''
+              ).slice(0, 80);
               body += `| ${severity} | ${location} | ${rule} | ${explanation} |\n`;
             }
 
             if (report.review.findings.length > 20) {
               body += `\n> 共 ${report.review.findings.length} 条风险，上方仅显示前 20 条。完整报告见 Actions 产物。\n`;
             }
-          } else if (findingCount === 0) {
+          } else if (reportValid && gateDecision === 'allow' && findingCount === 0) {
             body += `> 未发现风险，代码通过审查。\n`;
+          } else if (!reportValid || !report) {
+            body += `> 扫描报告无效或无法解析，本次审查按失败处理。请查看 Actions 产物中的 stderr 日志。\n`;
           }
 
           if (gateDecision === 'require_approval' || gateDecision === 'block') {
@@ -222,4 +287,6 @@ runs:
 
     - name: Set final exit code
       shell: bash
-      run: exit ${{ steps.scan.outputs.exit_code }}
+      env:
+        AUDIT_RISK_EXIT_CODE: ${{ steps.scan.outputs.exit_code }}
+      run: exit "$AUDIT_RISK_EXIT_CODE"

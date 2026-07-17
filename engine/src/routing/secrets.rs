@@ -58,7 +58,29 @@ pub struct SecretFinding {
     pub line: usize,
     pub kind: SecretKind,
     pub matched_text: String,
+    /// Secret value span in the original source line, using 0-based UTF-8
+    /// byte offsets with an exclusive end. Non-secret findings have no span.
+    pub secret_byte_range: Option<SecretByteRange>,
     pub level: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SecretByteRange {
+    pub start: usize,
+    pub end: usize,
+}
+
+fn overlaps_existing_secret_range(
+    findings: &[SecretFinding],
+    line: usize,
+    candidate: SecretByteRange,
+) -> bool {
+    findings.iter().any(|finding| {
+        finding.line == line
+            && finding.secret_byte_range.is_some_and(|existing| {
+                candidate.start < existing.end && candidate.end > existing.start
+            })
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,9 +96,19 @@ pub enum SecretKind {
     AiConfigExecution,
 }
 
+impl SecretKind {
+    fn redaction_kind(&self) -> Option<&'static str> {
+        match self {
+            Self::KnownPrefix(_) => Some("known_prefix"),
+            Self::HighEntropy => Some("high_entropy"),
+            Self::HardcodedAssignment => Some("hardcoded_assignment"),
+            _ => None,
+        }
+    }
+}
+
 pub struct SecretScanner {
-    /// Each tuple: (display label, regex matching the secret value)
-    known_prefixes: Vec<(&'static str, Regex)>,
+    known_prefixes: Vec<KnownPrefixPattern>,
     /// Quoted assignments for established credential variable names.
     assignment_pattern: Regex,
     /// Unquoted scalar assignments in env files.
@@ -116,6 +148,14 @@ pub struct SecretScanner {
     user_input_pattern: Regex,
 }
 
+struct KnownPrefixPattern {
+    label: &'static str,
+    regex: Regex,
+    /// Capture containing only the credential value. `None` means the full
+    /// regex match is the credential value.
+    value_capture: Option<usize>,
+}
+
 impl Default for SecretScanner {
     fn default() -> Self {
         Self::new()
@@ -126,33 +166,33 @@ impl SecretScanner {
     pub fn new() -> Self {
         let known_prefixes = vec![
             // OpenAI / Anthropic / generic `sk-` keys
-            ("OpenAI/Anthropic API key", Regex::new(r#"(?i)(["'\s]|^)(sk-[a-zA-Z0-9\-_]{20,})"#).unwrap()),
+            KnownPrefixPattern { label: "OpenAI/Anthropic API key", regex: Regex::new(r#"(?i)(["'\s]|^)(sk-[a-zA-Z0-9\-_]{20,})"#).unwrap(), value_capture: Some(2) },
             // AWS Access Key ID
-            ("AWS access key", Regex::new(r#"(AKIA|ASIA|AROA|AIDA)[A-Z0-9]{16}"#).unwrap()),
+            KnownPrefixPattern { label: "AWS access key", regex: Regex::new(r#"(AKIA|ASIA|AROA|AIDA)[A-Z0-9]{16}"#).unwrap(), value_capture: None },
             // AWS Secret Access Key
-            ("AWS secret key", Regex::new(r#"(?i)(aws_secret|aws_secret_access_key)\s*[=:]\s*["']?([A-Za-z0-9+/]{40})["']?"#).unwrap()),
+            KnownPrefixPattern { label: "AWS secret key", regex: Regex::new(r#"(?i)(aws_secret|aws_secret_access_key)\s*[=:]\s*["']?([A-Za-z0-9+/]{40})["']?"#).unwrap(), value_capture: Some(2) },
             // GitHub Personal Access Token
-            ("GitHub PAT", Regex::new(r#"(ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{36,}"#).unwrap()),
+            KnownPrefixPattern { label: "GitHub PAT", regex: Regex::new(r#"(ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{36,}"#).unwrap(), value_capture: None },
             // Google API key
-            ("Google API key", Regex::new(r#"AIza[0-9A-Za-z\-_]{35}"#).unwrap()),
+            KnownPrefixPattern { label: "Google API key", regex: Regex::new(r#"AIza[0-9A-Za-z\-_]{35}"#).unwrap(), value_capture: None },
             // Stripe secret key
-            ("Stripe secret key", Regex::new(r#"(sk_live_|rk_live_)[0-9a-zA-Z]{24,}"#).unwrap()),
+            KnownPrefixPattern { label: "Stripe secret key", regex: Regex::new(r#"(sk_live_|rk_live_)[0-9a-zA-Z]{24,}"#).unwrap(), value_capture: None },
             // Stripe publishable key (lower severity but still a leak)
-            ("Stripe publishable key", Regex::new(r#"pk_live_[0-9a-zA-Z]{24,}"#).unwrap()),
+            KnownPrefixPattern { label: "Stripe publishable key", regex: Regex::new(r#"pk_live_[0-9a-zA-Z]{24,}"#).unwrap(), value_capture: None },
             // Slack token
-            ("Slack token", Regex::new(r#"xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,}"#).unwrap()),
+            KnownPrefixPattern { label: "Slack token", regex: Regex::new(r#"xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24,}"#).unwrap(), value_capture: None },
             // Slack webhook
-            ("Slack webhook", Regex::new(r#"https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+"#).unwrap()),
+            KnownPrefixPattern { label: "Slack webhook", regex: Regex::new(r#"https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+"#).unwrap(), value_capture: None },
             // JWT (base64url header.payload.signature — only if all three parts present)
-            ("JWT token", Regex::new(r#"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"#).unwrap()),
+            KnownPrefixPattern { label: "JWT token", regex: Regex::new(r#"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+"#).unwrap(), value_capture: None },
             // Private key block
-            ("private key block", Regex::new(r#"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"#).unwrap()),
+            KnownPrefixPattern { label: "private key block", regex: Regex::new(r#"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"#).unwrap(), value_capture: None },
             // Generic bearer token pattern
-            ("Bearer token", Regex::new(r#"(?i)(authorization|bearer)["\s:=]+['"](Bearer\s+)?[A-Za-z0-9\-._~+/]{40,}['"]"#).unwrap()),
+            KnownPrefixPattern { label: "Bearer token", regex: Regex::new(r#"(?i)(authorization|bearer)["\s:=]+['"](?:Bearer\s+)?([A-Za-z0-9\-._~+/]{40,})['"]"#).unwrap(), value_capture: Some(2) },
             // Anthropic-style keys
-            ("Anthropic API key", Regex::new(r#"sk-ant-[a-zA-Z0-9\-_]{20,}"#).unwrap()),
+            KnownPrefixPattern { label: "Anthropic API key", regex: Regex::new(r#"sk-ant-[a-zA-Z0-9\-_]{20,}"#).unwrap(), value_capture: None },
             // DeepSeek API key
-            ("DeepSeek API key", Regex::new(r#"sk-[a-zA-Z0-9]{32,}"#).unwrap()),
+            KnownPrefixPattern { label: "DeepSeek API key", regex: Regex::new(r#"sk-[a-zA-Z0-9]{32,}"#).unwrap(), value_capture: None },
         ];
 
         let assignment_pattern = Regex::new(
@@ -167,18 +207,15 @@ impl SecretScanner {
             r#"(?i)\b(?P<name>api_?key|api_?secret|secret_?token|secret_?key|auth_?token|access_?token|password|secret|token)\b\s*[=:]\s*(?:"(?P<double>[0-9a-f]{32,})"|'(?P<single>[0-9a-f]{32,})'|(?P<bare>[0-9a-f]{32,})(?:\s*(?:[,;}\]#]|$)))"#,
         )
         .unwrap();
-        let connection_password_pattern = Regex::new(
-            r#"(?i)\b(?P<name>password|pwd)\s*=\s*(?P<value>[^;'"&\s]{6,})"#,
-        )
-        .unwrap();
+        let connection_password_pattern =
+            Regex::new(r#"(?i)\b(?P<name>password|pwd)\s*=\s*(?P<value>[^;'"&\s]{6,})"#).unwrap();
         let mongodb_connection_pattern = Regex::new(
             r#"(?i)\bmongodb(?:\+srv)?://[^:\s/@]+:(?P<value>[^"'\s]{6,})@[A-Za-z0-9.-]+(?::\d+)?(?:/|["']|$)"#,
         )
         .unwrap();
-        let azure_account_key_pattern = Regex::new(
-            r#"(?i)\bAccountKey\s*=\s*(?P<value>[A-Za-z0-9+/]{20,}={0,2})(?:;|["']|$)"#,
-        )
-        .unwrap();
+        let azure_account_key_pattern =
+            Regex::new(r#"(?i)\bAccountKey\s*=\s*(?P<value>[A-Za-z0-9+/]{20,}={0,2})(?:;|["']|$)"#)
+                .unwrap();
 
         // Require SQL grammar, not merely English words that overlap SQL
         // verbs. Dynamic identifiers cover f-string and template placeholders.
@@ -237,8 +274,14 @@ impl SecretScanner {
             // Bare `execSync(` / `spawnSync(` from a destructured import
             // (`import { execSync } from 'child_process'`) — no leading dot, so
             // the dotted pattern above misses it.
-            ("execSync()", Regex::new(r"(^|[^.\w])(exec|spawn)Sync\s*\(").unwrap()),
-            ("new Function() from string", Regex::new(r"\bnew\s+Function\s*\(").unwrap()),
+            (
+                "execSync()",
+                Regex::new(r"(^|[^.\w])(exec|spawn)Sync\s*\(").unwrap(),
+            ),
+            (
+                "new Function() from string",
+                Regex::new(r"\bnew\s+Function\s*\(").unwrap(),
+            ),
             ("__import__()", Regex::new(r"__import__\s*\(").unwrap()),
         ];
 
@@ -246,22 +289,16 @@ impl SecretScanner {
             r#"^\s*(?:(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*require\s*\(\s*['"](?:node:)?child_process['"]\s*\)|import\s+\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['"](?:node:)?child_process['"])"#,
         )
         .unwrap();
-        let declaration_target_pattern = Regex::new(
-            r"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
-        )
-        .unwrap();
-        let assignment_target_pattern =
-            Regex::new(r"^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*=").unwrap();
-        let child_process_method_pattern = Regex::new(
-            r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*exec(?:Sync)?\s*\(",
-        )
-        .unwrap();
+        let declaration_target_pattern =
+            Regex::new(r"^\s*(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=").unwrap();
+        let assignment_target_pattern = Regex::new(r"^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*=").unwrap();
+        let child_process_method_pattern =
+            Regex::new(r"\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*exec(?:Sync)?\s*\(").unwrap();
         let child_process_require_exec_pattern = Regex::new(
             r#"\brequire\s*\(\s*['"](?:node:)?child_process['"]\s*\)\s*\.\s*exec(?:Sync)?\s*\("#,
         )
         .unwrap();
-        let system_call_pattern =
-            Regex::new(r"(^|[^.\w])(?P<call>system)\s*\(").unwrap();
+        let system_call_pattern = Regex::new(r"(^|[^.\w])(?P<call>system)\s*\(").unwrap();
         let system_declaration_pattern = Regex::new(
             r"(?ix)^\s*(?:
                 (?:(?:extern|static|inline)\s+)*(?:(?:unsigned|signed)\s+)?(?:int|void|char|long|short|size_t)\s+\**\s*
@@ -309,10 +346,8 @@ impl SecretScanner {
             )\s*\(",
         )
         .unwrap();
-        let llm_prompt_argument_pattern = Regex::new(
-            r#"(?i)(?:\bmessages?\b|\bprompt\b|["']content["'])\s*(?:=|:)"#,
-        )
-        .unwrap();
+        let llm_prompt_argument_pattern =
+            Regex::new(r#"(?i)(?:\bmessages?\b|\bprompt\b|["']content["'])\s*(?:=|:)"#).unwrap();
 
         Self {
             known_prefixes,
@@ -347,10 +382,29 @@ impl SecretScanner {
     /// Scan the contents of a single file.
     /// Returns all findings in line order.
     pub fn scan_content(&self, file_path: &str, content: &str) -> Vec<SecretFinding> {
+        self.scan_content_with_options(file_path, content, true)
+    }
+
+    /// Scan source shown in human output. Unlike normal finding detection,
+    /// this includes comment-only lines so contextual snippets cannot expose
+    /// credentials that are intentionally ignored as findings.
+    pub(crate) fn scan_content_for_redaction(
+        &self,
+        file_path: &str,
+        content: &str,
+    ) -> Vec<SecretFinding> {
+        self.scan_content_with_options(file_path, content, false)
+    }
+
+    fn scan_content_with_options(
+        &self,
+        file_path: &str,
+        content: &str,
+        skip_comment_only: bool,
+    ) -> Vec<SecretFinding> {
         let mut findings = Vec::new();
         scan_ai_config_execution(file_path, content, &mut findings);
-        let mut child_process_bindings =
-            vec![("child_process".to_string(), 0usize, true)];
+        let mut child_process_bindings = vec![("child_process".to_string(), 0usize, true)];
         let mut brace_depth = 0usize;
         let mut in_block_comment = false;
 
@@ -365,62 +419,58 @@ impl SecretScanner {
                     child_process_bindings.retain(|(current, depth, _)| {
                         current != alias.as_str() || *depth != brace_depth
                     });
-                    child_process_bindings.push((
-                        alias.as_str().to_string(),
-                        brace_depth,
-                        true,
-                    ));
+                    child_process_bindings.push((alias.as_str().to_string(), brace_depth, true));
                 }
             } else if let Some(target) = self
                 .declaration_target_pattern
                 .captures(&execution_code)
                 .and_then(|captures| captures.get(1))
             {
-                child_process_bindings.retain(|(name, depth, _)| {
-                    name != target.as_str() || *depth != brace_depth
-                });
-                child_process_bindings.push((
-                    target.as_str().to_string(),
-                    brace_depth,
-                    false,
-                ));
+                child_process_bindings
+                    .retain(|(name, depth, _)| name != target.as_str() || *depth != brace_depth);
+                child_process_bindings.push((target.as_str().to_string(), brace_depth, false));
             } else if let Some(target) = self
                 .assignment_target_pattern
                 .captures(&execution_code)
                 .and_then(|captures| captures.get(1))
             {
-                child_process_bindings.retain(|(name, depth, _)| {
-                    name != target.as_str() || *depth != brace_depth
-                });
-                child_process_bindings.push((
-                    target.as_str().to_string(),
-                    brace_depth,
-                    false,
-                ));
+                child_process_bindings
+                    .retain(|(name, depth, _)| name != target.as_str() || *depth != brace_depth);
+                child_process_bindings.push((target.as_str().to_string(), brace_depth, false));
             }
 
             // Skip comment-only lines (best effort — handles // # and SQL --)
-            if is_comment_only(line) {
+            if skip_comment_only && is_comment_only(line) {
                 continue;
             }
 
             // Layer 1: known prefixes
             let mut l1_matched_spans: Vec<(usize, usize)> = Vec::new();
-            for (label, pattern) in &self.known_prefixes {
-                if let Some(m) = pattern.find(line) {
+            for known_prefix in &self.known_prefixes {
+                for captures in known_prefix.regex.captures_iter(line) {
+                    let m = captures.get(0).expect("regex captures include full match");
+                    let value = known_prefix
+                        .value_capture
+                        .and_then(|index| captures.get(index))
+                        .unwrap_or(m);
+                    let value_range = SecretByteRange {
+                        start: value.start(),
+                        end: value.end(),
+                    };
                     // Skip if this span overlaps one already reported on this line.
-                    let overlaps = l1_matched_spans.iter().any(|&(start, end)| {
-                        m.start() < end && m.end() > start
-                    });
+                    let overlaps = l1_matched_spans
+                        .iter()
+                        .any(|&(start, end)| value_range.start < end && value_range.end > start);
                     if overlaps {
                         continue;
                     }
-                    l1_matched_spans.push((m.start(), m.end()));
+                    l1_matched_spans.push((value_range.start, value_range.end));
                     findings.push(SecretFinding {
                         file_path: file_path.to_string(),
                         line: line_number,
-                        kind: SecretKind::KnownPrefix(label),
-                        matched_text: truncate_secret(m.as_str()),
+                        kind: SecretKind::KnownPrefix(known_prefix.label),
+                        matched_text: known_prefix.label.to_string(),
+                        secret_byte_range: Some(value_range),
                         level: 5,
                     });
                 }
@@ -428,23 +478,27 @@ impl SecretScanner {
 
             // Layer 2: high-entropy strings
             for candidate in extract_string_literals(line) {
-                if is_known_public_hash_context(line, &candidate) {
+                if is_known_public_hash_context(line, candidate.value) {
                     continue;
                 }
-                if candidate.len() >= 20
-                    && looks_like_key_charset(&candidate)
-                    && shannon_entropy(&candidate) > 4.5
+                if candidate.value.len() >= 20
+                    && looks_like_key_charset(candidate.value)
+                    && shannon_entropy(candidate.value) > 4.5
                 {
-                    // Skip if already caught by layer 1
-                    let already_flagged = findings
-                        .iter()
-                        .any(|f| f.line == line_number && f.level == 5);
+                    let candidate_range = SecretByteRange {
+                        start: candidate.start,
+                        end: candidate.end,
+                    };
+                    // Skip only this value if an earlier layer already caught it.
+                    let already_flagged =
+                        overlaps_existing_secret_range(&findings, line_number, candidate_range);
                     if !already_flagged {
                         findings.push(SecretFinding {
                             file_path: file_path.to_string(),
                             line: line_number,
                             kind: SecretKind::HighEntropy,
-                            matched_text: truncate_secret(&candidate),
+                            matched_text: "high-entropy value".to_string(),
+                            secret_byte_range: Some(candidate_range),
                             level: 4,
                         });
                     }
@@ -456,13 +510,11 @@ impl SecretScanner {
                 let Some(name) = captures.name("name").map(|m| m.as_str()) else {
                     continue;
                 };
-                let Some(value) = captures
-                    .name("double")
-                    .or_else(|| captures.name("single"))
-                    .map(|m| m.as_str())
+                let Some(value_match) = captures.name("double").or_else(|| captures.name("single"))
                 else {
                     continue;
                 };
+                let value = value_match.as_str();
                 let is_expandable_env_reference = supports_unquoted_secrets(file_path)
                     && captures.name("double").is_some()
                     && is_environment_reference(value);
@@ -472,22 +524,24 @@ impl SecretScanner {
                 {
                     continue;
                 }
-                if findings.iter().any(|f| f.line == line_number) {
-                    break;
+                let value_range = SecretByteRange {
+                    start: value_match.start(),
+                    end: value_match.end(),
+                };
+                if overlaps_existing_secret_range(&findings, line_number, value_range) {
+                    continue;
                 }
                 findings.push(SecretFinding {
                     file_path: file_path.to_string(),
                     line: line_number,
                     kind: SecretKind::HardcodedAssignment,
                     matched_text: name.to_string(),
+                    secret_byte_range: Some(value_range),
                     level: 4,
                 });
-                break;
             }
 
-            if supports_unquoted_secrets(file_path)
-                && !findings.iter().any(|f| f.line == line_number)
-            {
+            if supports_unquoted_secrets(file_path) {
                 if let Some(captures) = self.env_assignment_pattern.captures(line) {
                     if let (Some(name), Some(value)) =
                         (captures.name("name"), captures.name("value"))
@@ -495,70 +549,89 @@ impl SecretScanner {
                         if !is_environment_reference(value.as_str())
                             && !looks_like_placeholder(value.as_str())
                         {
-                            findings.push(SecretFinding {
-                                file_path: file_path.to_string(),
-                                line: line_number,
-                                kind: SecretKind::HardcodedAssignment,
-                                matched_text: name.as_str().to_string(),
-                                level: 4,
-                            });
+                            let value_range = SecretByteRange {
+                                start: value.start(),
+                                end: value.end(),
+                            };
+                            if !overlaps_existing_secret_range(&findings, line_number, value_range)
+                            {
+                                findings.push(SecretFinding {
+                                    file_path: file_path.to_string(),
+                                    line: line_number,
+                                    kind: SecretKind::HardcodedAssignment,
+                                    matched_text: name.as_str().to_string(),
+                                    secret_byte_range: Some(value_range),
+                                    level: 4,
+                                });
+                            }
                         }
                     }
                 }
             }
 
-            if !findings.iter().any(|f| f.line == line_number) {
-                if let Some(captures) = self.hex_assignment_pattern.captures(line) {
-                    if let Some(name) = captures.name("name") {
-                        findings.push(SecretFinding {
-                            file_path: file_path.to_string(),
-                            line: line_number,
-                            kind: SecretKind::HardcodedAssignment,
-                            matched_text: name.as_str().to_string(),
-                            level: 4,
-                        });
+            for captures in self.hex_assignment_pattern.captures_iter(line) {
+                if let (Some(name), Some(value)) = (
+                    captures.name("name"),
+                    captures
+                        .name("double")
+                        .or_else(|| captures.name("single"))
+                        .or_else(|| captures.name("bare")),
+                ) {
+                    let value_range = SecretByteRange {
+                        start: value.start(),
+                        end: value.end(),
+                    };
+                    if overlaps_existing_secret_range(&findings, line_number, value_range) {
+                        continue;
                     }
+                    findings.push(SecretFinding {
+                        file_path: file_path.to_string(),
+                        line: line_number,
+                        kind: SecretKind::HardcodedAssignment,
+                        matched_text: name.as_str().to_string(),
+                        secret_byte_range: Some(value_range),
+                        level: 4,
+                    });
                 }
             }
 
-            if !findings.iter().any(|f| f.line == line_number) {
-                let connection_secret = self
-                    .connection_password_pattern
-                    .captures(line)
-                    .filter(|_| is_database_connection_context(line))
-                    .and_then(|captures| {
-                        Some((
-                            captures.name("name")?.as_str(),
-                            captures.name("value")?.as_str(),
-                        ))
-                    })
-                    .or_else(|| {
-                        self.mongodb_connection_pattern
-                            .captures(line)
-                            .and_then(|captures| {
-                                Some((
-                                    "mongodb password",
-                                    captures.name("value")?.as_str(),
-                                ))
-                            })
-                    })
-                    .or_else(|| {
-                        self.azure_account_key_pattern
-                            .captures(line)
-                            .and_then(|captures| {
-                                Some(("Azure AccountKey", captures.name("value")?.as_str()))
-                            })
-                    });
-                if let Some((name, value)) = connection_secret {
-                    if !looks_like_placeholder(value) {
-                        findings.push(SecretFinding {
-                            file_path: file_path.to_string(),
-                            line: line_number,
-                            kind: SecretKind::HardcodedAssignment,
-                            matched_text: name.to_string(),
-                            level: 4,
-                        });
+            let mut connection_secrets = Vec::new();
+            if is_database_connection_context(line) {
+                connection_secrets.extend(
+                    self.connection_password_pattern
+                        .captures_iter(line)
+                        .filter_map(|captures| {
+                            Some((captures.name("name")?.as_str(), captures.name("value")?))
+                        }),
+                );
+            }
+            connection_secrets.extend(
+                self.mongodb_connection_pattern
+                    .captures_iter(line)
+                    .filter_map(|captures| Some(("mongodb password", captures.name("value")?))),
+            );
+            connection_secrets.extend(
+                self.azure_account_key_pattern
+                    .captures_iter(line)
+                    .filter_map(|captures| Some(("Azure AccountKey", captures.name("value")?))),
+            );
+            for (name, value) in connection_secrets {
+                if !looks_like_placeholder(value.as_str()) {
+                    let value_range = SecretByteRange {
+                        start: value.start(),
+                        end: value.end(),
+                    };
+                    if overlaps_existing_secret_range(&findings, line_number, value_range) {
+                        continue;
                     }
+                    findings.push(SecretFinding {
+                        file_path: file_path.to_string(),
+                        line: line_number,
+                        kind: SecretKind::HardcodedAssignment,
+                        matched_text: name.to_string(),
+                        secret_byte_range: Some(value_range),
+                        level: 4,
+                    });
                 }
             }
 
@@ -570,16 +643,19 @@ impl SecretScanner {
                 pattern
                     .find_iter(line)
                     .any(|matched| self.sql_statement_pattern.is_match(matched.as_str()))
-            }) || self.sql_concatenation_pattern.find_iter(line).any(|matched| {
-                let normalized = normalize_string_concatenation(matched.as_str());
-                self.sql_statement_pattern.is_match(&normalized)
-            });
+            }) || self.sql_concatenation_pattern.find_iter(line).any(
+                |matched| {
+                    let normalized = normalize_string_concatenation(matched.as_str());
+                    self.sql_statement_pattern.is_match(&normalized)
+                },
+            );
             if has_dynamic_sql {
                 findings.push(SecretFinding {
                     file_path: file_path.to_string(),
                     line: line_number,
                     kind: SecretKind::SqlInjection,
-                    matched_text: truncate_line_for_display(line),
+                    matched_text: "SQL 字符串拼接/插值".to_string(),
+                    secret_byte_range: None,
                     level: 4,
                 });
             }
@@ -621,7 +697,8 @@ impl SecretScanner {
                     .then_some("child_process.exec()")
                 })
                 .or_else(|| {
-                    if is_php_source(file_path) && self.shell_exec_pattern.is_match(&executable_code)
+                    if is_php_source(file_path)
+                        && self.shell_exec_pattern.is_match(&executable_code)
                     {
                         Some("shell_exec()")
                     } else if is_system_call_source(file_path)
@@ -641,7 +718,8 @@ impl SecretScanner {
                     file_path: file_path.to_string(),
                     line: line_number,
                     kind: SecretKind::DangerousExecution(label),
-                    matched_text: truncate_line_for_display(line),
+                    matched_text: label.to_string(),
+                    secret_byte_range: None,
                     level: 4,
                 });
             }
@@ -653,15 +731,15 @@ impl SecretScanner {
                         file_path: file_path.to_string(),
                         line: line_number,
                         kind: SecretKind::PermissiveIam(label),
-                        matched_text: truncate_line_for_display(line),
+                        matched_text: label.to_string(),
+                        secret_byte_range: None,
                         level: 4,
                     });
                 }
             }
 
             brace_depth = update_brace_depth(brace_depth, &execution_code);
-            child_process_bindings
-                .retain(|(_, declared_depth, _)| *declared_depth <= brace_depth);
+            child_process_bindings.retain(|(_, declared_depth, _)| *declared_depth <= brace_depth);
         }
 
         self.scan_prompt_injection(file_path, content, &mut findings);
@@ -711,15 +789,18 @@ impl SecretScanner {
                 let has_code_plus = expression.match_indices('+').any(|(offset, _)| {
                     is_code_offset(&code_context, line_start + assignment.end() + offset)
                 });
-                detected = self.user_input_pattern.find_iter(expression).any(|user_input| {
-                    let absolute_offset = line_start + assignment.end() + user_input.start();
-                    (has_code_plus && is_code_offset(&code_context, absolute_offset))
-                        || is_interpolated_user_input(
-                            expression,
-                            user_input.start(),
-                            user_input.end(),
-                        )
-                });
+                detected = self
+                    .user_input_pattern
+                    .find_iter(expression)
+                    .any(|user_input| {
+                        let absolute_offset = line_start + assignment.end() + user_input.start();
+                        (has_code_plus && is_code_offset(&code_context, absolute_offset))
+                            || is_interpolated_user_input(
+                                expression,
+                                user_input.start(),
+                                user_input.end(),
+                            )
+                    });
                 if detected {
                     break;
                 }
@@ -773,13 +854,10 @@ impl SecretScanner {
             let window = bounded_parenthesized_window(content, open_paren, 24);
             for user_input in self.user_input_pattern.find_iter(window) {
                 let absolute_offset = open_paren + user_input.start();
-                let is_concatenated_user = window.contains('+')
-                    && is_code_offset(&code_context, absolute_offset);
-                let is_interpolated_user = is_interpolated_user_input(
-                    window,
-                    user_input.start(),
-                    user_input.end(),
-                );
+                let is_concatenated_user =
+                    window.contains('+') && is_code_offset(&code_context, absolute_offset);
+                let is_interpolated_user =
+                    is_interpolated_user_input(window, user_input.start(), user_input.end());
                 if is_concatenated_user || is_interpolated_user {
                     let line = line_number_at_offset(content, absolute_offset);
                     push_prompt_injection_finding(
@@ -840,8 +918,7 @@ impl SecretScanner {
                 if !is_code_offset(&code_context, separator) {
                     continue;
                 }
-                let (value_start, value_end) =
-                    bounded_argument_value_span(window, argument.end());
+                let (value_start, value_end) = bounded_argument_value_span(window, argument.end());
                 let value = &window[value_start..value_end];
                 if let Some(user_input) = self.user_input_pattern.find_iter(value).find(|matched| {
                     let absolute_offset = open_paren + value_start + matched.start();
@@ -875,22 +952,38 @@ fn is_prompt_injection_source_file(file_path: &str) -> bool {
     matches!(
         extension.to_ascii_lowercase().as_str(),
         "py" | "pyw"
-            | "js" | "jsx" | "mjs" | "cjs"
-            | "ts" | "tsx" | "mts" | "cts"
+            | "js"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "ts"
+            | "tsx"
+            | "mts"
+            | "cts"
             | "rs"
             | "java"
-            | "kt" | "kts"
+            | "kt"
+            | "kts"
             | "go"
             | "rb"
             | "php"
             | "cs"
-            | "c" | "cc" | "cpp" | "cxx"
-            | "h" | "hh" | "hpp" | "hxx"
+            | "c"
+            | "cc"
+            | "cpp"
+            | "cxx"
+            | "h"
+            | "hh"
+            | "hpp"
+            | "hxx"
             | "swift"
             | "scala"
-            | "ex" | "exs"
+            | "ex"
+            | "exs"
             | "lua"
-            | "sh" | "bash" | "zsh"
+            | "sh"
+            | "bash"
+            | "zsh"
             | "ps1"
             | "r"
             | "dart"
@@ -972,6 +1065,7 @@ fn push_prompt_injection_finding(
         line,
         kind: SecretKind::PromptInjection,
         matched_text,
+        secret_byte_range: None,
         level: 4,
     });
 }
@@ -1044,9 +1138,7 @@ fn bounded_delimited_window(
                         chars.next();
                     }
                     state = DelimitedScanState::LineComment;
-                } else if ch == '/'
-                    && chars.peek().is_some_and(|(_, next)| *next == '*')
-                {
+                } else if ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '*') {
                     chars.next();
                     state = DelimitedScanState::BlockComment;
                 } else if ch == open {
@@ -1102,9 +1194,7 @@ fn bounded_argument_value_span(input: &str, start: usize) -> (usize, usize) {
                         chars.next();
                     }
                     state = DelimitedScanState::LineComment;
-                } else if ch == '/'
-                    && chars.peek().is_some_and(|(_, next)| *next == '*')
-                {
+                } else if ch == '/' && chars.peek().is_some_and(|(_, next)| *next == '*') {
                     chars.next();
                     state = DelimitedScanState::BlockComment;
                 } else if ch == '(' {
@@ -1139,7 +1229,11 @@ fn bounded_argument_value_span(input: &str, start: usize) -> (usize, usize) {
 }
 
 fn line_number_at_offset(content: &str, offset: usize) -> usize {
-    content[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1
+    content[..offset]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1170,9 +1264,7 @@ fn build_code_context(content: &str) -> Vec<bool> {
                 } else if matches!(byte, b'\'' | b'"' | b'`') {
                     state = CodeContextState::Quoted(byte);
                     index += 1;
-                } else if byte == b'#'
-                    || (byte == b'/' && bytes.get(index + 1) == Some(&b'/'))
-                {
+                } else if byte == b'#' || (byte == b'/' && bytes.get(index + 1) == Some(&b'/')) {
                     state = CodeContextState::LineComment;
                     index += if byte == b'/' { 2 } else { 1 };
                 } else if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
@@ -1267,7 +1359,8 @@ fn scan_python_except_suites(
     let masked_lines: Vec<_> = masked.lines().collect();
 
     for (index, line) in masked_lines.iter().enumerate() {
-        let Some((header_end, header_colon)) = python_except_header_end(&masked_lines, index) else {
+        let Some((header_end, header_colon)) = python_except_header_end(&masked_lines, index)
+        else {
             continue;
         };
 
@@ -1354,12 +1447,7 @@ fn python_indent_width(line: &str) -> usize {
 }
 
 fn contains_only_ignored_python_statements(suite: &str) -> bool {
-    const IGNORED_CALLS: [&str; 4] = [
-        "print",
-        "logging.info",
-        "logging.debug",
-        "logging.warning",
-    ];
+    const IGNORED_CALLS: [&str; 4] = ["print", "logging.info", "logging.debug", "logging.warning"];
 
     let mut cursor = 0usize;
     loop {
@@ -1518,8 +1606,7 @@ fn is_try_body_before_catch(input: &str, catch_offset: usize) -> bool {
     let Some(try_offset) = try_end.checked_sub("try".len()) else {
         return false;
     };
-    &input[try_offset..try_end] == "try"
-        && is_identifier_keyword(input, try_offset, "try".len())
+    &input[try_offset..try_end] == "try" && is_identifier_keyword(input, try_offset, "try".len())
 }
 
 fn previous_non_whitespace_offset(input: &str, before: usize) -> Option<usize> {
@@ -1600,14 +1687,29 @@ fn javascript_regex_can_start(input: &str, slash: usize) -> bool {
     let byte = input.as_bytes()[previous];
     if matches!(
         byte,
-        b'=' | b'(' | b'[' | b'{' | b',' | b':' | b';' | b'!' | b'?' | b'&' | b'|'
-            | b'+' | b'-' | b'*' | b'%' | b'^' | b'~' | b'<' | b'>'
+        b'=' | b'('
+            | b'['
+            | b'{'
+            | b','
+            | b':'
+            | b';'
+            | b'!'
+            | b'?'
+            | b'&'
+            | b'|'
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'%'
+            | b'^'
+            | b'~'
+            | b'<'
+            | b'>'
     ) {
         return true;
     }
     if byte == b')' {
-        let Some(open_paren) =
-            matching_opening_delimiter_offset(input, previous, b'(', b')')
+        let Some(open_paren) = matching_opening_delimiter_offset(input, previous, b'(', b')')
         else {
             return false;
         };
@@ -1720,6 +1822,7 @@ fn push_silent_error_finding(
         line,
         kind: SecretKind::SilentErrorSwallowing,
         matched_text,
+        secret_byte_range: None,
         level: 4,
     });
 }
@@ -1733,11 +1836,7 @@ fn is_ai_config_file(file_path: &str) -> bool {
         || matches!(filename, ".mcp.json" | "mcp.json")
 }
 
-fn scan_ai_config_execution(
-    file_path: &str,
-    content: &str,
-    findings: &mut Vec<SecretFinding>,
-) {
+fn scan_ai_config_execution(file_path: &str, content: &str, findings: &mut Vec<SecretFinding>) {
     if !is_ai_config_file(file_path) {
         return;
     }
@@ -1766,16 +1865,14 @@ fn scan_ai_config_execution(
         }
     }
 
-    let risky_mcp_invocation = root
-        .get("mcpServers")
-        .and_then(Value::as_object)
-        .and_then(|servers| {
-            servers.values().find_map(|server| {
-                server
-                    .as_object()
-                    .and_then(find_risky_mcp_invocation)
-            })
-        });
+    let risky_mcp_invocation =
+        root.get("mcpServers")
+            .and_then(Value::as_object)
+            .and_then(|servers| {
+                servers
+                    .values()
+                    .find_map(|server| server.as_object().and_then(find_risky_mcp_invocation))
+            });
     if let Some(risk) = risky_mcp_invocation {
         let line = risk.argument.map_or_else(
             || {
@@ -1787,12 +1884,7 @@ fn scan_ai_config_execution(
             },
             |argument| json_array_string_value_line(content, "args", argument),
         );
-        push_ai_config_finding(
-            findings,
-            file_path,
-            line,
-            "mcpServers command".to_string(),
-        );
+        push_ai_config_finding(findings, file_path, line, "mcpServers command".to_string());
     }
 
     if let Some(tool) = first_dangerous_allowed_tool(&config) {
@@ -2056,21 +2148,13 @@ fn parse_shell_segments(command: &str) -> Vec<Vec<ShellToken>> {
                 }
             }
             ';' | '|' | '&' => {
-                push_shell_token(
-                    &mut segment,
-                    &mut value,
-                    &mut token_started,
-                );
+                push_shell_token(&mut segment, &mut value, &mut token_started);
                 if !segment.is_empty() {
                     segments.push(std::mem::take(&mut segment));
                 }
             }
             whitespace if whitespace.is_whitespace() => {
-                push_shell_token(
-                    &mut segment,
-                    &mut value,
-                    &mut token_started,
-                );
+                push_shell_token(&mut segment, &mut value, &mut token_started);
             }
             _ => {
                 value.push(ch);
@@ -2079,22 +2163,14 @@ fn parse_shell_segments(command: &str) -> Vec<Vec<ShellToken>> {
         }
     }
 
-    push_shell_token(
-        &mut segment,
-        &mut value,
-        &mut token_started,
-    );
+    push_shell_token(&mut segment, &mut value, &mut token_started);
     if !segment.is_empty() {
         segments.push(segment);
     }
     segments
 }
 
-fn push_shell_token(
-    segment: &mut Vec<ShellToken>,
-    value: &mut String,
-    token_started: &mut bool,
-) {
+fn push_shell_token(segment: &mut Vec<ShellToken>, value: &mut String, token_started: &mut bool) {
     if !*token_started {
         return;
     }
@@ -2111,9 +2187,10 @@ fn first_dangerous_allowed_tool(value: &Value) -> Option<&str> {
             .get("allowedTools")
             .and_then(Value::as_array)
             .and_then(|tools| {
-                tools.iter().filter_map(Value::as_str).find(|tool| {
-                    matches!(*tool, "Bash" | "Write" | "Edit" | "Delete" | "Execute")
-                })
+                tools
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .find(|tool| matches!(*tool, "Bash" | "Write" | "Edit" | "Delete" | "Execute"))
             })
             .or_else(|| object.values().find_map(first_dangerous_allowed_tool)),
         _ => None,
@@ -2178,6 +2255,7 @@ fn push_ai_config_finding(
         line,
         kind: SecretKind::AiConfigExecution,
         matched_text,
+        secret_byte_range: None,
         level: 5,
     });
 }
@@ -2186,28 +2264,19 @@ fn push_ai_config_finding(
 pub fn finding_to_signal(f: &SecretFinding) -> Value {
     let description = match f.kind {
         SecretKind::KnownPrefix(label) => format!(
-            "硬编码 {label}（{}）被检测到。密钥不得写入源码；请改用环境变量或密钥管理服务。",
-            f.matched_text
+            "硬编码 {label} 被检测到。密钥不得写入源码；请改用环境变量或密钥管理服务。"
         ),
-        SecretKind::HighEntropy => format!(
-            "高熵字符串（{}...）疑似密钥。如果不是密钥请添加 audit-risk:ignore 注释忽略此行。",
-            f.matched_text
-        ),
+        SecretKind::HighEntropy => "高熵字符串疑似密钥。如果确认风险可接受，请先运行 audit-risk check 获取 finding_id，再使用 audit-risk approve --finding <finding_id> --reason <原因> --expires <ISO8601日期> 记录审批。".to_string(),
         SecretKind::HardcodedAssignment => format!(
             "敏感变量 `{}` 被直接赋值字符串字面量。密钥不得硬编码；请改用环境变量。",
             f.matched_text
         ),
-        SecretKind::SqlInjection => format!(
-            "疑似 SQL 注入：SQL 语句通过字符串拼接/插值构造，而不是用参数化占位符传给驱动。（{}）请改用参数化查询（如 %s / ? / :name 占位符 + 单独传参）。",
-            f.matched_text
-        ),
+        SecretKind::SqlInjection => "疑似 SQL 注入：SQL 语句通过字符串拼接/插值构造，而不是用参数化占位符传给驱动。请改用参数化查询（如 %s / ? / :name 占位符 + 单独传参）。".to_string(),
         SecretKind::DangerousExecution(label) => format!(
-            "检测到危险的动态执行：{label}。（{}）如果参数包含外部输入，可能被用来执行任意代码或 shell 命令，请确认输入来源可信或改用更安全的调用方式。",
-            f.matched_text
+            "检测到危险的动态执行：{label}。如果参数包含外部输入，可能被用来执行任意代码或 shell 命令，请确认输入来源可信或改用更安全的调用方式。"
         ),
         SecretKind::PermissiveIam(label) => format!(
-            "检测到过度宽松的权限声明：{label}。（{}）通配符权限违反最小权限原则，请把 Action/Resource 收窄到实际需要的范围。",
-            f.matched_text
+            "检测到过度宽松的权限声明：{label}。通配符权限违反最小权限原则，请把 Action/Resource 收窄到实际需要的范围。"
         ),
         SecretKind::PromptInjection => AI_001_EXPLANATION.to_string(),
         SecretKind::SilentErrorSwallowing => AI_003_EXPLANATION.to_string(),
@@ -2235,6 +2304,12 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
         output["signal"]["rule_id"] = json!(AI_005_RULE_ID);
         output["signal"]["severity"] = json!(AI_005_SEVERITY);
         output["signal"]["plain_explanation"] = json!(AI_005_EXPLANATION);
+    }
+    if let (Some(range), Some(secret_kind)) = (f.secret_byte_range, f.kind.redaction_kind()) {
+        output["signal"]["secret_kind"] = json!(secret_kind);
+        output["signal"]["secret_start_col"] = json!(range.start);
+        output["signal"]["secret_end_col"] = json!(range.end);
+        output["signal"]["secret_range_unit"] = json!("utf8_bytes_0_based_end_exclusive");
     }
     output
 }
@@ -2325,7 +2400,11 @@ pub fn scan_workspace(project_root: &str) -> Vec<Value> {
         }
         // Skip very large files (generated/minified) — real secret/injection
         // sites live in human-sized source; a multi-MB regex scan is waste.
-        if entry.metadata().map(|m| m.len() > 1_048_576).unwrap_or(false) {
+        if entry
+            .metadata()
+            .map(|m| m.len() > 1_048_576)
+            .unwrap_or(false)
+        {
             continue;
         }
         let content = match std::fs::read_to_string(path) {
@@ -2508,10 +2587,7 @@ fn mask_literals_preserving_interpolations(line: &str) -> String {
                 && chars.get(index + 1) == Some(&'{')
             {
                 Some(index + 2)
-            } else if python_fstring
-                && chars[index] == '{'
-                && chars.get(index + 1) != Some(&'{')
-            {
+            } else if python_fstring && chars[index] == '{' && chars.get(index + 1) != Some(&'{') {
                 Some(index + 1)
             } else {
                 None
@@ -2774,9 +2850,28 @@ fn looks_like_placeholder(value: &str) -> bool {
         return true;
     }
     const MARKERS: &[&str] = &[
-        "placeholder", "changeme", "change_me", "change-me", "changeit", "your_", "your-",
-        "yourkey", "example", "dummy", "redacted", "todo", "fixme", "sample", "insert_",
-        "replace_", "n/a", "xxxx", "...", "foobar", "mysecret", "mypassword",
+        "placeholder",
+        "changeme",
+        "change_me",
+        "change-me",
+        "changeit",
+        "your_",
+        "your-",
+        "yourkey",
+        "example",
+        "dummy",
+        "redacted",
+        "todo",
+        "fixme",
+        "sample",
+        "insert_",
+        "replace_",
+        "n/a",
+        "xxxx",
+        "...",
+        "foobar",
+        "mysecret",
+        "mypassword",
     ];
     if MARKERS.iter().any(|m| v.contains(m)) {
         return true;
@@ -2791,24 +2886,8 @@ fn looks_like_placeholder(value: &str) -> bool {
     false
 }
 
-/// Truncate a matched secret to at most 12 bytes for display (never log full keys).
-/// Truncates at a char boundary — matched text can contain multi-byte UTF-8
-/// (e.g. Unicode whitespace matched by a regex `\s` class), and naive byte
-/// slicing at a fixed offset can land mid-character and panic.
-fn truncate_secret(s: &str) -> String {
-    let s = s.trim();
-    if s.len() <= 12 {
-        return s.to_string();
-    }
-    let mut end = 12;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
-}
-
-/// Same char-boundary-safe truncation as `truncate_secret`, but with a much
-/// wider window — used for findings (SQL injection, dangerous execution,
+/// Char-boundary-safe truncation with a wide display window, used for
+/// findings (SQL injection, dangerous execution,
 /// permissive IAM) where the displayed text is the risky *code span*, not a
 /// secret value, so cutting it to 12 chars would make the finding useless
 /// (e.g. an f-string SQL injection line would show only `f'SELECT * F...`).
@@ -2824,33 +2903,42 @@ fn truncate_line_for_display(s: &str) -> String {
     format!("{}...", &s[..end])
 }
 
-/// Extract string literals from a line (content between matching quote pairs).
-fn extract_string_literals(line: &str) -> Vec<String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StringLiteral<'a> {
+    value: &'a str,
+    start: usize,
+    end: usize,
+}
+
+/// Extract string literal contents and their 0-based, end-exclusive UTF-8
+/// byte ranges in the original line.
+fn extract_string_literals(line: &str) -> Vec<StringLiteral<'_>> {
     let mut results = Vec::new();
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '"' || chars[i] == '\'' {
-            let quote = chars[i];
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
             let start = i + 1;
-            let mut j = start;
-            while j < chars.len() {
-                if chars[j] == '\\' {
-                    j += 2;
+            let mut end = start;
+            while end < bytes.len() {
+                if bytes[end] == b'\\' {
+                    end = (end + 2).min(bytes.len());
                     continue;
                 }
-                if chars[j] == quote {
+                if bytes[end] == quote {
                     break;
                 }
-                j += 1;
+                end += 1;
             }
-            if j > start {
-                // `j` can overshoot len when a trailing `\` triggers `j += 2`;
-                // clamp so slicing a Vec<char> never panics out of range.
-                let end = j.min(chars.len());
-                results.push(chars[start..end].iter().collect());
+            if end > start && line.is_char_boundary(start) && line.is_char_boundary(end) {
+                results.push(StringLiteral {
+                    value: &line[start..end],
+                    start,
+                    end,
+                });
             }
-            i = j + 1;
+            i = end.saturating_add(1);
         } else {
             i += 1;
         }
@@ -2891,7 +2979,104 @@ mod tests {
         SecretScanner::new()
     }
 
+    fn assert_secret_value_contract(finding: &SecretFinding, line: &str, secret: &str) {
+        let range = finding.secret_byte_range.expect("secret byte range");
+        assert_eq!(&line[range.start..range.end], secret);
+        let redacted = format!(
+            "{}***REDACTED***{}",
+            &line[..range.start],
+            &line[range.end..]
+        );
+        assert_eq!(redacted, line.replacen(secret, "***REDACTED***", 1));
+        assert!(!redacted.contains(secret));
+        assert!(!finding.matched_text.contains(secret));
+
+        let signal = finding_to_signal(finding);
+        let encoded = serde_json::to_string(&signal).expect("signal json");
+        assert!(
+            !encoded.contains(secret),
+            "signal must not contain the secret value"
+        );
+    }
+
     // ─── Layer 1: known prefix ────────────────────────────────────────────────
+
+    #[test]
+    fn serialized_signals_do_not_leak_secrets_from_mixed_findings() {
+        enum ExpectedKind {
+            SqlInjection,
+            DangerousExecution(&'static str),
+            PermissiveIam(&'static str),
+        }
+
+        let cases = [
+            (
+                "mixed_eval.py",
+                r#"password = "S3nsitiveEvalKey9Qx!"; result = eval(user_input)"#,
+                "S3nsitiveEvalKey9Qx!",
+                ExpectedKind::DangerousExecution("eval()"),
+                &["危险的动态执行", "eval()"][..],
+            ),
+            (
+                "mixed_sql.py",
+                r#"password = "S3nsitiveSqlKey8Rv!"; query = f"SELECT * FROM users WHERE id = {user_id}""#,
+                "S3nsitiveSqlKey8Rv!",
+                ExpectedKind::SqlInjection,
+                &["SQL 注入"][..],
+            ),
+            (
+                "mixed_policy.py",
+                r#"password = "S3nsitiveIamKey7Tw!"; policy = {"Action": "*"}"#,
+                "S3nsitiveIamKey7Tw!",
+                ExpectedKind::PermissiveIam("IAM Action 通配符"),
+                &["过度宽松", "IAM Action 通配符"][..],
+            ),
+        ];
+
+        for (path, line, secret, expected_kind, useful_descriptions) in cases {
+            let findings = scanner().scan_content(path, line);
+            assert!(
+                findings.iter().any(|finding| {
+                    finding
+                        .secret_byte_range
+                        .is_some_and(|range| line.get(range.start..range.end) == Some(secret))
+                }),
+                "missing secret finding for {path}"
+            );
+
+            let non_secret = findings
+                .iter()
+                .find(|finding| match expected_kind {
+                    ExpectedKind::SqlInjection => finding.kind == SecretKind::SqlInjection,
+                    ExpectedKind::DangerousExecution(label) => {
+                        finding.kind == SecretKind::DangerousExecution(label)
+                    }
+                    ExpectedKind::PermissiveIam(label) => {
+                        finding.kind == SecretKind::PermissiveIam(label)
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing companion finding for {path}"));
+            let signal = finding_to_signal(non_secret);
+            let description = signal["signal"]["description"]
+                .as_str()
+                .expect("companion finding description");
+            for useful_description in useful_descriptions {
+                assert!(
+                    description.contains(useful_description),
+                    "companion finding description lost `{useful_description}` for {path}: {description}"
+                );
+            }
+
+            for finding in &findings {
+                let encoded = serde_json::to_string(&finding_to_signal(finding))
+                    .expect("serialized finding signal");
+                assert!(
+                    !encoded.contains(secret),
+                    "serialized finding leaked the complete secret for {path}: {encoded}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn detects_openai_sk_key() {
@@ -2908,10 +3093,8 @@ mod tests {
     #[test]
     fn detects_aws_akia_key() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "terraform/main.tf",
-            "access_key = \"AKIAIOSFODNN7EXAMPLE\"",
-        );
+        let findings =
+            scanner.scan_content("terraform/main.tf", "access_key = \"AKIAIOSFODNN7EXAMPLE\"");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].level, 5);
     }
@@ -2930,10 +3113,7 @@ mod tests {
     #[test]
     fn detects_private_key_block() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "keys/server.pem",
-            "-----BEGIN RSA PRIVATE KEY-----",
-        );
+        let findings = scanner.scan_content("keys/server.pem", "-----BEGIN RSA PRIVATE KEY-----");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].level, 5);
     }
@@ -2965,6 +3145,19 @@ mod tests {
     }
 
     #[test]
+    fn high_entropy_finding_carries_only_value_range_and_signal_omits_secret() {
+        let line = r#"label = "保留"; blob = "xK9mP2qR7vL4nJ8wZ1yA6bC3dE5fG0hI"; tail = true"#;
+        let secret = "xK9mP2qR7vL4nJ8wZ1yA6bC3dE5fG0hI";
+        let findings = scanner().scan_content("config.go", line);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.kind == SecretKind::HighEntropy)
+            .expect("high entropy finding");
+
+        assert_secret_value_contract(finding, line, secret);
+    }
+
+    #[test]
     fn low_entropy_string_not_flagged() {
         let scanner = scanner();
         // "hello world" has low entropy
@@ -2981,10 +3174,7 @@ mod tests {
     #[test]
     fn detects_hardcoded_password_assignment() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "db.py",
-            r#"password = "hunter2secretpassword""#,
-        );
+        let findings = scanner.scan_content("db.py", r#"password = "hunter2secretpassword""#);
         assert!(!findings.is_empty());
         assert!(findings
             .iter()
@@ -2996,10 +3186,8 @@ mod tests {
     #[test]
     fn detects_api_key_colon_assignment() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "config.ts",
-            r#"  apiKey: "someRandomApiKeyValue1234567""#,
-        );
+        let findings =
+            scanner.scan_content("config.ts", r#"  apiKey: "someRandomApiKeyValue1234567""#);
         assert!(!findings.is_empty());
     }
 
@@ -3019,14 +3207,14 @@ mod tests {
     fn placeholder_strings_in_example_code_low_false_positive() {
         let scanner = scanner();
         // Common placeholder values — short, low entropy, no known prefix
-        let findings = scanner.scan_content(
-            "README.md",
-            r#"api_key = "YOUR_API_KEY_HERE""#,
-        );
+        let findings = scanner.scan_content("README.md", r#"api_key = "YOUR_API_KEY_HERE""#);
         // Entropy of "YOUR_API_KEY_HERE" is low and length < 20 chars for the value part
         // Assignment pattern may still fire — that's acceptable (it IS a secret assignment)
         // What matters: no known-prefix L5 hit
-        assert!(!findings.iter().any(|f| f.level == 5), "placeholder must not be L5");
+        assert!(
+            !findings.iter().any(|f| f.level == 5),
+            "placeholder must not be L5"
+        );
     }
 
     // ─── Layer 4: SQL injection ───────────────────────────────────────────────
@@ -3073,10 +3261,7 @@ mod tests {
     #[test]
     fn detects_reversed_string_concatenation_sql_injection() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "db.py",
-            r#"query = prefix + "DROP TABLE users""#,
-        );
+        let findings = scanner.scan_content("db.py", r#"query = prefix + "DROP TABLE users""#);
         assert!(
             findings.iter().any(|f| f.kind == SecretKind::SqlInjection),
             "variable + SQL-keyword-string concatenation must be flagged (reversed order)"
@@ -3143,10 +3328,7 @@ mod tests {
     #[test]
     fn detects_shell_true() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "app.py",
-            "subprocess.run(cmd, shell=True)",
-        );
+        let findings = scanner.scan_content("app.py", "subprocess.run(cmd, shell=True)");
         assert!(findings
             .iter()
             .any(|f| matches!(f.kind, SecretKind::DangerousExecution("shell=True"))));
@@ -3155,19 +3337,19 @@ mod tests {
     #[test]
     fn detects_js_child_process_exec_method_call() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "app.js",
-            "child_process.exec(`ls ${dir}`, callback);",
-        );
+        let findings = scanner.scan_content("app.js", "child_process.exec(`ls ${dir}`, callback);");
         assert!(
-            findings
-                .iter()
-                .any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))),
+            findings.iter().any(|f| matches!(
+                f.kind,
+                SecretKind::DangerousExecution("child_process.exec()")
+            )),
             "child_process.exec( method call must be flagged"
         );
         // Must not ALSO double-report as the bare exec() pattern.
         assert!(
-            !findings.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))),
+            !findings
+                .iter()
+                .any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))),
             "a method call must not also match the bare exec() pattern"
         );
     }
@@ -3175,10 +3357,12 @@ mod tests {
     #[test]
     fn detects_new_function_from_string() {
         let scanner = scanner();
-        let findings = scanner.scan_content("app.js", "const fn = new Function('return ' + userCode);");
-        assert!(findings
-            .iter()
-            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("new Function() from string"))));
+        let findings =
+            scanner.scan_content("app.js", "const fn = new Function('return ' + userCode);");
+        assert!(findings.iter().any(|f| matches!(
+            f.kind,
+            SecretKind::DangerousExecution("new Function() from string")
+        )));
     }
 
     #[test]
@@ -3186,13 +3370,23 @@ mod tests {
         let scanner = scanner();
         // Pure Python exec() at start of line — no leading dot.
         let bare = scanner.scan_content("a.py", "exec(user_code)");
-        assert!(bare.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
-        assert!(!bare.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))));
+        assert!(bare
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
+        assert!(!bare.iter().any(|f| matches!(
+            f.kind,
+            SecretKind::DangerousExecution("child_process.exec()")
+        )));
 
         // Known child_process namespace method call — leading dot.
         let method = scanner.scan_content("a.js", "child_process.exec(cmd)");
-        assert!(method.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("child_process.exec()"))));
-        assert!(!method.iter().any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
+        assert!(method.iter().any(|f| matches!(
+            f.kind,
+            SecretKind::DangerousExecution("child_process.exec()")
+        )));
+        assert!(!method
+            .iter()
+            .any(|f| matches!(f.kind, SecretKind::DangerousExecution("exec()"))));
     }
 
     #[test]
@@ -3370,6 +3564,36 @@ var mongo = "mongodb://appuser:S3cr3tP@ss@cluster.example.com:27017/mydb";"#,
     }
 
     #[test]
+    fn assignment_variants_range_only_secret_value_and_signal_omits_original() {
+        let cases = [
+            (
+                ".env.production",
+                "DATABASE_PASSWORD=SuperSecret123 # deployed",
+                "SuperSecret123",
+            ),
+            (
+                "settings.rs",
+                "token = 0123456789abcdef0123456789abcdef; // keep",
+                "0123456789abcdef0123456789abcdef",
+            ),
+            (
+                "connection.cs",
+                "var conn = \"Server=prod;Password=Pr0dP@ssw0rd!;Tail=ok\";",
+                "Pr0dP@ssw0rd!",
+            ),
+        ];
+
+        for (path, line, secret) in cases {
+            let findings = scanner().scan_content(path, line);
+            let finding = findings
+                .iter()
+                .find(|finding| finding.kind == SecretKind::HardcodedAssignment)
+                .unwrap_or_else(|| panic!("missing hardcoded assignment for {path}"));
+            assert_secret_value_contract(finding, line, secret);
+        }
+    }
+
+    #[test]
     fn p1_5_detects_each_python_command_execution_api() {
         let scanner = scanner();
         let findings = scanner.scan_content(
@@ -3427,10 +3651,7 @@ var mongo = "mongodb://appuser:S3cr3tP@ss@cluster.example.com:27017/mydb";"#,
     #[test]
     fn review_spaced_method_calls_are_not_treated_as_bare_execution() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "methods.py",
-            "model . eval()\npattern . exec(text)",
-        );
+        let findings = scanner.scan_content("methods.py", "model . eval()\npattern . exec(text)");
         assert!(findings.is_empty());
     }
 
@@ -3559,20 +3780,15 @@ cp.exec(userInput);"#,
     #[test]
     fn review_c_system_declaration_is_not_a_call() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "stdlib.h",
-            "int system(const char *command);",
-        );
+        let findings = scanner.scan_content("stdlib.h", "int system(const char *command);");
         assert!(findings.is_empty());
     }
 
     #[test]
     fn review_env_secret_before_inline_comment_is_detected() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            ".env.production",
-            "PASSWORD=SuperSecret123 # deployed",
-        );
+        let findings =
+            scanner.scan_content(".env.production", "PASSWORD=SuperSecret123 # deployed");
         assert!(findings
             .iter()
             .any(|f| f.kind == SecretKind::HardcodedAssignment));
@@ -3649,16 +3865,10 @@ const escaped = `\${eval(userInput)}`;"#,
     #[test]
     fn review_system_function_definitions_are_not_calls() {
         let scanner = scanner();
-        let c = scanner.scan_content(
-            "compat.c",
-            "int system(const char *command) { return 0; }",
-        );
+        let c = scanner.scan_content("compat.c", "int system(const char *command) { return 0; }");
         assert!(c.is_empty());
 
-        let php = scanner.scan_content(
-            "compat.php",
-            "function system($command) { return 0; }",
-        );
+        let php = scanner.scan_content("compat.php", "function system($command) { return 0; }");
         assert!(php.is_empty());
     }
 
@@ -3681,20 +3891,14 @@ query = "SELECT " + column + " FROM users""#,
     #[test]
     fn review_dynamic_ui_copy_is_not_sql_injection() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "ui_text.py",
-            r#"label = f"Select {item} from menu""#,
-        );
+        let findings = scanner.scan_content("ui_text.py", r#"label = f"Select {item} from menu""#);
         assert!(findings.is_empty());
     }
 
     #[test]
     fn review_detects_execution_in_triple_fstrings_and_nested_templates() {
         let scanner = scanner();
-        let python = scanner.scan_content(
-            "template.py",
-            r#"query = f"""{eval(user_input)}""""#,
-        );
+        let python = scanner.scan_content("template.py", r#"query = f"""{eval(user_input)}""""#);
         assert!(python
             .iter()
             .any(|finding| matches!(finding.kind, SecretKind::DangerousExecution("eval()"))));
@@ -3756,10 +3960,7 @@ query = "SELECT " + column + " FROM users""#,
     #[test]
     fn detects_wildcard_iam_action() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "policy.json",
-            r#"    "Action": "*","#,
-        );
+        let findings = scanner.scan_content("policy.json", r#"    "Action": "*","#);
         assert!(findings
             .iter()
             .any(|f| matches!(f.kind, SecretKind::PermissiveIam("IAM Action 通配符"))));
@@ -3768,10 +3969,7 @@ query = "SELECT " + column + " FROM users""#,
     #[test]
     fn detects_wildcard_iam_resource() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "policy.json",
-            r#"    "Resource": "*""#,
-        );
+        let findings = scanner.scan_content("policy.json", r#"    "Resource": "*""#);
         assert!(findings
             .iter()
             .any(|f| matches!(f.kind, SecretKind::PermissiveIam("IAM Resource 通配符"))));
@@ -3780,10 +3978,7 @@ query = "SELECT " + column + " FROM users""#,
     #[test]
     fn detects_wildcard_iam_action_array_form() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "policy.json",
-            r#"    "Action": ["*"],"#,
-        );
+        let findings = scanner.scan_content("policy.json", r#"    "Action": ["*"],"#);
         assert!(findings
             .iter()
             .any(|f| matches!(f.kind, SecretKind::PermissiveIam("IAM Action 通配符"))));
@@ -3792,12 +3987,11 @@ query = "SELECT " + column + " FROM users""#,
     #[test]
     fn scoped_iam_action_is_not_flagged() {
         let scanner = scanner();
-        let findings = scanner.scan_content(
-            "policy.json",
-            r#"    "Action": "s3:GetObject","#,
-        );
+        let findings = scanner.scan_content("policy.json", r#"    "Action": "s3:GetObject","#);
         assert!(
-            !findings.iter().any(|f| matches!(f.kind, SecretKind::PermissiveIam(_))),
+            !findings
+                .iter()
+                .any(|f| matches!(f.kind, SecretKind::PermissiveIam(_))),
             "a scoped IAM action must not be flagged as permissive"
         );
     }
@@ -3948,20 +4142,15 @@ response = client.chat.completions.create(messages=messages)"#,
 
     #[test]
     fn ignores_prompt_assignment_in_line_comment() {
-        let findings = scanner().scan_content(
-            "chat.py",
-            r#"# prompt = "x" + user_input"#,
-        );
+        let findings = scanner().scan_content("chat.py", r#"# prompt = "x" + user_input"#);
 
         assert!(findings.is_empty());
     }
 
     #[test]
     fn ignores_prompt_comment_with_user_input_and_legacy_plus() {
-        let findings = scanner().scan_content(
-            "chat.py",
-            r#"prompt = "safe"  # user_input + legacy"#,
-        );
+        let findings =
+            scanner().scan_content("chat.py", r#"prompt = "safe"  # user_input + legacy"#);
 
         assert!(findings.is_empty());
     }
@@ -4012,10 +4201,8 @@ client.chat.completions.create(messages=[user_input]);
 
     #[test]
     fn ignores_openai_file_upload_with_user_file_data() {
-        let findings = scanner().scan_content(
-            "files.py",
-            "openai.files.create(file=user_input_data)",
-        );
+        let findings =
+            scanner().scan_content("files.py", "openai.files.create(file=user_input_data)");
 
         assert!(findings.is_empty());
     }
@@ -4133,10 +4320,8 @@ client.chat.completions.create(prompt=prompt)"#,
 
     #[test]
     fn detects_openai_completions_prompt_with_direct_user_input() {
-        let findings = scanner().scan_content(
-            "chat.py",
-            "openai.completions.create(prompt=user_input)",
-        );
+        let findings =
+            scanner().scan_content("chat.py", "openai.completions.create(prompt=user_input)");
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].kind, SecretKind::PromptInjection);
@@ -4613,31 +4798,61 @@ response = openai.chat.completions.create(
             line: 1,
             kind: SecretKind::SqlInjection,
             matched_text: "f-string example".to_string(),
+            secret_byte_range: None,
             level: 4,
         };
         let signal = finding_to_signal(&sql);
-        assert!(signal["signal"]["description"].as_str().unwrap().contains("SQL 注入"));
+        assert!(signal["signal"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("SQL 注入"));
 
         let exec_finding = SecretFinding {
             file_path: "app.py".to_string(),
             line: 1,
             kind: SecretKind::DangerousExecution("eval()"),
             matched_text: "eval example".to_string(),
+            secret_byte_range: None,
             level: 4,
         };
         let signal = finding_to_signal(&exec_finding);
-        assert!(signal["signal"]["description"].as_str().unwrap().contains("危险的动态执行"));
-        assert!(signal["signal"]["description"].as_str().unwrap().contains("eval()"));
+        assert!(signal["signal"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("危险的动态执行"));
+        assert!(signal["signal"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("eval()"));
 
         let iam_finding = SecretFinding {
             file_path: "policy.json".to_string(),
             line: 1,
             kind: SecretKind::PermissiveIam("IAM Action 通配符"),
             matched_text: "\"Action\": \"*\"".to_string(),
+            secret_byte_range: None,
             level: 4,
         };
         let signal = finding_to_signal(&iam_finding);
-        assert!(signal["signal"]["description"].as_str().unwrap().contains("过度宽松"));
+        assert!(signal["signal"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("过度宽松"));
+
+        let high_entropy = SecretFinding {
+            file_path: "config.py".to_string(),
+            line: 1,
+            kind: SecretKind::HighEntropy,
+            matched_text: "redacted".to_string(),
+            secret_byte_range: Some(SecretByteRange { start: 0, end: 8 }),
+            level: 4,
+        };
+        let signal = finding_to_signal(&high_entropy);
+        let description = signal["signal"]["description"]
+            .as_str()
+            .expect("high entropy description");
+        assert!(description.contains("audit-risk approve"));
+        assert!(!description.contains("audit-risk:ignore"));
     }
 
     #[test]
@@ -4650,10 +4865,15 @@ response = openai.chat.completions.create(
 
     #[test]
     fn scan_changed_files_reports_under_display_path_not_read_path() {
-        let dir = std::env::temp_dir().join(format!("audit-risk-secrets-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("audit-risk-secrets-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let abs_file = dir.join("config.py");
-        std::fs::write(&abs_file, r#"api_key = "sk-abcdefghijklmnopqrstuvwxyz123456""#).expect("write file");
+        std::fs::write(
+            &abs_file,
+            r#"api_key = "sk-abcdefghijklmnopqrstuvwxyz123456""#,
+        )
+        .expect("write file");
 
         let read_paths = vec![abs_file.to_string_lossy().into_owned()];
         let display_paths = vec!["src/config.py".to_string()];
@@ -4679,24 +4899,17 @@ response = openai.chat.completions.create(
         assert!(!findings.is_empty());
     }
 
-    #[test]
-    fn truncate_secret_handles_multibyte_boundary_without_panicking() {
-        // Direct unit coverage of the helper across a range of boundary offsets.
-        for pad in 0..16 {
-            let padding = "x".repeat(pad);
-            let s = format!("{padding}\u{00A0}{}", "A".repeat(40));
-            // Must not panic regardless of where the multi-byte char lands.
-            let _ = truncate_secret(&s);
-        }
-    }
-
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     #[test]
     fn shannon_entropy_of_random_string_is_high() {
         // A truly random 32-char base64 string should have entropy > 4.5
         let s = "xK9mP2qR7vL4nJ8wZ1yA6bC3dE5fG0h";
-        assert!(shannon_entropy(s) > 4.0, "random string entropy={}", shannon_entropy(s));
+        assert!(
+            shannon_entropy(s) > 4.0,
+            "random string entropy={}",
+            shannon_entropy(s)
+        );
     }
 
     #[test]
@@ -4709,8 +4922,8 @@ response = openai.chat.completions.create(
     fn extract_string_literals_handles_escape() {
         let line = r#"let x = "hello \"world\""; let y = 'test';"#;
         let literals = extract_string_literals(line);
-        assert!(literals.iter().any(|l| l.contains("hello")));
-        assert!(literals.iter().any(|l| l == "test"));
+        assert!(literals.iter().any(|l| l.value.contains("hello")));
+        assert!(literals.iter().any(|l| l.value == "test"));
     }
 
     #[test]
@@ -4731,6 +4944,7 @@ response = openai.chat.completions.create(
             line: 42,
             kind: SecretKind::KnownPrefix("GitHub PAT"),
             matched_text: "ghp_abc123...".to_string(),
+            secret_byte_range: Some(SecretByteRange { start: 0, end: 12 }),
             level: 5,
         };
         let signal = finding_to_signal(&finding);

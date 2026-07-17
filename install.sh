@@ -19,21 +19,35 @@ need() { command -v "$1" >/dev/null 2>&1 || err "required command not found: $1"
 
 PREFIX="$DEFAULT_PREFIX"
 VERSION=""
+REQUIRE_CHECKSUM=0
 
-for arg in "$@"; do
-  case "$arg" in
-    --prefix=*) PREFIX="${arg#--prefix=}" ;;
-    --prefix)   shift; PREFIX="$1" ;;
-    --version=*) VERSION="${arg#--version=}" ;;
-    --version)  shift; VERSION="$1" ;;
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
+    --prefix)
+      [ "$#" -ge 2 ] || err "--prefix requires a directory."
+      PREFIX="$2"
+      shift 2
+      ;;
+    --version=*) VERSION="${1#--version=}"; shift ;;
+    --version)
+      [ "$#" -ge 2 ] || err "--version requires a release tag."
+      VERSION="$2"
+      shift 2
+      ;;
+    --require-checksum) REQUIRE_CHECKSUM=1; shift ;;
     --help|-h)
-      echo "Usage: install.sh [--prefix <dir>] [--version <tag>]"
+      echo "Usage: install.sh [--prefix <dir>] [--version <tag>] [--require-checksum]"
       echo "  --prefix   Install directory (default: /usr/local, binary goes to PREFIX/bin)"
       echo "  --version  Specific version tag to install (default: latest)"
+      echo "  --require-checksum  Fail if checksum verification cannot be completed"
       exit 0
       ;;
+    *) err "Unknown argument: $1" ;;
   esac
 done
+
+[ -n "$PREFIX" ] || err "--prefix must not be empty."
 
 INSTALL_DIR="$PREFIX/bin"
 
@@ -110,8 +124,14 @@ elif command -v shasum >/dev/null 2>&1; then
 fi
 
 if [ -z "$HASH_TOOL" ]; then
+  if [ "$REQUIRE_CHECKSUM" -eq 1 ]; then
+    err "Checksum verification is required, but no sha256sum/shasum command is available."
+  fi
   say "Warning: no sha256sum/shasum found — skipping checksum verification."
 elif ! curl -sSfL "$CHECKSUM_URL" -o "$TMP_SUMS" 2>/dev/null; then
+  if [ "$REQUIRE_CHECKSUM" -eq 1 ]; then
+    err "Checksum verification is required, but checksums.txt could not be fetched for $VERSION."
+  fi
   say "Warning: could not fetch checksums.txt for $VERSION — skipping checksum verification."
 else
   # Anchor on whitespace + exact asset name at end of line so a name that
@@ -120,6 +140,9 @@ else
   EXPECTED="$(grep -E "[[:space:]]${ASSET_NAME}\$" "$TMP_SUMS" | awk '{print $1}')"
   ACTUAL="$($HASH_TOOL "$TMP_BIN" | awk '{print $1}')"
   if [ -z "$EXPECTED" ]; then
+    if [ "$REQUIRE_CHECKSUM" -eq 1 ]; then
+      err "Checksum verification is required, but checksums.txt has no entry for $ASSET_NAME."
+    fi
     say "Warning: no checksum entry for $ASSET_NAME in checksums.txt — skipping verification."
   elif [ "$ACTUAL" != "$EXPECTED" ]; then
     err "Checksum mismatch! Expected: $EXPECTED  Got: $ACTUAL"

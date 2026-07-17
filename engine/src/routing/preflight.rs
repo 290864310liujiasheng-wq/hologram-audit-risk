@@ -1,7 +1,11 @@
 use crate::analysis::{coupling_report, detect_cycles, thread_conflict_report};
 use crate::community::louvain::detect_communities;
 use crate::graph::{Graph, NodeKind};
-use crate::routing::{constraints::{ConstraintConfig, check_constraints}, signals::SignalGenerator, summary::generate_summary};
+use crate::routing::{
+    constraints::{check_constraints, ConstraintConfig},
+    signals::SignalGenerator,
+    summary::generate_summary,
+};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -25,9 +29,7 @@ pub fn load_baseline(project_root: &Path) -> Graph {
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Graph::default(),
         Err(error) => {
-            eprintln!(
-                "警告：无法读取 .hologram/baseline.json（{error}），本次以无基线模式运行。"
-            );
+            eprintln!("警告：无法读取 .hologram/baseline.json（{error}），本次以无基线模式运行。");
             Graph::default()
         }
     }
@@ -140,7 +142,37 @@ fn is_tool_artifact(path: &str) -> bool {
 }
 
 /// run_full_check — equivalent of Python preflight.py run_full_check()
-pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], project_root: &str) -> Value {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FullCheckOptions {
+    pub initial_full_scan: bool,
+    pub include_global_graph_deltas: bool,
+}
+
+pub fn run_full_check(
+    before: &Graph,
+    after: &Graph,
+    changed_files: &[String],
+    project_root: &str,
+) -> Value {
+    run_full_check_with_options(
+        before,
+        after,
+        changed_files,
+        project_root,
+        FullCheckOptions {
+            initial_full_scan: true,
+            include_global_graph_deltas: true,
+        },
+    )
+}
+
+pub fn run_full_check_with_options(
+    before: &Graph,
+    after: &Graph,
+    changed_files: &[String],
+    project_root: &str,
+    options: FullCheckOptions,
+) -> Value {
     // Drop audit-risk's own managed files so its scaffolding never shows up as
     // user risk. Everything below sees only genuine workspace changes.
     let filtered_changed: Vec<String> = changed_files
@@ -156,6 +188,9 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
     // dangerous "0 findings" just because nothing changed since baseline. The
     // architectural diff checks genuinely need a baseline, so they stay diff-based.
     if before.nodes.is_empty() && changed_files.is_empty() {
+        if !options.initial_full_scan {
+            return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+        }
         let secret_signals = crate::routing::secrets::scan_workspace(project_root);
         if secret_signals.is_empty() {
             return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
@@ -184,6 +219,13 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
         l4_count,
         cycle_count,
     );
+    if !options.include_global_graph_deltas {
+        signals.retain(|signal| {
+            signal["signal"]["file_path"]
+                .as_str()
+                .is_some_and(|file_path| !file_path.is_empty())
+        });
+    }
 
     // Secret scanning: scan the content of every changed file.
     // `changed_files` are relative to `project_root` (from `git status --short`
@@ -198,11 +240,15 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
             .map(|f| project_root_path.join(f).to_string_lossy().into_owned())
             .collect()
     };
-    let secret_signals = crate::routing::secrets::scan_changed_files(&absolute_changed_files, changed_files);
+    let secret_signals =
+        crate::routing::secrets::scan_changed_files(&absolute_changed_files, changed_files);
     signals.extend(secret_signals);
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(&signals, &config);
-    let violations: Vec<Value> = constraint_result["violations"].as_array().cloned().unwrap_or_default();
+    let violations: Vec<Value> = constraint_result["violations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let summary = generate_summary(changed_files, &violations, l4_count, cycle_count);
 
     // ── blast_radius: BFS from all nodes whose file is in changed_files ──
@@ -212,7 +258,10 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
         let mut seed_nodes: HashSet<&str> = HashSet::new();
         for node in after.nodes.values() {
             if let Some(ref loc) = node.location {
-                if changed_files.iter().any(|f| loc.starts_with(f.as_str()) || loc.contains(f.as_str())) {
+                if changed_files
+                    .iter()
+                    .any(|f| loc.starts_with(f.as_str()) || loc.contains(f.as_str()))
+                {
                     seed_nodes.insert(node.id.as_str());
                 }
             }
@@ -231,7 +280,9 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
             adj.entry(&edge.target).or_default().push(&edge.source);
         }
         while let Some((cur, depth)) = queue.pop_front() {
-            if depth >= 3 { continue; }
+            if depth >= 3 {
+                continue;
+            }
             if let Some(nbs) = adj.get(cur) {
                 for &nb in nbs {
                     if visited.insert(nb) {
@@ -251,7 +302,9 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
             node_to_comm.insert(nid.as_str(), ci);
         }
     }
-    let cross_community_edges = after.edges.values()
+    let cross_community_edges = after
+        .edges
+        .values()
         .filter(|e| {
             let sc = node_to_comm.get(e.source.as_str());
             let tc = node_to_comm.get(e.target.as_str());
@@ -269,7 +322,9 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
     } else {
         let mut changed = 0u32;
         for (nid, after_node) in after.nodes.iter() {
-            if !matches!(after_node.kind, NodeKind::Symbol) { continue; }
+            if !matches!(after_node.kind, NodeKind::Symbol) {
+                continue;
+            }
             if let Some(before_node) = before.nodes.get(nid) {
                 // Count as changed if in/out degree differs
                 if before_node.out_degree != after_node.out_degree
@@ -310,19 +365,23 @@ pub fn run_full_check(before: &Graph, after: &Graph, changed_files: &[String], p
 
 #[cfg(test)]
 mod tests {
-    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
     use super::*;
+    use crate::graph::{Edge, EdgeKind, Node, NodeKind};
 
     #[test]
     fn test_preflight_empty_graphs() {
         // Empty workspace (no risks) → quiet pass. Use a fresh temp dir as the
         // project root so the first-open full scan finds nothing (passing "."
         // would scan the engine's own corpus of intentional secrets).
-        let dir = std::env::temp_dir().join("audit_preflight_empty");
+        let dir = std::env::temp_dir().join(format!(
+            "audit_preflight_empty-{}",
+            uuid::Uuid::new_v4()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let g = Graph::new();
         let r = run_full_check(&g, &g, &[], &dir.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["blast_radius"], 0);
         assert_eq!(r["violation_count"], 0);
@@ -403,16 +462,104 @@ mod tests {
     fn test_preflight_baseline_seed() {
         // First open on a clean workspace → seed baseline quietly. Fresh temp
         // dir as project root so the full scan finds no risks.
-        let dir = std::env::temp_dir().join("audit_preflight_seed");
+        let dir = std::env::temp_dir().join(format!(
+            "audit_preflight_seed-{}",
+            uuid::Uuid::new_v4()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut after = Graph::new();
         after.add_node(Node::new("a", "fn", NodeKind::Symbol));
         let before = Graph::new();
         let r = run_full_check(&before, &after, &[], &dir.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["baseline_seed"], true);
         assert_eq!(r["violation_count"], 0);
+    }
+
+    #[test]
+    fn test_preflight_explicit_empty_selection_skips_initial_full_scan() {
+        let dir = std::env::temp_dir().join(format!(
+            "audit_preflight_selected_empty-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("leak.py"),
+            "OPENAI_API_KEY = \"sk-proj-AbCdEf0123456789GhIjKlMnOpQrStUvWxYz012345\"\n",
+        )
+        .unwrap();
+        let before = Graph::new();
+        let after = Graph::new();
+
+        let r = run_full_check_with_options(
+            &before,
+            &after,
+            &[],
+            &dir.to_string_lossy(),
+            FullCheckOptions {
+                initial_full_scan: false,
+                include_global_graph_deltas: false,
+            },
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(r["passed"].as_bool().unwrap());
+        assert_eq!(r["violation_count"], 0);
+        assert_eq!(r["baseline_seed"], true);
+        assert!(r.get("full_scan").is_none());
+    }
+
+    fn graph_with_new_global_l4_and_cycle() -> (Graph, Graph) {
+        let mut before = Graph::new();
+        for id in ["a", "b", "c"] {
+            before.add_node(Node::new(id, id, NodeKind::Symbol));
+        }
+        before.add_edge(Edge::new("e1", "a", "b", EdgeKind::Calls));
+        before.add_edge(Edge::new("e2", "b", "c", EdgeKind::Calls));
+
+        let mut after = before.clone();
+        let mut global_l4_cycle_edge = Edge::new("e3", "c", "a", EdgeKind::Calls);
+        global_l4_cycle_edge.coupling_depth = 4;
+        after.add_edge(global_l4_cycle_edge);
+        (before, after)
+    }
+
+    #[test]
+    fn test_preflight_explicit_selection_excludes_global_graph_deltas() {
+        let (before, after) = graph_with_new_global_l4_and_cycle();
+        let selected_files = vec!["src/safe.rs".to_string()];
+
+        let result = run_full_check_with_options(
+            &before,
+            &after,
+            &selected_files,
+            ".",
+            FullCheckOptions {
+                initial_full_scan: false,
+                include_global_graph_deltas: false,
+            },
+        );
+
+        assert_eq!(result["l4_violations"], json!([]));
+        assert_eq!(result["l2_violations"], json!([]));
+    }
+
+    #[test]
+    fn test_preflight_default_check_includes_global_graph_deltas() {
+        let (before, after) = graph_with_new_global_l4_and_cycle();
+
+        let result = run_full_check(
+            &before,
+            &after,
+            &["src/safe.rs".to_string()],
+            ".",
+        );
+
+        assert_eq!(result["l4_violations"].as_array().unwrap().len(), 1);
+        assert_eq!(result["l2_violations"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -420,7 +567,10 @@ mod tests {
         // Regression guard: the first `check` on an existing codebase that
         // already contains a leaked key must NOT report a false "all clear" just
         // because nothing changed since baseline — it must full-scan and flag it.
-        let dir = std::env::temp_dir().join("audit_preflight_fullscan");
+        let dir = std::env::temp_dir().join(format!(
+            "audit_preflight_fullscan-{}",
+            uuid::Uuid::new_v4()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(

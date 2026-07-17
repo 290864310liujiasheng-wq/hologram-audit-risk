@@ -423,10 +423,20 @@ interface CliStructuredEnvelope {
 - 零参数 `audit-risk` 不再直接报错；无论当前目录是不是 workspace，都先进入中文新手首页，并在 workspace 内同时展示当前目录状态、上次审查结果、Core/Pro 状态和推荐下一步。
 - `help`、`tour`、`auth status`、Pro gate 提示都必须用中文大白话；不能把英文冷错误直接暴露给最终用户。
 - `check`、`diff`、`init`、`doctor`、`report`、`notify --test` 的默认终端输出也必须走同一套中文产品壳；脚本或 hook 若要消费机器结果，必须显式传 `--json`。
-- `check` / `diff` 输出至少包含 `changed_files`、`analysis`、`review`、`audit_ref`。
+- `check` / `diff` 输出至少包含 `changed_files`、`analysis`、`review`、`audit_ref`；`check` 还必须包含 `changed_files_source: 'git_status' | 'external_nul_list'`。
+- `check --files-from <path|->` 的输入固定为 UTF-8、NUL 分隔、workspace-relative 的文件路径；显式空清单表示本轮没有变更，不得回退读取 `git status`。
+- GitHub Action 的 PR/push 审查必须在完整 checkout 上显式比较 base/head，以 `git diff --find-renames --name-only -z --diff-filter=ACMR` 生成清单并复用 `--files-from`；初次 push 的全零 base 使用已写入 object database 的空 tree。
+- `external_nul_list` 当前是文件级增量合同：扫描 head 中 A/C/M/R 文件的完整内容。稳定 finding 指纹或行级 baseline 合同建立前，不得宣称它只阻断 diff 新增行里的 finding。
 - `init` 输出必须列出 `created_files`。
+- `init` 必须先完成全部目标文件的冲突与可写性预检，再进入写入阶段；预检失败不得留下部分接入文件。
+- `init --force` 覆盖已有文件前必须在同目录保留 `.bak.<timestamp>-<uuid>` 备份；`init --dry-run` 只返回 `planned_files`，不得写文件或修改 `core.hooksPath`。
 - `doctor` 输出必须区分 `ready`、`needs_attention`、`error`，并显式列出检查项、blockers 与 notes。
 - `doctor` 的最小检查项至少包含：CLI 版本、`git`/`cargo` 依赖完整性、workspace 可读性、`.hologram` 可写性、delivery config 可解析性、review/repair rule package 可加载性（含 `package_id/version`）、provider 配置就绪状态、audit 路径可写性。
+- `doctor` 是只读诊断命令：不得创建 workspace、`.hologram` 或 audit 目录，也不得修改 Git 配置；必须只读检查 `core.hooksPath` 与生成的 pre-commit hook 是否共同就位。
+- 风险豁免只允许通过 `audit-risk approve [workspace] --finding <finding_id> --reason <text> --expires <ISO8601>` 记录，不支持 `audit-risk:ignore` 一类源码注释豁免。
+- `approve` 只能引用当前 workspace 最近一次 `review_check` 中存在的 finding；审批记录必须通过 `append_audit_entry` 写入 SHA-256 审计链，并记录 canonical workspace root、`finding_id`、理由、审批时间、失效时间、actor 与 finding 指纹。多个 workspace 即使共用同一绝对 audit 路径，也不得交叉消费审批。
+- finding 指纹必须同时绑定结构化 finding 信息和 workspace 内证据文件内容哈希，代码证据变化后旧审批不得继续生效。完整 `YYYY-MM-DD` 日期在该 UTC 日期结束后失效，完整 RFC3339 时间按其绝对时间失效。
+- `check` / `report` 只应用 finding_id、指纹均匹配且尚未过期的审批；应用后将该 finding 的 `gate_effect` 降为 `allow`、重算 gate，并把 `applied_approvals` 写入当前输出和后续 `review_check` 审计记录，不得静默跳过 finding。
 - `notify --test` 必须返回结构化结果，至少包含 `tested_url`、`http_status`、`ok`；未提供 webhook URL 时，允许从 `delivery.json.observe.webhook_url` 或环境变量读取。
 - `report --history-compare`、`observe`、`notify`、`watch --observe` 必须在命令入口第一层做 Pro entitlement gate；gate 失败时只返回中文提示，不进入任何真实功能逻辑。
 - secondary 命令允许在迁移期复用现有 phase5 壳，但公共命令面只能由 Rust CLI owner 定义，不能再由 TS 脚本私自扩字段或改退出码。
