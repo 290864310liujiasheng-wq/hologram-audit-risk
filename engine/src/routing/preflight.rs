@@ -60,11 +60,26 @@ pub fn check_timeline_props(result: &Value) -> Value {
         "new_cycles": result["new_cycles"],
         "new_thread_conflicts": result["new_thread_conflicts"],
         "api_signature_changes": result["api_signature_changes"],
+        "scanned_file_count": result["scanned_file_count"],
         "violation_count": result["violation_count"],
     })
 }
 
-fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: bool) -> Value {
+const CHECKED_RISK_CATEGORIES: &str =
+    "硬编码密钥、SQL注入、危险动态执行、IAM通配符等风险";
+
+fn no_findings_summary(scanned_file_count: usize) -> String {
+    format!(
+        "已扫描 {scanned_file_count} 个文件，检查{CHECKED_RISK_CATEGORIES}，未发现问题"
+    )
+}
+
+fn quiet_check_result(
+    changed_files: &[String],
+    one_line: &str,
+    baseline_seed: bool,
+    scanned_file_count: usize,
+) -> Value {
     json!({
         "passed": true,
         "one_line": one_line,
@@ -84,6 +99,7 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
         "coupling_l4": 0u32,
         "cycles_detected": 0u32,
         "signals_count": 0u32,
+        "scanned_file_count": scanned_file_count,
         "violation_count": 0u32,
         "quiet": !baseline_seed,
         "baseline_seed": baseline_seed,
@@ -95,7 +111,7 @@ fn quiet_check_result(changed_files: &[String], one_line: &str, baseline_seed: b
 /// reported; architectural metrics are zeroed because there is no baseline to
 /// diff against. Used on the very first `check` so an existing codebase's risks
 /// are surfaced instead of a false "0 findings".
-fn full_scan_result(secret_signals: &[Value]) -> Value {
+fn full_scan_result(secret_signals: &[Value], scanned_file_count: usize) -> Value {
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(secret_signals, &config);
     let violations: Vec<Value> = constraint_result["violations"]
@@ -123,6 +139,7 @@ fn full_scan_result(secret_signals: &[Value]) -> Value {
         "coupling_l4": 0u32,
         "cycles_detected": 0u32,
         "signals_count": secret_signals.len() as u32,
+        "scanned_file_count": scanned_file_count,
         "violation_count": violations.len() as u32,
         "full_scan": true,
     })
@@ -189,13 +206,26 @@ pub fn run_full_check_with_options(
     // architectural diff checks genuinely need a baseline, so they stay diff-based.
     if before.nodes.is_empty() && changed_files.is_empty() {
         if !options.initial_full_scan {
-            return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+            return quiet_check_result(
+                changed_files,
+                "本次选择了 0 个文件，未执行风险扫描，基线已建立",
+                true,
+                0,
+            );
         }
-        let secret_signals = crate::routing::secrets::scan_workspace(project_root);
-        if secret_signals.is_empty() {
-            return quiet_check_result(changed_files, "基线已建立，等待文件变更", true);
+        let workspace_scan = crate::routing::secrets::scan_workspace(project_root);
+        if workspace_scan.signals.is_empty() {
+            return quiet_check_result(
+                changed_files,
+                &no_findings_summary(workspace_scan.scanned_file_count),
+                true,
+                workspace_scan.scanned_file_count,
+            );
         }
-        return full_scan_result(&secret_signals);
+        return full_scan_result(
+            &workspace_scan.signals,
+            workspace_scan.scanned_file_count,
+        );
     }
 
     // No file changes and graph size unchanged → nothing to report.
@@ -203,7 +233,7 @@ pub fn run_full_check_with_options(
         && before.node_count() == after.node_count()
         && before.edge_count() == after.edge_count()
     {
-        return quiet_check_result(changed_files, "无新变更", false);
+        return quiet_check_result(changed_files, "无新变更", false, 0);
     }
 
     let coupling = coupling_report(after, ""); // full graph
@@ -240,9 +270,10 @@ pub fn run_full_check_with_options(
             .map(|f| project_root_path.join(f).to_string_lossy().into_owned())
             .collect()
     };
-    let secret_signals =
+    let changed_scan =
         crate::routing::secrets::scan_changed_files(&absolute_changed_files, changed_files);
-    signals.extend(secret_signals);
+    let scanned_file_count = changed_scan.scanned_file_count;
+    signals.extend(changed_scan.signals);
     let config = ConstraintConfig::defaults();
     let constraint_result = check_constraints(&signals, &config);
     let violations: Vec<Value> = constraint_result["violations"]
@@ -359,6 +390,7 @@ pub fn run_full_check_with_options(
         "coupling_l4": l4_count as u32,
         "cycles_detected": cycle_count as u32,
         "signals_count": signals.len() as u32,
+        "scanned_file_count": scanned_file_count,
         "violation_count": violations.len() as u32,
     })
 }
@@ -397,6 +429,24 @@ mod tests {
         let r = run_full_check(&g, &g, &[], ".");
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["blast_radius"], 0);
+    }
+
+    #[test]
+    fn test_preflight_changed_files_reports_actual_scanned_count() {
+        let dir = std::env::temp_dir().join(format!(
+            "audit_preflight_changed_count-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("new.rs"), "pub fn safe() {}\n").unwrap();
+        let graph = Graph::new();
+        let changed_files = vec!["new.rs".to_string(), "missing.rs".to_string()];
+
+        let result = run_full_check(&graph, &graph, &changed_files, &dir.to_string_lossy());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(result["scanned_file_count"], 1);
     }
 
     #[test]
@@ -468,6 +518,9 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("README.md"), "# Safe workspace\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn safe() {}\n").unwrap();
         let mut after = Graph::new();
         after.add_node(Node::new("a", "fn", NodeKind::Symbol));
         let before = Graph::new();
@@ -476,6 +529,11 @@ mod tests {
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["baseline_seed"], true);
         assert_eq!(r["violation_count"], 0);
+        assert_eq!(r["scanned_file_count"], 2);
+        assert_eq!(
+            r["one_line"],
+            "已扫描 2 个文件，检查硬编码密钥、SQL注入、危险动态执行、IAM通配符等风险，未发现问题"
+        );
     }
 
     #[test]
@@ -509,6 +567,11 @@ mod tests {
         assert!(r["passed"].as_bool().unwrap());
         assert_eq!(r["violation_count"], 0);
         assert_eq!(r["baseline_seed"], true);
+        assert_eq!(r["scanned_file_count"], 0);
+        assert_eq!(
+            r["one_line"],
+            "本次选择了 0 个文件，未执行风险扫描，基线已建立"
+        );
         assert!(r.get("full_scan").is_none());
     }
 

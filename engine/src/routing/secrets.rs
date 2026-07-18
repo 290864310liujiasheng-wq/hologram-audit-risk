@@ -2325,9 +2325,13 @@ pub fn finding_to_signal(f: &SecretFinding) -> Value {
 /// If the two slices have different lengths, falls back to using
 /// `read_paths` for display too (defensive — should not happen in practice).
 /// Files that cannot be read (binary, missing) are silently skipped.
-pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Vec<Value> {
+pub fn scan_changed_files(
+    read_paths: &[String],
+    display_paths: &[String],
+) -> ContentScanResult {
     let scanner = SecretScanner::new();
     let mut signals = Vec::new();
+    let mut scanned_file_count = 0;
     let use_display_paths = read_paths.len() == display_paths.len();
     for (index, read_path) in read_paths.iter().enumerate() {
         let content = match std::fs::read_to_string(read_path) {
@@ -2339,11 +2343,22 @@ pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Ve
         } else {
             read_path
         };
+        scanned_file_count += 1;
         for finding in scanner.scan_content(display_path, &content) {
             signals.push(finding_to_signal(&finding));
         }
     }
-    signals
+    ContentScanResult {
+        signals,
+        scanned_file_count,
+    }
+}
+
+/// Findings and coverage from a set of successfully read source files.
+#[derive(Debug, Default)]
+pub struct ContentScanResult {
+    pub signals: Vec<Value>,
+    pub scanned_file_count: usize,
 }
 
 /// Full-tree scan: walk every file under `project_root` (skipping build/dependency
@@ -2354,13 +2369,14 @@ pub fn scan_changed_files(read_paths: &[String], display_paths: &[String]) -> Ve
 /// codebase, a non-git directory, or a clean tree. Without this, `check` would
 /// report "0 findings" on a repo full of leaked keys just because nothing changed
 /// since the baseline — a dangerous false "all clear".
-pub fn scan_workspace(project_root: &str) -> Vec<Value> {
+pub fn scan_workspace(project_root: &str) -> ContentScanResult {
     if project_root.is_empty() {
-        return Vec::new();
+        return ContentScanResult::default();
     }
     let root = std::path::Path::new(project_root);
     let scanner = SecretScanner::new();
     let mut signals = Vec::new();
+    let mut scanned_file_count = 0;
     for entry in walkdir::WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| !crate::pipeline::discovery::is_excluded(e))
@@ -2411,11 +2427,15 @@ pub fn scan_workspace(project_root: &str) -> Vec<Value> {
             Ok(c) => c,
             Err(_) => continue, // binary / non-UTF8 → skip
         };
+        scanned_file_count += 1;
         for finding in scanner.scan_content(&display, &content) {
             signals.push(finding_to_signal(&finding));
         }
     }
-    signals
+    ContentScanResult {
+        signals,
+        scanned_file_count,
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -4859,8 +4879,9 @@ response = openai.chat.completions.create(
     fn scan_changed_files_skips_missing_file() {
         // Should not panic on a file that doesn't exist
         let paths = vec!["/tmp/nonexistent_audit_risk_test_file.rs".to_string()];
-        let signals = scan_changed_files(&paths, &paths);
-        assert!(signals.is_empty());
+        let result = scan_changed_files(&paths, &paths);
+        assert!(result.signals.is_empty());
+        assert_eq!(result.scanned_file_count, 0);
     }
 
     #[test]
@@ -4877,10 +4898,14 @@ response = openai.chat.completions.create(
 
         let read_paths = vec![abs_file.to_string_lossy().into_owned()];
         let display_paths = vec!["src/config.py".to_string()];
-        let signals = scan_changed_files(&read_paths, &display_paths);
+        let result = scan_changed_files(&read_paths, &display_paths);
 
-        assert_eq!(signals.len(), 1);
-        assert_eq!(signals[0]["signal"]["file_path"], "src/config.py");
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(
+            result.signals[0]["signal"]["file_path"],
+            "src/config.py"
+        );
+        assert_eq!(result.scanned_file_count, 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

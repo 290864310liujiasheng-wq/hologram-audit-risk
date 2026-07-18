@@ -845,7 +845,7 @@ fn run_check_command(
                 .template(check_spinner_template(color_enabled()))
                 .unwrap_or_else(|_| ProgressStyle::default_spinner()),
         );
-        pb.set_message("正在扫描代码风险...");
+        set_check_spinner_stage(&pb, CheckSpinnerStage::Scanning);
         pb.enable_steady_tick(std::time::Duration::from_millis(80));
         Some(pb)
     } else {
@@ -853,6 +853,9 @@ fn run_check_command(
     };
 
     let payload = build_workspace_check_payload(&workspace_path, selected_files.as_deref())?;
+    if let Some(pb) = spinner.as_ref() {
+        set_check_spinner_stage(pb, CheckSpinnerStage::Finalizing);
+    }
     let audit_path = audit_path_from_payload(&workspace_path, &payload)?;
     append_review_audit_entry(&audit_path, &workspace_path, "check", &payload)?;
 
@@ -891,6 +894,20 @@ fn check_spinner_template(color_enabled: bool) -> &'static str {
     } else {
         "{spinner} {msg}"
     }
+}
+
+#[derive(Clone, Copy)]
+enum CheckSpinnerStage {
+    Scanning,
+    Finalizing,
+}
+
+fn set_check_spinner_stage(spinner: &ProgressBar, stage: CheckSpinnerStage) {
+    let message = match stage {
+        CheckSpinnerStage::Scanning => "正在读取项目文件并分析改动...",
+        CheckSpinnerStage::Finalizing => "正在生成扫描结果...",
+    };
+    spinner.set_message(message);
 }
 
 fn run_watch_command(
@@ -6200,24 +6217,33 @@ fn render_help_screen() -> String {
             "需要机器读取时，在支持的命令后加 `--json`。".to_string(),
         ],
         &[
-            "`audit-risk`".to_string(),
-            "`audit-risk tour`".to_string(),
-            "`audit-risk --version`".to_string(),
-            "`audit-risk init <目录>`".to_string(),
-            "`audit-risk init <目录> --dry-run`  # 只预览文件计划".to_string(),
-            "`audit-risk init <目录> --force`  # 覆盖前保留备份".to_string(),
-            "`audit-risk doctor [目录]`".to_string(),
-            "`audit-risk approve [目录] --finding <ID> --reason <原因> --expires <ISO8601>`"
+            "第一次使用".to_string(),
+            "- `audit-risk init <目录>`  # 接入项目".to_string(),
+            "  `audit-risk init <目录> --dry-run`  # 只预览文件计划".to_string(),
+            "  `audit-risk init <目录> --force`  # 覆盖前保留备份".to_string(),
+            "- `audit-risk doctor [目录]`  # 检查配置与依赖".to_string(),
+            "- `audit-risk check <目录>`  # 审查当前工作区/Git 改动".to_string(),
+            "  `audit-risk check <目录> --files-from <路径|->`  # 只审查指定文件".to_string(),
+            "- `audit-risk tour`  # 查看首次使用流程".to_string(),
+            String::new(),
+            "日常使用".to_string(),
+            "- `audit-risk watch <目录>`  # 持续监听改动".to_string(),
+            "- `audit-risk report [目录]`  # 查看风险报告".to_string(),
+            "  `audit-risk report <目录> --history-compare`  # 对比历史风险".to_string(),
+            "- `audit-risk diff <旧> <新>`  # 对比两个目录或文件".to_string(),
+            "- `audit-risk approve [目录] --finding <ID> --reason <原因> --expires <ISO8601>`"
                 .to_string(),
-            "`audit-risk watch <目录>`".to_string(),
-            "`audit-risk check <目录>`  # 审查当前工作区/Git 改动".to_string(),
-            "`audit-risk check <目录> --files-from <路径|->`  # 只审查 NUL 分隔清单中的文件".to_string(),
-            "`audit-risk diff <旧> <新>`  # 对比两个目录或文件".to_string(),
-            "`audit-risk report [目录]`".to_string(),
-            "`audit-risk report <目录> --history-compare`".to_string(),
-            "`audit-risk observe [目录]`".to_string(),
-            "`audit-risk notify [目录] --test`".to_string(),
-            "`audit-risk auth status`".to_string(),
+            String::new(),
+            "高级功能".to_string(),
+            "- `audit-risk audit [目录]`  # 查询审计记录".to_string(),
+            "- `audit-risk rules [目录]`  # 查看生效规则".to_string(),
+            "- `audit-risk notify [目录] --test`  # 测试告警通知".to_string(),
+            "- `audit-risk auth status`  # 查看授权状态".to_string(),
+            "- `audit-risk observe [目录]`  # 打开只读观察面板".to_string(),
+            "- `audit-risk verify [目录]`  # 运行交付验证".to_string(),
+            "- `audit-risk help`  # 查看命令导航".to_string(),
+            "- `audit-risk --version`  # 查看版本".to_string(),
+            "- `audit-risk`  # 返回当前目录首页".to_string(),
         ],
         &[
             "Core 免费保留：首页、help/tour、init、doctor、check、watch、diff、基础解释、基础报告。".to_string(),
@@ -6549,12 +6575,19 @@ fn render_check_screen_with_color(
     } else {
         format!("风险条数：{high_count} 条高置信度（另有 {low_count} 条结构信号折叠）")
     };
+    let mut overview_lines = vec![
+        format!("当前视图：项目审查（{workspace}）"),
+        check_gate_status_line(gate, fail_on),
+    ];
+    if let Some(scanned_file_count) = payload
+        .pointer("/review/raw_check/scanned_file_count")
+        .and_then(Value::as_u64)
+    {
+        overview_lines.push(format!("扫描文件：{scanned_file_count} 个"));
+    }
+    overview_lines.push(risk_count_line);
     let shell = render_product_shell_with_options(
-        &[
-            format!("当前视图：项目审查（{workspace}）"),
-            check_gate_status_line(gate, fail_on),
-            risk_count_line,
-        ],
+        &overview_lines,
         &std::iter::once(reason.to_string())
             .chain(hidden_note)
             .collect::<Vec<_>>(),
@@ -6942,12 +6975,36 @@ fn render_notify_screen(payload: &Value) -> Result<String, CliRuntimeError> {
 
 fn render_home_screen(cwd: &Path) -> String {
     let entitlement = load_entitlement_status();
-    let workspace_line = if cwd.join(".hologram/delivery.json").exists() {
+    let is_initialized = cwd.join(".hologram/delivery.json").exists();
+    let workspace_line = if is_initialized {
         "当前目录已接入 audit-risk，可以直接运行 audit-risk watch . 或 audit-risk check ."
     } else if cwd.join(".git").exists() {
         "当前目录像一个 Git 项目，但还没接入 audit-risk，建议先运行 audit-risk init ."
     } else {
         "当前目录还不像一个 workspace。没关系，先看 tour，再决定在哪个项目里接入。"
+    };
+    let (advice_lines, next_steps) = if is_initialized {
+        (
+            vec![
+                "需要一次性确认当前改动时，运行 check。".to_string(),
+                "持续开发并实时观察风险时，运行 watch。".to_string(),
+            ],
+            vec![
+                "`audit-risk check .`".to_string(),
+                "`audit-risk watch .`".to_string(),
+            ],
+        )
+    } else {
+        (
+            vec![
+                "准备接入当前项目时，先运行 init。".to_string(),
+                "想先了解完整流程时，运行 tour。".to_string(),
+            ],
+            vec![
+                "`audit-risk init .`".to_string(),
+                "`audit-risk tour`".to_string(),
+            ],
+        )
     };
     render_product_shell(
         &[
@@ -6957,27 +7014,13 @@ fn render_home_screen(cwd: &Path) -> String {
         ],
         &[read_last_review_summary(cwd)],
         &[
-            "audit-risk 的首页不是摆设，它用来告诉你当前目录能不能直接开始接入、审查和留痕。".to_string(),
+            "audit-risk 的首页不是摆设，它用来告诉你当前目录能不能直接开始接入、审查和留痕。"
+                .to_string(),
             "先把目录状态、最近结论和 Core/Pro 边界讲清楚，后面的命令才不会像散命令。".to_string(),
         ],
-        &[
-            "第一次接入就从 init 和 doctor 开始。".to_string(),
-            "日常开发主要走 watch 和 check。".to_string(),
-            "需要历史留痕或交付给别人看，再导出 report。".to_string(),
-        ],
-        &[
-            "`audit-risk init .`".to_string(),
-            "`audit-risk doctor .`".to_string(),
-            "`audit-risk watch .`".to_string(),
-            "`audit-risk check .`".to_string(),
-            "`audit-risk help`".to_string(),
-            "`audit-risk tour`".to_string(),
-        ],
-        &[
-            "Core 免费保留：首页、help/tour、init、doctor、check、watch、diff、基础解释、基础报告。".to_string(),
-            format!("Pro 个人版 {PRO_PERSONAL_PRICE_LABEL}：高级规则包、历史风险对比、增强报告、observe、notify、个人规则自定义加载。"),
-            "开通或刷新授权：`audit-risk auth login`。".to_string(),
-        ],
+        &advice_lines,
+        &next_steps,
+        &[],
     )
 }
 
@@ -9130,6 +9173,67 @@ mod tests {
     }
 
     #[test]
+    fn help_groups_commands_by_usage_stage() {
+        let help = super::strip_ansi(&super::usage_text());
+        let first_start = help.find("第一次使用").expect("first-use group");
+        let daily_start = help.find("日常使用").expect("daily-use group");
+        let advanced_start = help.find("高级功能").expect("advanced group");
+        let notes_start = help[advanced_start..]
+            .find("Core 免费保留")
+            .map(|offset| advanced_start + offset)
+            .expect("notes panel");
+
+        assert!(
+            first_start < daily_start
+                && daily_start < advanced_start
+                && advanced_start < notes_start
+        );
+
+        let first = &help[first_start..daily_start];
+        let daily = &help[daily_start..advanced_start];
+        let advanced = &help[advanced_start..notes_start];
+        let first_commands = [
+            "`audit-risk init ",
+            "`audit-risk doctor ",
+            "`audit-risk check ",
+            "`audit-risk tour`",
+        ];
+        let daily_commands = [
+            "`audit-risk watch ",
+            "`audit-risk report ",
+            "`audit-risk diff ",
+            "`audit-risk approve ",
+        ];
+        let advanced_commands = [
+            "`audit-risk audit ",
+            "`audit-risk rules ",
+            "`audit-risk notify ",
+            "`audit-risk auth ",
+            "`audit-risk observe ",
+            "`audit-risk verify ",
+            "`audit-risk help`",
+            "`audit-risk --version`",
+            "`audit-risk`  # 返回当前目录首页",
+        ];
+
+        for command in first_commands {
+            assert!(first.contains(command));
+            assert!(!daily.contains(command));
+            assert!(!advanced.contains(command));
+        }
+        for command in daily_commands {
+            assert!(daily.contains(command));
+            assert!(!first.contains(command));
+            assert!(!advanced.contains(command));
+        }
+        for command in advanced_commands {
+            assert!(advanced.contains(command));
+            assert!(!first.contains(command));
+            assert!(!daily.contains(command));
+        }
+    }
+
+    #[test]
     fn rejects_invalid_or_missing_arguments_as_usage_errors() {
         assert!(
             parse_cli_command(&args(&["watch"])).is_err(),
@@ -9215,6 +9319,61 @@ mod tests {
         assert!(gate.contains("下一步"));
         assert_eq!(gate.contains("\u{1b}[48;5;"), color_enabled);
         assert!(gate.contains("╭"));
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn home_recommends_init_and_tour_when_workspace_is_not_initialized() {
+        let root_path = std::env::temp_dir().join(format!(
+            "audit-risk-home-uninitialized-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root_path).expect("workspace root");
+
+        let home = super::render_home_screen(&root_path);
+
+        assert!(home.contains("`audit-risk init .`"));
+        assert!(home.contains("`audit-risk tour`"));
+        assert!(!home.contains("`audit-risk doctor .`"));
+        assert!(!home.contains("`audit-risk check .`"));
+        assert!(!home.contains("`audit-risk watch .`"));
+        assert!(!home.contains("`audit-risk help`"));
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn home_recommends_check_and_watch_when_workspace_is_initialized() {
+        let root_path = std::env::temp_dir().join(format!(
+            "audit-risk-home-initialized-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let hologram_path = root_path.join(".hologram");
+        std::fs::create_dir_all(&hologram_path).expect("hologram directory");
+        std::fs::write(hologram_path.join("delivery.json"), "{}").expect("delivery config marker");
+
+        let home = super::render_home_screen(&root_path);
+
+        assert!(home.contains("`audit-risk check .`"));
+        assert!(home.contains("`audit-risk watch .`"));
+        assert!(!home.contains("`audit-risk init .`"));
+        assert!(!home.contains("`audit-risk doctor .`"));
+        assert!(!home.contains("`audit-risk help`"));
+        assert!(!home.contains("`audit-risk tour`"));
+        let _ = std::fs::remove_dir_all(&root_path);
+    }
+
+    #[test]
+    fn home_does_not_surface_pro_pricing_or_login() {
+        let root_path = std::env::temp_dir().join(format!(
+            "audit-risk-home-without-pricing-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root_path).expect("workspace root");
+
+        let home = super::render_home_screen(&root_path);
+
+        assert!(!home.contains(super::PRO_PERSONAL_PRICE_LABEL));
+        assert!(!home.contains("`audit-risk auth login`"));
         let _ = std::fs::remove_dir_all(&root_path);
     }
 
@@ -9381,6 +9540,17 @@ mod tests {
     }
 
     #[test]
+    fn check_spinner_copy_distinguishes_scan_and_result_stages() {
+        let spinner = indicatif::ProgressBar::hidden();
+
+        super::set_check_spinner_stage(&spinner, super::CheckSpinnerStage::Scanning);
+        assert_eq!(spinner.message(), "正在读取项目文件并分析改动...");
+
+        super::set_check_spinner_stage(&spinner, super::CheckSpinnerStage::Finalizing);
+        assert_eq!(spinner.message(), "正在生成扫描结果...");
+    }
+
+    #[test]
     fn plain_mode_never_emits_box_drawing_characters() {
         // The whole point of Plain mode is that it cannot overflow because
         // it does no fixed-width padding math at all. Confirm it contains
@@ -9462,6 +9632,34 @@ mod tests {
         assert!(rendered.contains("config/prod.yaml:8"));
         assert!(rendered.contains("╭"));
         assert!(rendered.contains("\u{1b}[48;5;"));
+    }
+
+    #[test]
+    fn check_screen_surfaces_scanned_file_count_for_passing_result() {
+        let payload = json!({
+            "workspace_root": "/tmp/customer-repo",
+            "review": {
+                "gate_decision": {
+                    "decision": "allow",
+                    "reason": "已扫描 47 个文件，检查硬编码密钥、SQL注入、危险动态执行、IAM通配符等风险，未发现问题",
+                    "finding_count": 0
+                },
+                "findings": [],
+                "raw_check": {
+                    "scanned_file_count": 47
+                }
+            }
+        });
+
+        let rendered = super::render_check_screen_with_color(
+            &payload,
+            false,
+            FailGate::RequireApproval,
+            false,
+        )
+        .expect("passing check shell");
+
+        assert!(rendered.contains("扫描文件：47 个"));
     }
 
     #[test]
@@ -9660,6 +9858,9 @@ mod tests {
         let observe_error = observe.expect_err("observe error");
         assert_eq!(observe_error.exit_code, 3);
         assert!(observe_error.message.contains("Pro 个人版"));
+        assert!(observe_error
+            .message
+            .contains(super::PRO_PERSONAL_PRICE_LABEL));
         assert!(observe_error.message.contains("audit-risk auth login"));
         assert!(observe_error.message.contains("手机观察"));
 
@@ -10377,6 +10578,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&workspace);
 
         assert_eq!(parsed, changed_files);
+    }
+
+    #[test]
+    fn untracked_file_check_surfaces_scanned_file_count() {
+        let workspace = std::env::temp_dir().join(format!(
+            "audit-risk-untracked-scan-count-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        assert!(std::process::Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .arg(&workspace)
+            .status()
+            .expect("git init")
+            .success());
+        std::fs::write(workspace.join("new.rs"), "pub fn safe() {}\n")
+            .expect("untracked source file");
+        let policy =
+            super::resolve_rule_policy(&workspace, None, "review").expect("default review policy");
+
+        let payload = super::build_workspace_check_payload_with_policy(
+            &workspace,
+            &policy,
+            None,
+            None,
+        )
+        .expect("workspace check");
+        let rendered = super::render_check_screen_with_color(
+            &payload,
+            false,
+            FailGate::RequireApproval,
+            false,
+        )
+        .expect("check screen");
+        let _ = std::fs::remove_dir_all(&workspace);
+
+        assert_eq!(payload["changed_files"], json!(["new.rs"]));
+        assert_eq!(payload["review"]["raw_check"]["scanned_file_count"], 1);
+        assert!(rendered.contains("扫描文件：1 个"));
     }
 
     #[test]

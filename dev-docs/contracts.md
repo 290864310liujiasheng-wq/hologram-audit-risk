@@ -420,7 +420,7 @@ interface CliStructuredEnvelope {
 - `watch` 默认只展示 `critical/high/medium`；`low/info` 仅在 `--verbose` 下允许进入人类可读摘要。
 - `watch` 必须按 `file_path + rule_id` 做防抖；同一文件同一规则 10 分钟内只允许输出一次，重复命中应进入 `finding_suppressed` 路径而不是持续刷屏。
 - `watch --observe` 必须启动本地只读观察页，并打印 `local_url`、`public_url` 与二维码图片路径；若外网/LAN 绑定受环境限制，必须显式写出 fallback note，而不是静默失败。
-- 零参数 `audit-risk` 不再直接报错；无论当前目录是不是 workspace，都先进入中文新手首页，并在 workspace 内同时展示当前目录状态、上次审查结果、Core/Pro 状态和推荐下一步。
+- 零参数 `audit-risk` 不再直接报错；无论当前目录是不是 workspace，都先进入中文新手首页，并展示当前目录状态、上次审查结果与 Core/Pro 状态。首页的下一步必须按接入状态收敛：未接入目录只推荐 `init` / `tour`，已存在 `.hologram/delivery.json` 的目录只推荐 `check` / `watch`；首页不常驻 Pro 价格和开通入口，用户实际触发 Pro 专属功能被 gate 拦截时，由现有 Pro gate 展示价格与开通入口。
 - `help`、`tour`、`auth status`、Pro gate 提示都必须用中文大白话；不能把英文冷错误直接暴露给最终用户。
 - `check`、`diff`、`init`、`doctor`、`report`、`notify --test` 的默认终端输出也必须走同一套中文产品壳；脚本或 hook 若要消费机器结果，必须显式传 `--json`。
 - `check` / `diff` 输出至少包含 `changed_files`、`analysis`、`review`、`audit_ref`；`check` 还必须包含 `changed_files_source: 'git_status' | 'external_nul_list'`。
